@@ -1,0 +1,49 @@
+{
+  "name": "titaniopos-electron",
+  "version": "1.0.0",
+  "description": "TitanioPOS Desktop - Wrapper Electron con impresión silenciosa",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win",
+    "build:portable": "electron-builder --win portable"
+  },
+  "author": "TitanioPOS",
+  "license": "MIT",
+  "dependencies": {
+    "@3ksy/electron-pos-printer": "^1.4.9",
+    "bwip-js": "^4.8.0",
+    "escpos": "^3.0.0-alpha.6",
+    "escpos-buffer": "^4.1.0",
+    "escpos-network": "^3.0.0-alpha.5",
+    "escpos-usb": "^3.0.0-alpha.4",
+    "node-thermal-printer": "^4.5.0",
+    "serialport": "^13.0.0"
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "com.titaniopos.desktop",
+    "productName": "TitanioPOS",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "icon.ico",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "forceCodeSigning": false
+  }
+}
