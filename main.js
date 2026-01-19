@@ -14,7 +14,8 @@ const getBackupDir = () => {
 };
 
 // URL de tu PWA (cambiar en producción)
-const APP_URL = process.env.TITANIOPOS_URL || 'http://localhost:3001';
+const APP_URL =
+  process.env.TITANIOPOS_URL || "http://localhost:3001";
 
 let mainWindow;
 
