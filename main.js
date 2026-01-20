@@ -1,7 +1,12 @@
 const { app, BrowserWindow, ipcMain, globalShortcut } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
+const jwt = require('jsonwebtoken');
 const { registerPrinterHandlers } = require('./printer-handlers');
+
+// Secret key para JWT - en producción debería estar en variable de entorno
+const JWT_SECRET = process.env.TITANIOPOS_JWT_SECRET || 'titaniopos-secure-key-2024-change-in-production';
 
 // Directorio para backups de órdenes - en Documentos para fácil acceso
 const getBackupDir = () => {
@@ -11,6 +16,27 @@ const getBackupDir = () => {
     fs.mkdirSync(backupDir, { recursive: true });
   }
   return backupDir;
+};
+
+// Codificar datos como JWT
+const encodeToJWT = (data) => {
+  try {
+    return jwt.sign({ data }, JWT_SECRET, { expiresIn: '30d' });
+  } catch (error) {
+    console.error('❌ [JWT] Error codificando:', error);
+    throw error;
+  }
+};
+
+// Decodificar JWT a datos
+const decodeFromJWT = (token) => {
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    return decoded.data;
+  } catch (error) {
+    console.error('❌ [JWT] Error decodificando:', error);
+    throw error;
+  }
 };
 
 // URL de tu PWA (cambiar en producción)
@@ -60,6 +86,39 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+}
+
+// Auto-actualización
+function setupAutoUpdater() {
+  autoUpdater.on('checking-for-update', () => {
+    console.log('🔎 Buscando actualizaciones...');
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    console.log(`⬇️ Actualización disponible: ${info.version}`);
+  });
+
+  autoUpdater.on('update-not-available', () => {
+    console.log('✅ No hay actualizaciones disponibles.');
+  });
+
+  autoUpdater.on('error', (err) => {
+    console.error('❌ Error en autoUpdater:', err);
+  });
+
+  autoUpdater.on('download-progress', (progressObj) => {
+    console.log(
+      `⬇️ Descargando: ${Math.round(progressObj.percent)}% ` +
+      `(vel: ${Math.round(progressObj.bytesPerSecond / 1024)} KB/s)`
+    );
+  });
+
+  autoUpdater.on('update-downloaded', () => {
+    console.log('📦 Actualización descargada, instalando...');
+    autoUpdater.quitAndInstall();
+  });
+
+  autoUpdater.checkForUpdatesAndNotify();
 }
 
 // Impresión silenciosa
@@ -409,7 +468,7 @@ const getDateString = () => {
   return `${year}-${month}-${day}`;
 };
 
-// Guardar múltiples órdenes - solo backup diario
+// Guardar múltiples órdenes - solo backup diario con JWT
 ipcMain.handle('backup-save-all-orders', async (event, orders) => {
   try {
     const backupDir = getBackupDir();
@@ -425,10 +484,13 @@ ipcMain.handle('backup-save-all-orders', async (event, orders) => {
       orders: orders
     };
     
-    // Guardar solo backup del día
-    fs.writeFileSync(dailyBackupPath, JSON.stringify(backupData, null, 2), 'utf-8');
+    // Codificar como JWT para seguridad
+    const encodedData = encodeToJWT(backupData);
     
-    console.log(`💾 [BACKUP] ${orders.length} órdenes guardadas en backup_${dateStr}.json`);
+    // Guardar JWT en archivo
+    fs.writeFileSync(dailyBackupPath, JSON.stringify({ token: encodedData }, null, 2), 'utf-8');
+    
+    console.log(`💾 [BACKUP] ${orders.length} órdenes guardadas (JWT) en backup_${dateStr}.json`);
     return { success: true, count: orders.length, date: dateStr };
   } catch (error) {
     console.error('❌ [BACKUP] Error en sync:', error);
@@ -449,8 +511,24 @@ ipcMain.handle('backup-get-all-orders', async () => {
       return { success: true, orders: [], lastSync: null, date: dateStr };
     }
     
-    const data = JSON.parse(fs.readFileSync(todayBackupPath, 'utf-8'));
-    console.log(`📂 [BACKUP] ${data.orders?.length || 0} órdenes recuperadas del día ${dateStr}`);
+    const fileContent = JSON.parse(fs.readFileSync(todayBackupPath, 'utf-8'));
+    
+    let data;
+    // Verificar si es formato JWT o JSON plano (backward compatibility)
+    if (fileContent.token) {
+      // Formato nuevo: JWT
+      try {
+        data = decodeFromJWT(fileContent.token);
+        console.log(`📂 [BACKUP] ${data.orders?.length || 0} órdenes recuperadas (JWT) del día ${dateStr}`);
+      } catch (jwtError) {
+        console.error('❌ [BACKUP] Error decodificando JWT:', jwtError);
+        return { success: false, error: 'Token JWT inválido o expirado', orders: [] };
+      }
+    } else {
+      // Formato antiguo: JSON plano (para compatibilidad)
+      data = fileContent;
+      console.log(`📂 [BACKUP] ${data.orders?.length || 0} órdenes recuperadas (JSON) del día ${dateStr}`);
+    }
     
     return { 
       success: true, 
@@ -1266,9 +1344,13 @@ app.whenReady().then(() => {
   console.log('📱 [BARCODE] Barcode scanner system initialized');
   
   createWindow();
+  setupAutoUpdater();
   
   // Register printer handlers after window is created
-  registerPrinterHandlers(app, mainWindow);
+  ipcMain.on('ready', () => {
+    createWindow();
+    registerPrinterHandlers(ipcMain, mainWindow);
+  });
   console.log('🖨️ [PRINTER] Printer system initialized');
 });
 

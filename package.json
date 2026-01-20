@@ -6,17 +6,20 @@
   "scripts": {
     "start": "electron .",
     "build": "electron-builder --win",
-    "build:portable": "electron-builder --win portable"
+    "build:portable": "electron-builder --win portable",
+    "publish": "electron-builder --publish always --win"
   },
   "author": "TitanioPOS",
   "license": "MIT",
   "dependencies": {
+    "electron-updater": "^6.1.8",
     "@3ksy/electron-pos-printer": "^1.4.9",
     "bwip-js": "^4.8.0",
     "escpos": "^3.0.0-alpha.6",
     "escpos-buffer": "^4.1.0",
     "escpos-network": "^3.0.0-alpha.5",
     "escpos-usb": "^3.0.0-alpha.4",
+    "jsonwebtoken": "^9.0.3",
     "node-thermal-printer": "^4.5.0",
     "serialport": "^13.0.0"
   },
@@ -30,6 +33,14 @@
     "directories": {
       "output": "dist"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "ospinosystems",
+        "repo": "electron-wrapper-titaniopos",
+        "releaseType": "release"
+      }
+    ],
     "win": {
       "target": [
         "nsis",
