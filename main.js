@@ -41,6 +41,7 @@ const decodeFromJWT = (token) => {
 
 // URL de tu PWA (cambiar en producción)
 const APP_URL =
+  // process.env.TITANIOPOS_URL || "https://frontend.titanio-pos.com";
   process.env.TITANIOPOS_URL || "http://localhost:3001";
 
 let mainWindow;
@@ -87,6 +88,14 @@ function createWindow() {
     mainWindow = null;
   });
 }
+
+// IPC: versiones (app y runtime)
+ipcMain.handle('app-versions', () => ({
+  app: app.getVersion(),
+  electron: process.versions.electron,
+  chrome: process.versions.chrome,
+  node: process.versions.node,
+}));
 
 // Auto-actualización
 function setupAutoUpdater() {
@@ -1346,11 +1355,8 @@ app.whenReady().then(() => {
   createWindow();
   setupAutoUpdater();
   
-  // Register printer handlers after window is created
-  ipcMain.on('ready', () => {
-    createWindow();
-    registerPrinterHandlers(ipcMain, mainWindow);
-  });
+  // Register printer handlers immediately after window is created
+  registerPrinterHandlers(app, mainWindow);
   console.log('🖨️ [PRINTER] Printer system initialized');
 });
 

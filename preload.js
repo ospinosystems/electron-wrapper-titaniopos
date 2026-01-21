@@ -2,6 +2,9 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 // Exponer API segura al renderer
 contextBridge.exposeInMainWorld('electronAPI', {
+  // Versiones de la app y runtimes
+  getVersions: () => ipcRenderer.invoke('app-versions'),
+
   /**
    * Impresión silenciosa con HTML
    * @param {string} html - Contenido HTML a imprimir
