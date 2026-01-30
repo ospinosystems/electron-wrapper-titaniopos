@@ -18,10 +18,10 @@ const getBackupDir = () => {
   return backupDir;
 };
 
-// Codificar datos como JWT
+// Codificar datos como JWT (sin expiración para mantener respaldo indefinidamente)
 const encodeToJWT = (data) => {
   try {
-    return jwt.sign({ data }, JWT_SECRET, { expiresIn: '30d' });
+    return jwt.sign({ data }, JWT_SECRET);
   } catch (error) {
     console.error('❌ [JWT] Error codificando:', error);
     throw error;
@@ -346,6 +346,7 @@ let lastKeyTime = 0;
 let barcodeTimeout = null;
 const BARCODE_CHAR_THRESHOLD = 50; // ms entre caracteres
 const BARCODE_MIN_LENGTH = 3;
+let isModalOpen = false; // Estado para rastrear si hay un modal abierto
 
 // Función para enviar código de barras al renderer
 function sendBarcodeToRenderer(barcode) {
@@ -378,6 +379,12 @@ function setupBarcodeScanner(window) {
   window.webContents.on('before-input-event', (event, input) => {
     // Solo procesar eventos de keyDown
     if (input.type !== 'keyDown') return;
+
+    // NO procesar si hay un modal abierto
+    if (isModalOpen) {
+      clearBarcodeBuffer();
+      return;
+    }
 
     const now = Date.now();
     const timeSinceLastKey = now - lastKeyTime;
@@ -429,6 +436,16 @@ function setupBarcodeScanner(window) {
 ipcMain.handle('barcode-scanner-enable', async (event, enabled) => {
   console.log('📱 [BARCODE] Scanner', enabled ? 'habilitado' : 'deshabilitado');
   return { success: true, enabled };
+});
+
+// IPC handler para notificar cuando se abre/cierra un modal
+ipcMain.handle('barcode-scanner-set-modal-state', async (event, modalOpen) => {
+  isModalOpen = modalOpen;
+  console.log('📱 [BARCODE] Modal', modalOpen ? 'abierto - scanner desactivado' : 'cerrado - scanner activado');
+  if (modalOpen) {
+    clearBarcodeBuffer();
+  }
+  return { success: true, isModalOpen };
 });
 
 // IPC handler para imprimir a impresora específica con HTML
@@ -531,7 +548,7 @@ ipcMain.handle('backup-get-all-orders', async () => {
         console.log(`📂 [BACKUP] ${data.orders?.length || 0} órdenes recuperadas (JWT) del día ${dateStr}`);
       } catch (jwtError) {
         console.error('❌ [BACKUP] Error decodificando JWT:', jwtError);
-        return { success: false, error: 'Token JWT inválido o expirado', orders: [] };
+        return { success: false, error: 'Token JWT inválido o manipulado', errorCode: 'JWT_INVALID_SIGNATURE', orders: [] };
       }
     } else {
       // Formato antiguo: JSON plano (para compatibilidad)

@@ -80,6 +80,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
    */
   barcodeScannerEnable: (enabled) => ipcRenderer.invoke('barcode-scanner-enable', enabled),
 
+  /**
+   * Notificar a Electron sobre el estado de los modales
+   * @param {boolean} isOpen - true si hay un modal abierto, false si está cerrado
+   */
+  barcodeScannerSetModalState: (isOpen) => ipcRenderer.invoke('barcode-scanner-set-modal-state', isOpen),
+
   // ==================== PRINTER CONFIGURATION ====================
   
   /**
