@@ -347,6 +347,7 @@ let barcodeTimeout = null;
 const BARCODE_CHAR_THRESHOLD = 50; // ms entre caracteres
 const BARCODE_MIN_LENGTH = 3;
 let isModalOpen = false; // Estado para rastrear si hay un modal abierto
+let isScannerEnabled = true;
 
 // Función para enviar código de barras al renderer
 function sendBarcodeToRenderer(barcode) {
@@ -379,6 +380,11 @@ function setupBarcodeScanner(window) {
   window.webContents.on('before-input-event', (event, input) => {
     // Solo procesar eventos de keyDown
     if (input.type !== 'keyDown') return;
+
+    if (!isScannerEnabled) {
+      clearBarcodeBuffer();
+      return;
+    }
 
     // NO procesar si hay un modal abierto
     if (isModalOpen) {
@@ -435,6 +441,10 @@ function setupBarcodeScanner(window) {
 // IPC handler para habilitar/deshabilitar detección de pistola
 ipcMain.handle('barcode-scanner-enable', async (event, enabled) => {
   console.log('📱 [BARCODE] Scanner', enabled ? 'habilitado' : 'deshabilitado');
+  isScannerEnabled = !!enabled;
+  if (!isScannerEnabled) {
+    clearBarcodeBuffer();
+  }
   return { success: true, enabled };
 });
 
