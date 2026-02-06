@@ -4,6 +4,13 @@ const path = require('path');
 const fs = require('fs');
 const jwt = require('jsonwebtoken');
 const { registerPrinterHandlers } = require('./printer-handlers');
+const { registerFiscalHandlers } = require('./fiscal-handlers');
+const { 
+  startFiscalServer, 
+  stopFiscalServer, 
+  getServerStatus, 
+  checkPythonInstalled 
+} = require('./fiscal-server-manager');
 
 // Secret key para JWT - en producción debería estar en variable de entorno
 const JWT_SECRET = process.env.TITANIOPOS_JWT_SECRET || 'titaniopos-secure-key-2024-change-in-production';
@@ -16,6 +23,29 @@ const getBackupDir = () => {
     fs.mkdirSync(backupDir, { recursive: true });
   }
   return backupDir;
+};
+
+// Load .env from fiscal-server (portable config for port/path)
+const loadFiscalEnv = () => {
+  try {
+    const envPath = path.join(__dirname, 'fiscal-server', '.env');
+    if (!fs.existsSync(envPath)) return;
+    const content = fs.readFileSync(envPath, 'utf-8');
+    content.split(/\r?\n/).forEach((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) return;
+      const idx = trimmed.indexOf('=');
+      if (idx === -1) return;
+      const key = trimmed.slice(0, idx).trim();
+      const val = trimmed.slice(idx + 1).trim();
+      if (key && !(key in process.env)) {
+        process.env[key] = val;
+      }
+    });
+    console.log('[FISCAL SERVER] .env loaded from fiscal-server/.env');
+  } catch (error) {
+    console.warn('[FISCAL SERVER] Could not load .env:', error.message);
+  }
 };
 
 // Codificar datos como JWT (sin expiración para mantener respaldo indefinidamente)
@@ -1374,7 +1404,9 @@ ipcMain.handle('printer-get-serial-ports', async () => {
 });
 
 app.whenReady().then(() => {
-  // Show backup directory path on startup
+  // Load fiscal env before starting anything related to fiscal server
+  loadFiscalEnv();
+
   const backupPath = getBackupDir();
   console.log('📁 [BACKUP] Backup directory:', backupPath);
   console.log('📱 [BARCODE] Barcode scanner system initialized');
@@ -1385,12 +1417,46 @@ app.whenReady().then(() => {
   // Register printer handlers immediately after window is created
   registerPrinterHandlers(app, mainWindow);
   console.log('🖨️ [PRINTER] Printer system initialized');
+  
+  // Register fiscal handlers for HKA fiscal machine
+  registerFiscalHandlers(app);
+  console.log('🧾 [FISCAL] Fiscal machine system initialized');
+  
+  // Start fiscal server automatically (async, non-blocking)
+  (async () => {
+    try {
+      const fiscalPort = process.env.FISCAL_SERVER_PORT ? Number(process.env.FISCAL_SERVER_PORT) : 3000;
+      const intfhkaPath = process.env.INTFHKA_PATH || null;
+      const pythonCheck = await checkPythonInstalled();
+      if (pythonCheck.installed) {
+        console.log('🐍 [FISCAL SERVER] Python found:', pythonCheck.command);
+        const result = await startFiscalServer({ port: fiscalPort, intfhkaPath });
+        if (result.success) {
+          console.log('✅ [FISCAL SERVER] Server started on port', result.port);
+        } else {
+          console.warn('⚠️ [FISCAL SERVER] Failed to start:', result.error);
+        }
+      } else {
+        console.warn('⚠️ [FISCAL SERVER] Python not installed - fiscal server disabled');
+      }
+    } catch (error) {
+      console.error('❌ [FISCAL SERVER] Error starting:', error);
+    }
+  })();
 });
 
 app.on('window-all-closed', () => {
+  // Stop fiscal server before quitting
+  stopFiscalServer();
+  
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+app.on('before-quit', () => {
+  // Ensure fiscal server is stopped
+  stopFiscalServer();
 });
 
 app.on('activate', () => {

@@ -124,5 +124,128 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @returns {Promise<{success: boolean, method?: string, error?: string}>}
    */
   printerTest: (method, printerName, content, options = {}) => 
-    ipcRenderer.invoke('printer-test', method, printerName, content, options)
+    ipcRenderer.invoke('printer-test', method, printerName, content, options),
+
+  // ==================== FISCAL MACHINE (HKA) ====================
+  
+  /**
+   * Get fiscal machine configuration
+   * @returns {Promise<{success: boolean, config: object}>}
+   */
+  fiscalConfigGet: () => ipcRenderer.invoke('fiscal-config-get'),
+  
+  /**
+   * Save fiscal machine configuration
+   * @param {object} config - Fiscal configuration
+   * @returns {Promise<{success: boolean, config?: object, error?: string}>}
+   */
+  fiscalConfigSave: (config) => ipcRenderer.invoke('fiscal-config-save', config),
+  
+  /**
+   * Check connection with fiscal server
+   * @param {string} serverUrl - Optional server URL (uses config if not provided)
+   * @returns {Promise<{success: boolean, connected: boolean, error?: string}>}
+   */
+  fiscalCheckConnection: (serverUrl) => ipcRenderer.invoke('fiscal-check-connection', serverUrl),
+  
+  /**
+   * Send invoice to fiscal machine
+   * @param {object} invoiceData - Invoice data with products
+   * @returns {Promise<{success: boolean, job_id?: string, error?: string}>}
+   */
+  fiscalSendInvoice: (invoiceData) => ipcRenderer.invoke('fiscal-send-invoice', invoiceData),
+  
+  /**
+   * Check status of a fiscal job
+   * @param {string} jobId - Job ID to check
+   * @returns {Promise<{success: boolean, estado?: string, error?: string}>}
+   */
+  fiscalCheckJobStatus: (jobId) => ipcRenderer.invoke('fiscal-check-job-status', jobId),
+  
+  /**
+   * Get pending fiscal responses for sync
+   * @returns {Promise<{success: boolean, responses: array}>}
+   */
+  fiscalGetPendingResponses: () => ipcRenderer.invoke('fiscal-get-pending-responses'),
+  
+  /**
+   * Mark a fiscal response as synced to backend
+   * @param {string} responseId - Response ID to mark
+   * @returns {Promise<{success: boolean}>}
+   */
+  fiscalMarkSynced: (responseId) => ipcRenderer.invoke('fiscal-mark-synced', responseId),
+  
+  /**
+   * Mark a fiscal response sync as failed
+   * @param {string} responseId - Response ID
+   * @param {string} errorMessage - Error message
+   * @returns {Promise<{success: boolean}>}
+   */
+  fiscalMarkSyncError: (responseId, errorMessage) => 
+    ipcRenderer.invoke('fiscal-mark-sync-error', responseId, errorMessage),
+  
+  /**
+   * Get all fiscal responses
+   * @returns {Promise<{success: boolean, responses: array}>}
+   */
+  fiscalGetAllResponses: () => ipcRenderer.invoke('fiscal-get-all-responses'),
+  
+  /**
+   * Cleanup old synced responses (older than 7 days)
+   * @returns {Promise<{success: boolean, removed: number}>}
+   */
+  fiscalCleanupOldResponses: () => ipcRenderer.invoke('fiscal-cleanup-old-responses'),
+  
+  /**
+   * Send X Report to fiscal machine
+   * @returns {Promise<{success: boolean, error?: string}>}
+   */
+  fiscalSendReportX: () => ipcRenderer.invoke('fiscal-send-report-x'),
+  
+  /**
+   * Send Z Report to fiscal machine
+   * @returns {Promise<{success: boolean, error?: string}>}
+   */
+  fiscalSendReportZ: () => ipcRenderer.invoke('fiscal-send-report-z'),
+  
+  /**
+   * Configure COM port for fiscal machine
+   * @param {string} comPort - COM port (e.g., 'COM1')
+   * @returns {Promise<{success: boolean, comPort?: string, error?: string}>}
+   */
+  fiscalSetPort: (comPort) => ipcRenderer.invoke('fiscal-set-port', comPort),
+
+  // ==================== FISCAL SERVER MANAGEMENT ====================
+  
+  /**
+   * Get fiscal server status
+   * @returns {Promise<{success: boolean, running: boolean, healthy: boolean, port: number}>}
+   */
+  fiscalServerStatus: () => ipcRenderer.invoke('fiscal-server-status'),
+  
+  /**
+   * Start fiscal server
+   * @param {object} options - Options (port, intfhkaPath)
+   * @returns {Promise<{success: boolean, port?: number, error?: string}>}
+   */
+  fiscalServerStart: (options = {}) => ipcRenderer.invoke('fiscal-server-start', options),
+  
+  /**
+   * Stop fiscal server
+   * @returns {Promise<{success: boolean}>}
+   */
+  fiscalServerStop: () => ipcRenderer.invoke('fiscal-server-stop'),
+  
+  /**
+   * Restart fiscal server
+   * @param {object} options - Options (port, intfhkaPath)
+   * @returns {Promise<{success: boolean, port?: number, error?: string}>}
+   */
+  fiscalServerRestart: (options = {}) => ipcRenderer.invoke('fiscal-server-restart', options),
+  
+  /**
+   * Check if Python is installed
+   * @returns {Promise<{success: boolean, installed: boolean, command?: string}>}
+   */
+  fiscalCheckPython: () => ipcRenderer.invoke('fiscal-check-python')
 });
