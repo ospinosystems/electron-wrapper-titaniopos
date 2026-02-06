@@ -16,6 +16,15 @@ import re
 import hashlib
 from datetime import datetime, timedelta
 
+# Importar módulo de comunicación serial directa HKA
+try:
+    from hka_serial import HKAPrinter, check_printer, send_fiscal_file, send_command as hka_send_command
+    HKA_SERIAL_AVAILABLE = True
+    print("[FISCAL] Módulo hka_serial cargado - comunicación serial directa disponible")
+except ImportError:
+    HKA_SERIAL_AVAILABLE = False
+    print("[FISCAL] Módulo hka_serial no disponible - usando IntTFHKA.exe")
+
 app = Flask(__name__)
 
 # Obtener el directorio base del script
@@ -26,15 +35,20 @@ DATA_DIR = os.path.join(BASE_DIR, 'data')
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
-# Ruta del ejecutable IntTFHKA - configurable via variable de entorno o argumento
+# Ruta del ejecutable IntTFHKA - configurable por PC via .env o endpoint /fiscal/config/programa
 def get_programa_path():
-    """Obtiene la ruta del ejecutable IntTFHKA.exe"""
-    # 1. Primero verificar variable de entorno
-    if os.environ.get('INTFHKA_PATH'):
-        return os.environ.get('INTFHKA_PATH')
+    """Obtiene la ruta absoluta del ejecutable IntTFHKA.exe"""
+    # 1. Variable de entorno INTFHKA_PATH (configurable por PC)
+    env_path = os.environ.get('INTFHKA_PATH', '')
+    if env_path:
+        # Siempre resolver a ruta absoluta usando BASE_DIR como referencia
+        if not os.path.isabs(env_path):
+            env_path = os.path.abspath(os.path.join(BASE_DIR, env_path))
+        if os.path.exists(env_path):
+            return env_path
     
-    # 2. Verificar si existe en la carpeta del servidor
-    local_path = os.path.join(BASE_DIR, 'IntTFHKA.exe')
+    # 2. Verificar si existe en la carpeta del servidor (junto a fiscal.py)
+    local_path = os.path.abspath(os.path.join(BASE_DIR, 'IntTFHKA.exe'))
     if os.path.exists(local_path):
         return local_path
     
@@ -43,10 +57,81 @@ def get_programa_path():
     if os.path.exists(standard_path):
         return standard_path
     
-    # 4. Retornar la ruta estándar aunque no exista (generará error más adelante)
-    return standard_path
+    # 4. Retornar la ruta local aunque no exista (generará error claro)
+    return local_path
+
+def get_programa_dir():
+    """Obtiene el directorio donde está IntTFHKA.exe"""
+    return os.path.dirname(get_programa_path())
+
+def get_puerto_dat_path():
+    """Obtiene la ruta del archivo Puerto.dat (en el mismo directorio que IntTFHKA.exe)"""
+    return os.path.join(get_programa_dir(), 'Puerto.dat')
+
+def get_factura_path():
+    """Obtiene la ruta del archivo Factura.txt (en el mismo directorio que IntTFHKA.exe)"""
+    return os.path.join(get_programa_dir(), 'Factura.txt')
+
+def get_retorno_path():
+    """Obtiene la ruta del archivo Retorno.txt"""
+    return os.path.join(get_programa_dir(), 'Retorno.txt')
+
+def get_status_error_path():
+    """Obtiene la ruta del archivo Status_Error.txt"""
+    return os.path.join(get_programa_dir(), 'Status_Error.txt')
+
+def configurar_puerto_com(puerto):
+    """Configura el puerto COM en Puerto.dat"""
+    try:
+        puerto_path = get_puerto_dat_path()
+        with open(puerto_path, 'w') as f:
+            f.write(puerto)
+        print(f"[FISCAL] Puerto COM configurado: {puerto} en {puerto_path}")
+        return True
+    except Exception as e:
+        print(f"[FISCAL] Error configurando puerto: {e}")
+        return False
+
+def leer_puerto_com():
+    """Lee el puerto COM actual desde Puerto.dat"""
+    try:
+        puerto_path = get_puerto_dat_path()
+        if os.path.exists(puerto_path):
+            with open(puerto_path, 'r') as f:
+                return f.read().strip()
+        return None
+    except Exception as e:
+        print(f"[FISCAL] Error leyendo puerto: {e}")
+        return None
+
+def leer_retorno():
+    """Lee el contenido del archivo Retorno.txt"""
+    try:
+        retorno_path = get_retorno_path()
+        if os.path.exists(retorno_path):
+            with open(retorno_path, 'r', encoding='utf-8', errors='ignore') as f:
+                return f.read().strip()
+        return None
+    except Exception as e:
+        print(f"[FISCAL] Error leyendo retorno: {e}")
+        return None
+
+def leer_status_error():
+    """Lee el contenido del archivo Status_Error.txt"""
+    try:
+        status_path = get_status_error_path()
+        if os.path.exists(status_path):
+            with open(status_path, 'r', encoding='utf-8', errors='ignore') as f:
+                return f.read().strip()
+        return None
+    except Exception as e:
+        print(f"[FISCAL] Error leyendo status_error: {e}")
+        return None
 
 RUTA_PROGRAMA = get_programa_path()
+print(f"[FISCAL] IntTFHKA.exe path: {RUTA_PROGRAMA} (exists: {os.path.exists(RUTA_PROGRAMA)})")
+print(f"[FISCAL] Puerto.dat path: {get_puerto_dat_path()}")
+print(f"[FISCAL] Puerto COM actual: {leer_puerto_com()}")
 
 # Cola thread-safe para procesar peticiones
 cola_fiscal = queue.Queue()
@@ -60,8 +145,8 @@ ids_caja_ejecutados = set()
 # Archivo para persistir los IDs ejecutados
 ARCHIVO_IDS_EJECUTADOS = os.path.join(DATA_DIR, "ids_caja_ejecutados.txt")
 
-# Archivo para facturas temporales
-ARCHIVO_FACTURA = os.path.join(DATA_DIR, "Factura.txt")
+# Archivo para facturas temporales - DEBE estar en el mismo directorio que IntTFHKA.exe
+# Ya no usamos DATA_DIR para Factura.txt, se usa get_factura_path()
 
 # Sistema anti-duplicados
 peticiones_procesadas = {}  # hash_peticion -> {"timestamp": datetime, "job_id": str, "estado": str}
@@ -244,6 +329,85 @@ def procesar_cola_fiscal():
             print(f"Error en procesador de cola: {e}")
             continue
 
+def ejecutar_con_hka_serial(parametros, type_param, file_param, puerto, id_caja, linea_completa, fecha_hora_ejecucion):
+    """Ejecuta comando fiscal usando comunicación serial directa (sin IntTFHKA.exe)"""
+    try:
+        print(f"[{fecha_hora_ejecucion}] Usando hka_serial en {puerto}")
+        
+        if type_param in ["factura", "notacredito"]:
+            # Escribir archivo de factura
+            archivo_factura = get_factura_path()
+            print(f"[{fecha_hora_ejecucion}] Escribiendo factura en: {archivo_factura}")
+            
+            with open(archivo_factura, "w", encoding='latin-1') as fp:
+                if isinstance(parametros, str):
+                    try:
+                        parametros = json.loads(parametros)
+                    except:
+                        pass
+
+                if isinstance(parametros, list):
+                    for i, linea in enumerate(parametros):
+                        linea_str = str(linea).rstrip()
+                        if linea_str:
+                            fp.write(f"{linea_str}\n")
+                            print(f"[{fecha_hora_ejecucion}] Línea {i}: {linea_str}")
+                else:
+                    fp.write(str(parametros))
+            
+            # Enviar archivo usando hka_serial
+            result = send_fiscal_file(puerto, archivo_factura)
+            
+            if result['success']:
+                if id_caja:
+                    guardar_id_ejecutado(id_caja)
+                return {
+                    "status": "ok",
+                    "message": "Factura impresa correctamente (hka_serial)",
+                    "method": "hka_serial",
+                    "result": result['result'],
+                    "id_caja": id_caja,
+                    "linea_completa": linea_completa,
+                    "fecha_hora": fecha_hora_ejecucion,
+                    "puerto_com": puerto
+                }
+            else:
+                return {
+                    "status": "error",
+                    "message": f"Error imprimiendo factura: {result['result']}",
+                    "method": "hka_serial",
+                    "id_caja": id_caja,
+                    "fecha_hora": fecha_hora_ejecucion,
+                    "puerto_com": puerto
+                }
+                
+        elif type_param == "reportefiscal":
+            # Enviar comando de reporte
+            result = hka_send_command(puerto, parametros)
+            
+            if result['success']:
+                return {
+                    "status": "ok",
+                    "message": "Reporte ejecutado correctamente (hka_serial)",
+                    "method": "hka_serial",
+                    "response": result['response'],
+                    "fecha_hora": fecha_hora_ejecucion,
+                    "puerto_com": puerto
+                }
+            else:
+                return {
+                    "status": "error",
+                    "message": f"Error en reporte: {result.get('error', 'Unknown')}",
+                    "method": "hka_serial",
+                    "fecha_hora": fecha_hora_ejecucion,
+                    "puerto_com": puerto
+                }
+        else:
+            return {"status": "error", "message": f"Tipo de operación no soportado: {type_param}"}
+            
+    except Exception as e:
+        return {"status": "error", "message": f"Error hka_serial: {str(e)}"}
+
 def ejecutar_programa_fiscal(parametros, type_param, file_param):
     """Ejecuta el programa fiscal y espera a que termine"""
     try:
@@ -263,16 +427,27 @@ def ejecutar_programa_fiscal(parametros, type_param, file_param):
                 "codigo_retorno": 0
             }
         
-        # Usar archivo de factura en el directorio de datos
-        if not file_param:
-            file_param = ARCHIVO_FACTURA
-        elif not os.path.isabs(file_param):
-            file_param = os.path.join(DATA_DIR, file_param)
+        puerto = leer_puerto_com()
+        if not puerto:
+            return {"status": "error", "message": "Puerto COM no configurado"}
+        
+        # USAR COMUNICACIÓN SERIAL DIRECTA SI ESTÁ DISPONIBLE
+        if HKA_SERIAL_AVAILABLE:
+            return ejecutar_con_hka_serial(parametros, type_param, file_param, puerto, id_caja, linea_completa, fecha_hora_ejecucion)
+        
+        # FALLBACK: Usar IntTFHKA.exe
+        ruta_programa = get_programa_path()
+        programa_dir = get_programa_dir()
+        
+        if not os.path.exists(ruta_programa):
+            return {"status": "error", "message": f"Programa no encontrado en: {ruta_programa}"}
+        
+        archivo_factura = get_factura_path()
         
         if type_param in ["factura", "notacredito"]:
-            with open(file_param, "w+") as fp:
-                fp.write("")
-                
+            print(f"[{fecha_hora_ejecucion}] Escribiendo factura en: {archivo_factura}")
+            
+            with open(archivo_factura, "w", encoding='utf-8') as fp:
                 if isinstance(parametros, str):
                     try:
                         parametros = json.loads(parametros)
@@ -280,43 +455,78 @@ def ejecutar_programa_fiscal(parametros, type_param, file_param):
                         pass
 
                 if isinstance(parametros, list):
-                    for numero in parametros:
-                        fp.write(f"{numero}")
+                    for i, linea in enumerate(parametros):
+                        linea_str = str(linea).rstrip()
+                        if linea_str:
+                            fp.write(f"{linea_str}\n")
+                            print(f"[{fecha_hora_ejecucion}] Línea {i}: {linea_str}")
                 else:
                     fp.write(str(parametros))
-                    
-            parametros = f"SendFileCmd({file_param})"
+            
+            parametros = "SendFileCmd(Factura.txt)"
+            
         elif type_param == "reportefiscal":
             parametros = f"SendCmd({parametros})"
 
-        # Verificar ruta del programa
-        ruta_programa = get_programa_path()
-        if not os.path.exists(ruta_programa):
-            return {"status": "error", "message": f"Programa no encontrado en: {ruta_programa}"}
-
-        comando = [ruta_programa] + parametros.split()
+        comando_str = f'IntTFHKA.exe {parametros}'
         
-        proceso = subprocess.Popen(comando, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        stdout, stderr = proceso.communicate()
+        print(f"[{fecha_hora_ejecucion}] Ejecutando: {comando_str}")
+        print(f"[{fecha_hora_ejecucion}] CWD: {programa_dir}")
+        print(f"[{fecha_hora_ejecucion}] Puerto COM: {puerto}")
+        
+        proceso = subprocess.Popen(
+            comando_str, 
+            shell=True, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE,
+            cwd=programa_dir
+        )
+        stdout, stderr = proceso.communicate(timeout=60)
         
         salida_fiscal = stdout.decode('utf-8', errors='ignore').strip() if stdout else ""
         error_fiscal = stderr.decode('utf-8', errors='ignore').strip() if stderr else ""
         
-        if salida_fiscal:
-            print(f"[{fecha_hora_ejecucion}] Línea: {linea_completa}")
-            print(f"[{fecha_hora_ejecucion}] Salida fiscal: {salida_fiscal}")
-        if error_fiscal:
-            print(f"[{fecha_hora_ejecucion}] Error: {error_fiscal}")
+        # Leer archivos de respuesta de IntTFHKA
+        retorno_contenido = leer_retorno()
+        status_error_contenido = leer_status_error()
         
+        print(f"[{fecha_hora_ejecucion}] Return code: {proceso.returncode}")
+        print(f"[{fecha_hora_ejecucion}] Stdout: {salida_fiscal}")
+        print(f"[{fecha_hora_ejecucion}] Retorno.txt: {retorno_contenido}")
+        print(f"[{fecha_hora_ejecucion}] Status_Error.txt: {status_error_contenido}")
+        if error_fiscal:
+            print(f"[{fecha_hora_ejecucion}] Stderr: {error_fiscal}")
+        
+        # Códigos de retorno de IntTFHKA:
+        # 0 = Error o sin respuesta
+        # 3 = Comando ejecutado (factura impresa)
+        # 4 = Comando ejecutado con advertencia
+        # 5 = Comando ejecutado
         if proceso.returncode in [3, 4, 5] and id_caja:
             print(f"[{fecha_hora_ejecucion}] Retorno {proceso.returncode} - Guardando ID de caja: {id_caja}")
             guardar_id_ejecutado(id_caja)
         
-        if proceso.returncode == 0:
+        # Considerar exitoso si returncode es 3, 4 o 5
+        if proceso.returncode in [3, 4, 5]:
             return {
                 "status": "ok", 
-                "message": "Programa ejecutado correctamente",
+                "message": "Factura impresa correctamente",
                 "salida_fiscal": salida_fiscal,
+                "retorno_txt": retorno_contenido,
+                "status_error_txt": status_error_contenido,
+                "codigo_retorno": proceso.returncode,
+                "id_caja": id_caja,
+                "linea_completa": linea_completa,
+                "fecha_hora": fecha_hora_ejecucion
+            }
+        elif proceso.returncode == 0:
+            # Retorno 0 generalmente significa error o timeout
+            return {
+                "status": "error", 
+                "message": f"Error de comunicación con impresora fiscal. Retorno: {retorno_contenido}",
+                "salida_fiscal": salida_fiscal,
+                "retorno_txt": retorno_contenido,
+                "status_error_txt": status_error_contenido,
                 "codigo_retorno": proceso.returncode,
                 "id_caja": id_caja,
                 "linea_completa": linea_completa,
@@ -325,8 +535,10 @@ def ejecutar_programa_fiscal(parametros, type_param, file_param):
         else:
             return {
                 "status": "error", 
-                "message": f"Error en ejecución: {error_fiscal if error_fiscal else 'Error desconocido'}",
+                "message": f"Error en ejecución. Código: {proceso.returncode}. {error_fiscal if error_fiscal else retorno_contenido}",
                 "salida_fiscal": salida_fiscal,
+                "retorno_txt": retorno_contenido,
+                "status_error_txt": status_error_contenido,
                 "error_fiscal": error_fiscal,
                 "codigo_retorno": proceso.returncode,
                 "id_caja": id_caja,
@@ -334,6 +546,12 @@ def ejecutar_programa_fiscal(parametros, type_param, file_param):
                 "fecha_hora": fecha_hora_ejecucion
             }
             
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error", 
+            "message": "Timeout: La impresora fiscal no respondió en 60 segundos",
+            "fecha_hora": datetime.now().isoformat()
+        }
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -454,10 +672,13 @@ def obtener_config():
         "base_dir": BASE_DIR,
         "data_dir": DATA_DIR,
         "ruta_programa": get_programa_path(),
+        "programa_dir": get_programa_dir(),
         "programa_existe": os.path.exists(get_programa_path()),
-        "archivo_factura": ARCHIVO_FACTURA,
+        "archivo_factura": get_factura_path(),
+        "archivo_puerto": get_puerto_dat_path(),
+        "puerto_com": leer_puerto_com(),
         "archivo_ids": ARCHIVO_IDS_EJECUTADOS,
-        "puerto": PUERTO
+        "puerto_servidor": PUERTO
     })
 
 @app.route('/fiscal/config/programa', methods=['POST'])
@@ -482,6 +703,107 @@ def configurar_programa():
             "message": "Ruta configurada correctamente",
             "ruta_programa": nueva_ruta
         })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/fiscal/config/puerto', methods=['POST'])
+def configurar_puerto():
+    """Configura el puerto COM en Puerto.dat"""
+    try:
+        data = request.get_json()
+        puerto = data.get("puerto", "")
+        
+        if not puerto:
+            return jsonify({"status": "error", "message": "Puerto no especificado"}), 400
+        
+        # Validar formato del puerto (COM1, COM2, etc.)
+        if not puerto.upper().startswith("COM"):
+            return jsonify({"status": "error", "message": "Formato de puerto inválido. Use COM1, COM2, etc."}), 400
+        
+        if configurar_puerto_com(puerto.upper()):
+            return jsonify({
+                "status": "ok",
+                "message": f"Puerto {puerto.upper()} configurado correctamente",
+                "puerto_com": puerto.upper(),
+                "archivo_puerto": get_puerto_dat_path()
+            })
+        else:
+            return jsonify({"status": "error", "message": "Error al escribir Puerto.dat"}), 500
+            
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/fiscal/config/puerto', methods=['GET'])
+def obtener_puerto():
+    """Obtiene el puerto COM actual"""
+    try:
+        puerto = leer_puerto_com()
+        return jsonify({
+            "status": "ok",
+            "puerto_com": puerto,
+            "archivo_puerto": get_puerto_dat_path()
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/fiscal/test-printer', methods=['POST'])
+def test_printer():
+    """Prueba la conexión con la impresora fiscal"""
+    try:
+        puerto = leer_puerto_com()
+        if not puerto:
+            return jsonify({"status": "error", "message": "Puerto COM no configurado. Configure Puerto.dat primero."}), 400
+        
+        # Usar comunicación serial directa si está disponible
+        if HKA_SERIAL_AVAILABLE:
+            print(f"[FISCAL] Test printer usando hka_serial en {puerto}")
+            result = check_printer(puerto)
+            
+            return jsonify({
+                "status": "ok" if result['connected'] else "error",
+                "message": "Impresora conectada" if result['connected'] else "Impresora no detectada",
+                "printer_connected": result['connected'],
+                "puerto_com": puerto,
+                "method": "hka_serial",
+                "error": result.get('error')
+            })
+        
+        # Fallback a IntTFHKA.exe si hka_serial no está disponible
+        ruta_programa = get_programa_path()
+        programa_dir = get_programa_dir()
+        
+        if not os.path.exists(ruta_programa):
+            return jsonify({"status": "error", "message": f"Programa no encontrado: {ruta_programa}"}), 400
+        
+        comando = "IntTFHKA.exe CheckFprinter()"
+        print(f"[FISCAL] Test: {comando} en {programa_dir}")
+        
+        proceso = subprocess.Popen(
+            comando,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=programa_dir
+        )
+        stdout, stderr = proceso.communicate(timeout=30)
+        
+        retorno = leer_retorno()
+        status_error = leer_status_error()
+        printer_connected = retorno and retorno.startswith("T")
+        
+        return jsonify({
+            "status": "ok" if printer_connected else "error",
+            "message": "Impresora conectada" if printer_connected else "Impresora no detectada",
+            "printer_connected": printer_connected,
+            "return_code": proceso.returncode,
+            "retorno_txt": retorno,
+            "status_error_txt": status_error,
+            "puerto_com": puerto,
+            "method": "IntTFHKA.exe"
+        })
+        
+    except subprocess.TimeoutExpired:
+        return jsonify({"status": "error", "message": "Timeout esperando respuesta de la impresora"}), 500
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 

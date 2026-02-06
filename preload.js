@@ -214,6 +214,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @returns {Promise<{success: boolean, comPort?: string, error?: string}>}
    */
   fiscalSetPort: (comPort) => ipcRenderer.invoke('fiscal-set-port', comPort),
+  
+  /**
+   * Test connection with fiscal printer (not just server)
+   * @returns {Promise<{success: boolean, printer_connected: boolean, retorno_txt?: string, error?: string}>}
+   */
+  fiscalTestPrinter: () => ipcRenderer.invoke('fiscal-test-printer'),
+  
+  /**
+   * Get server fiscal configuration (from Python server)
+   * @returns {Promise<{success: boolean, puerto_com?: string, ruta_programa?: string, error?: string}>}
+   */
+  fiscalGetServerConfig: () => ipcRenderer.invoke('fiscal-get-server-config'),
 
   // ==================== FISCAL SERVER MANAGEMENT ====================
   

@@ -76,7 +76,7 @@ const checkPythonInstalled = async () => {
 const checkServerHealth = async (port = 3000) => {
   return new Promise((resolve) => {
     const options = {
-      hostname: 'localhost',
+      hostname: '127.0.0.1',
       port: port,
       path: '/health',
       method: 'GET',
@@ -87,11 +87,16 @@ const checkServerHealth = async (port = 3000) => {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
-        try {
-          const json = JSON.parse(data);
-          resolve({ healthy: true, data: json });
-        } catch (e) {
-          resolve({ healthy: false, error: 'Invalid response' });
+        if (res.statusCode && res.statusCode >= 200 && res.statusCode < 400) {
+          try {
+            const json = JSON.parse(data);
+            resolve({ healthy: true, data: json });
+          } catch (e) {
+            // Si responde algo pero no es JSON válido, igual consideramos que está vivo
+            resolve({ healthy: true, data: data, warning: 'Invalid JSON health response' });
+          }
+        } else {
+          resolve({ healthy: false, error: `Status ${res.statusCode}`, data });
         }
       });
     });
@@ -185,7 +190,7 @@ const startFiscalServer = async (options = {}) => {
       
       // Esperar a que el servidor esté listo
       let checkCount = 0;
-      const maxChecks = 30; // 15 segundos
+      const maxChecks = 60; // 30 segundos para darle más tiempo a Flask
       
       const checkReady = setInterval(async () => {
         checkCount++;
@@ -238,6 +243,14 @@ const stopFiscalServer = () => {
 const getServerStatus = async () => {
   const health = await checkServerHealth(serverPort);
   
+  // Asegurar que todo sea serializable (evitar 'An object could not be cloned')
+  let healthData = null;
+  try {
+    healthData = health.data ? JSON.parse(JSON.stringify(health.data)) : null;
+  } catch (e) {
+    healthData = null;
+  }
+  
   return {
     running: isServerRunning,
     healthy: health.healthy,
@@ -245,7 +258,7 @@ const getServerStatus = async () => {
     pid: fiscalServerProcess ? fiscalServerProcess.pid : null,
     serverDir: getFiscalServerDir(),
     scriptPath: getFiscalScript(),
-    healthData: health.data,
+    healthData: healthData,
   };
 };
 

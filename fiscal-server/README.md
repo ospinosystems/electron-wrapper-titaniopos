@@ -6,7 +6,7 @@ Servidor Python para comunicación con impresora fiscal HKA integrado con Electr
 
 - Python 3.8+ instalado (con la opción **"Add Python to PATH"** marcada)
 - Flask (`pip install flask`)
-- Ejecutable `IntTFHKA.exe`
+- Ejecutable `IntTFHKA.exe` (SDK de HKA)
 
 ## Instalación rápida (Windows)
 
@@ -26,6 +26,24 @@ Servidor Python para comunicación con impresora fiscal HKA integrado con Electr
    - `C:\IntTFHKA\IntTFHKA.exe`
    - O definir variable de entorno `INTFHKA_PATH` apuntando al `.exe`
 
+## Archivos requeridos en el directorio de IntTFHKA.exe
+
+**IMPORTANTE:** Los siguientes archivos deben estar en el **MISMO DIRECTORIO** que `IntTFHKA.exe`:
+
+- `Puerto.dat` - Contiene el puerto COM (ej: `COM6`)
+- `Retorno.txt` - Archivo donde IntTFHKA escribe respuestas
+- `Status_Error.txt` - Archivo donde IntTFHKA escribe estado/errores
+- `Factura.txt` - Archivo temporal generado por el servidor para enviar a la impresora
+
+## Configuración del Puerto COM
+
+1. Abre **Administrador de dispositivos → Puertos (COM & LPT)**
+2. Busca el puerto de la impresora fiscal (ej: `USB Serial Device (COM6)`)
+3. Configura el puerto en la UI de TitanioPOS o usa el endpoint:
+   ```bash
+   curl -X POST http://localhost:3000/fiscal/config/puerto -H "Content-Type: application/json" -d '{"puerto": "COM6"}'
+   ```
+
 ## Uso manual (si quieres probar sin Electron)
 
 ```bash
@@ -38,41 +56,119 @@ El servidor quedará en `http://localhost:3000` (o el puerto que definas en `FIS
 - `INTFHKA_PATH`: Ruta al ejecutable IntTFHKA.exe (opcional; override de la búsqueda automática)
 - `FISCAL_SERVER_PORT`: Puerto del servidor (default: 3000)
 
-## Dónde se guardan datos temporales
+## Endpoints disponibles
 
-- `fiscal-server/data/Factura.txt`: archivo temporal de facturas
-- `fiscal-server/data/ids_caja_ejecutados.txt`: IDs de caja ya ejecutados
-
-## Endpoints disponibles (para debug)
-
-- `POST /fiscal` - Agregar factura/nota a la cola
+### Documentos Fiscales
+- `POST /fiscal` - Agregar factura/nota de crédito a la cola
 - `GET /fiscal/estado/<job_id>` - Estado de un trabajo
-- `GET /fiscal/cola/estado` - Estado de la cola
-- `GET /fiscal/config` - Configuración actual
-- `POST /fiscal/config/programa` - Configurar ruta del programa
-- `GET /health` - Health check
 
-## Integración con Electron (automático)
+### Configuración
+- `GET /fiscal/config` - Configuración actual completa
+- `POST /fiscal/config/programa` - Configurar ruta del programa IntTFHKA
+- `GET /fiscal/config/puerto` - Obtener puerto COM actual
+- `POST /fiscal/config/puerto` - Configurar puerto COM (escribe Puerto.dat)
 
-- El servidor Python se inicia al abrir la app Electron y se detiene al cerrarla.
-- Rutas buscadas para `IntTFHKA.exe`: `INTFHKA_PATH` → `./IntTFHKA.exe` → `C:\IntTFHKA\IntTFHKA.exe`.
-- Si Python no está instalado o el `.exe` no se encuentra, el servidor queda **Detenido**.
+### Diagnóstico
+- `POST /fiscal/test-printer` - Probar conexión con la impresora fiscal
+- `GET /fiscal/cola/estado` - Estado de la cola de trabajos
+- `GET /health` - Health check del servidor
 
-## Si la UI muestra "Python: Instalado" pero "Servidor: Detenido"
+### Administración
+- `GET /fiscal/ids-ejecutados` - Lista de IDs de caja ya procesados
+- `DELETE /fiscal/ids-ejecutados` - Limpiar IDs ejecutados
 
-1. Verifica que `IntTFHKA.exe` esté en una de las rutas soportadas (o define `INTFHKA_PATH`).
-2. Dale al botón **Reiniciar Servidor** en la UI de configuración.
-3. Revisa que el puerto no esté ocupado (default 3000) o cambia `FISCAL_SERVER_PORT`.
-4. Si sigue sin levantar, abre la consola de la app (Electron) y revisa logs `[FISCAL SERVER]`.
+## Formato de Factura (HKA)
 
-## ¿En qué puerto COM está conectada la máquina?
+```
+iS*NOMBRE DEL CLIENTE
+iR*V12345678
+i05Caja: 1 - 00001
+ 000000500000001000PRODUCTO EXENTO
+!000001000000002000PRODUCTO IVA 16%
+101
+```
 
-1. Abre **Administrador de dispositivos → Puertos (COM & LPT)**.
-2. Busca algo como `USB Serial Device (COM3)` o `Prolific USB-to-Serial (COM4)`.
-3. Ese COM se configura en la UI de `Máquina Fiscal (HKA)`.
+### Códigos de Tasa IVA
+- ` ` (espacio) = Exento (0%)
+- `!` = Tasa General (16%)
+- `"` = Tasa Reducida (8%)
+- `#` = Tasa Adicional (31%)
+
+### Formato de producto
+`[TasaIVA][Precio12dígitos][Cantidad8dígitos][Descripción20chars]`
+
+- Precio: En centavos, 12 dígitos (ej: 5.00$ = 000000000500)
+- Cantidad: En milésimas, 8 dígitos (ej: 1.000 = 00001000)
+
+### Códigos de cierre (forma de pago)
+- `101` = Efectivo
+- `102` = Débito
+- `103` = Crédito
+- `104` = Otros
+
+## Formato de Nota de Crédito
+
+```
+iR*V12345678
+iS*NOMBRE DEL CLIENTE
+iF*00000000001
+iD*15-01-2025
+iI*ZPA2000343
+ADEVOLUCION POR CAMBIO
+i05Caja: 1 - 00002
+d0000000500000001000PRODUCTO DEVUELTO
+101
+```
+
+### Campos requeridos
+- `iF*` = Número de factura original (11 dígitos)
+- `iD*` = Fecha de factura original (DD-MM-YYYY)
+- `iI*` = Serial de la impresora fiscal original
+
+### Códigos de productos para devolución
+- `d0` = Producto exento
+- `d1` = Tasa General (16%)
+- `d2` = Tasa Reducida (8%)
+- `d3` = Tasa Adicional (31%)
+
+## Códigos de retorno de IntTFHKA
+
+- `0` = Error o sin respuesta
+- `3` = Comando ejecutado correctamente (factura impresa)
+- `4` = Comando ejecutado con advertencia
+- `5` = Comando ejecutado
+
+## Solución de Problemas
+
+### "Error de comunicación con impresora fiscal"
+1. Verifica que el puerto COM esté correctamente configurado en `Puerto.dat`
+2. Verifica que la impresora esté encendida y conectada
+3. Usa el endpoint `/fiscal/test-printer` para diagnosticar
+
+### "Programa no encontrado"
+1. Verifica que `IntTFHKA.exe` existe en la ruta configurada
+2. Usa el endpoint `/fiscal/config` para ver la ruta actual
+
+### "Timeout esperando respuesta"
+1. Verifica la conexión física con la impresora
+2. Revisa que el puerto COM sea el correcto
+3. Reinicia la impresora fiscal
+
+## Integración con Electron
+
+- El servidor Python se inicia automáticamente al abrir la app
+- Los handlers IPC disponibles:
+  - `fiscal-config-get/save` - Configuración local
+  - `fiscal-send-invoice` - Enviar factura/nota de crédito
+  - `fiscal-check-job-status` - Consultar estado de trabajo
+  - `fiscal-set-port` - Configurar puerto COM
+  - `fiscal-test-printer` - Probar impresora
+  - `fiscal-send-report-x/z` - Enviar reportes fiscales
+  - `fiscal-server-start/stop/restart` - Control del servidor
 
 ## Notas
 
-- El servidor es secuencial: procesa una tarea a la vez.
-- Mantiene anti-duplicados por hash de petición.
-- Guarda IDs de caja ejecutados para evitar reimpresiones.
+- El servidor es secuencial: procesa una tarea a la vez
+- Mantiene anti-duplicados por hash de petición (5 minutos)
+- Guarda IDs de caja ejecutados para evitar reimpresiones
+- Los archivos `Factura.txt`, `Retorno.txt`, `Status_Error.txt` se crean en el directorio de IntTFHKA.exe
