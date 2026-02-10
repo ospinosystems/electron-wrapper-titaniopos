@@ -47,18 +47,10 @@ def get_programa_path():
         if os.path.exists(env_path):
             return env_path
     
-    # 2. Verificar si existe en la carpeta del servidor (junto a fiscal.py)
+    # 2. SIEMPRE usar la carpeta del servidor (junto a fiscal.py)
+    # Esto asegura que Factura.txt se escriba en la ubicación correcta
     local_path = os.path.abspath(os.path.join(BASE_DIR, 'IntTFHKA.exe'))
-    if os.path.exists(local_path):
-        return local_path
-    
-    # 3. Verificar en C:\IntTFHKA (ubicación estándar)
-    standard_path = r"C:\IntTFHKA\IntTFHKA.exe"
-    if os.path.exists(standard_path):
-        return standard_path
-    
-    # 4. Retornar la ruta local aunque no exista (generará error claro)
-    return local_path
+    return local_path  # Siempre usar esta ruta para mantener consistencia
 
 def get_programa_dir():
     """Obtiene el directorio donde está IntTFHKA.exe"""
@@ -69,8 +61,9 @@ def get_puerto_dat_path():
     return os.path.join(get_programa_dir(), 'Puerto.dat')
 
 def get_factura_path():
-    """Obtiene la ruta del archivo Factura.txt (en el mismo directorio que IntTFHKA.exe)"""
-    return os.path.join(get_programa_dir(), 'Factura.txt')
+    """Obtiene la ruta del archivo Factura.txt (SIEMPRE en la carpeta fiscal-server)"""
+    # CRÍTICO: Usar BASE_DIR directamente para evitar confusión con ubicaciones de IntTFHKA.exe
+    return os.path.join(BASE_DIR, 'Factura.txt')
 
 def get_retorno_path():
     """Obtiene la ruta del archivo Retorno.txt"""
@@ -337,6 +330,12 @@ def ejecutar_con_hka_serial(parametros, type_param, file_param, puerto, id_caja,
         if type_param in ["factura", "notacredito"]:
             # Escribir archivo de factura
             archivo_factura = get_factura_path()
+            
+            # CRÍTICO: Eliminar archivo anterior para evitar cache
+            if os.path.exists(archivo_factura):
+                os.remove(archivo_factura)
+                print(f"[{fecha_hora_ejecucion}] Archivo anterior eliminado: {archivo_factura}")
+            
             print(f"[{fecha_hora_ejecucion}] Escribiendo factura en: {archivo_factura}")
             
             with open(archivo_factura, "w", encoding='latin-1') as fp:
@@ -445,6 +444,11 @@ def ejecutar_programa_fiscal(parametros, type_param, file_param):
         archivo_factura = get_factura_path()
         
         if type_param in ["factura", "notacredito"]:
+            # CRÍTICO: Eliminar archivo anterior para evitar cache
+            if os.path.exists(archivo_factura):
+                os.remove(archivo_factura)
+                print(f"[{fecha_hora_ejecucion}] Archivo anterior eliminado: {archivo_factura}")
+            
             print(f"[{fecha_hora_ejecucion}] Escribiendo factura en: {archivo_factura}")
             
             with open(archivo_factura, "w", encoding='utf-8') as fp:

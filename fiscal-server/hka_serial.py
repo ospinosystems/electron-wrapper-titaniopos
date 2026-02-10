@@ -126,6 +126,11 @@ class HKAPrinter:
             if not self.open():
                 return False, self.last_error
             
+            # CRÍTICO: Limpiar buffers de entrada y salida para evitar comandos residuales
+            self.serial.reset_input_buffer()
+            self.serial.reset_output_buffer()
+            time.sleep(0.3)
+            
             responses = []
             for line in lines:
                 # rstrip() solo elimina espacios finales, preserva espacio inicial (código de tasa IVA)
@@ -141,15 +146,17 @@ class HKAPrinter:
                 
                 self.serial.reset_input_buffer()
                 self.serial.write(packet)
-                time.sleep(0.3)
+                time.sleep(0.5)
                 
                 # Esperar ACK o respuesta
                 response = b''
                 start_time = time.time()
-                while time.time() - start_time < 2:
+                while time.time() - start_time < 3:
                     if self.serial.in_waiting > 0:
                         response += self.serial.read(self.serial.in_waiting)
-                        break
+                        time.sleep(0.1)
+                        if self.serial.in_waiting == 0:
+                            break
                     time.sleep(0.05)
                 
                 responses.append({
@@ -180,6 +187,10 @@ class HKAPrinter:
     def get_status(self):
         """Obtiene estado de la impresora"""
         return self.send_command("S1")
+    
+    def cancel_document(self):
+        """Cancela cualquier documento fiscal pendiente"""
+        return self.send_command("7")
 
 
 def check_printer(port='COM6'):

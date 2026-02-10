@@ -180,7 +180,7 @@ const checkFiscalConnection = async (serverUrl) => {
 };
 
 // Enviar factura o nota de crédito al servidor fiscal
-const sendFiscalInvoice = async (serverUrl, invoiceData) => {
+const sendFiscalInvoice = async (serverUrl, invoiceData, fiscalMode = true) => {
   try {
     const docType = invoiceData.type || 'factura';
     
@@ -190,6 +190,11 @@ const sendFiscalInvoice = async (serverUrl, invoiceData) => {
       fiscalLines = generateCreditNoteContent(invoiceData);
     } else {
       fiscalLines = generateFiscalContent(invoiceData);
+    }
+    
+    // Si NO es modo fiscal, agregar indicador "NO FISCAL" al inicio
+    if (!fiscalMode) {
+      fiscalLines.unshift('i05*** NO FISCAL - PRUEBA ***');
     }
     
     const requestData = {
@@ -241,16 +246,30 @@ const generateFiscalContent = (invoiceData) => {
   const lines = [];
   
   // Datos del cliente (opcional)
-  if (invoiceData.customerName) {
+  // Soporta tanto customerName/customerRif como client.name/client.rif
+  const clientName = invoiceData.customerName || (invoiceData.client && invoiceData.client.name);
+  const clientRif = invoiceData.customerRif || (invoiceData.client && invoiceData.client.rif);
+  
+  if (clientName) {
     // iS* = Nombre del cliente
-    const customerName = sanitizeText(invoiceData.customerName, 40);
-    lines.push(`iS*${customerName}`);
+    const sanitizedName = sanitizeText(clientName, 40);
+    lines.push(`iS*${sanitizedName}`);
   }
   
-  if (invoiceData.customerRif) {
-    // iR* = RIF/Cédula del cliente
-    const customerRif = invoiceData.customerRif.replace(/[^0-9A-Za-z]/g, '');
-    lines.push(`iR*${customerRif}`);
+  if (clientRif) {
+    console.log('[FISCAL] Client RIF received:', clientRif);
+    // iR* = RIF/Cédula del cliente (ej: V12345678, J123456789)
+    const sanitizedRif = clientRif.replace(/[^0-9A-Za-z]/g, '');
+    console.log('[FISCAL] Sanitized RIF:', sanitizedRif, 'length:', sanitizedRif.length);
+    // Solo agregar si tiene más que solo la letra del tipo (V, J, E, etc.)
+    if (sanitizedRif.length > 1) {
+      lines.push(`iR*${sanitizedRif}`);
+      console.log('[FISCAL] RIF line added: iR*' + sanitizedRif);
+    } else {
+      console.log('[FISCAL] Skipping empty RIF - only has:', sanitizedRif);
+    }
+  } else {
+    console.log('[FISCAL] No client RIF provided');
   }
   
   // Línea de comentario con caja y número de orden (i05 = línea adicional)
@@ -279,7 +298,8 @@ const generateFiscalContent = (invoiceData) => {
       
       // Precio en centavos (sin decimales), 12 dígitos
       // IMPORTANTE: Es el precio UNITARIO, no el total
-      const priceInCents = Math.round((product.price || 0) * 100);
+      const priceNum = parseFloat(product.price) || 0;
+      const priceInCents = Math.round(priceNum * 100);
       const priceStr = priceInCents.toString().padStart(12, '0');
       
       // Cantidad en milésimas, 8 dígitos (ej: 1.000 = 00001000)
@@ -290,7 +310,10 @@ const generateFiscalContent = (invoiceData) => {
       const description = sanitizeText(product.description || 'PRODUCTO', 20);
       
       // Formato final: [TasaIVA][Precio12][Cantidad8][Descripción]
-      lines.push(`${taxCode}${priceStr}${qtyStr}${description}`);
+      const productLine = `${taxCode}${priceStr}${qtyStr}${description}`;
+      console.log(`[FISCAL] VALIDATION: taxCode="${taxCode}" (len=${taxCode.length}) | priceStr="${priceStr}" (len=${priceStr.length}) | qtyStr="${qtyStr}" (len=${qtyStr.length}) | description="${description}" (len=${description.length})`);
+      console.log(`[FISCAL] Product line: price=${product.price} -> cents=${priceInCents} -> "${priceStr}" | qty=${product.quantity} -> thousandths=${qtyInThousandths} -> "${qtyStr}" | LINE="${productLine}"`);
+      lines.push(productLine);
     }
   }
   
@@ -476,32 +499,41 @@ const registerFiscalHandlers = (app) => {
 
       // En modo no fiscal, igual imprimimos pero marcamos como no fiscal
       // Esto permite probar la impresora sin afectar datos fiscales reales
-      if (!config.fiscalMode) {
-        console.log('[FISCAL] Non-fiscal mode - printing but marking as simulated');
+      const isFiscalMode = config.fiscalMode === true;
+      if (!isFiscalMode) {
+        console.log('[FISCAL] Non-fiscal mode - printing with NO FISCAL indicator');
       }
 
-      // Modo fiscal real
+      // Enviar factura (pasando fiscalMode para agregar indicador si es prueba)
       const result = await sendFiscalInvoice(config.serverUrl, {
         ...invoiceData,
         cashRegisterNumber: invoiceData.cashRegisterNumber || config.cashRegisterNumber,
-      });
+      }, isFiscalMode);
 
-      if (result.success && result.job_id) {
-        // Guardar respuesta pendiente
+      if (result.success) {
+        // Guardar respuesta con los datos del resultado del servidor fiscal
         const responses = loadFiscalResponses(app);
+        const jobId = result.job_id || `local-${Date.now()}`;
+        
+        // El resultado puede incluir la respuesta directa de hka_serial
+        const fiscalResponse = result.result || result;
+        
         responses.push({
-          id: result.job_id,
+          id: jobId,
           orderUuid: invoiceData.orderUuid,
           orderNumber: invoiceData.orderNumber,
           storeCode: invoiceData.storeCode,
           cashRegisterNumber: invoiceData.cashRegisterNumber || config.cashRegisterNumber,
           documentType: invoiceData.type || 'factura',
-          status: 'pending',
+          status: result.status === 'ok' ? 'completado' : 'pending',
+          response: fiscalResponse,
           createdAt: new Date().toISOString(),
+          processedAt: result.status === 'ok' ? new Date().toISOString() : undefined,
           syncedToBackend: false,
           syncAttempts: 0,
         });
         saveFiscalResponses(app, responses);
+        console.log('[FISCAL] Saved response with fiscal data:', JSON.stringify(fiscalResponse).substring(0, 200));
       }
 
       return result;
@@ -536,7 +568,8 @@ const registerFiscalHandlers = (app) => {
           responses[idx].status = result.estado;
           if (result.estado === 'completado' || result.estado === 'error') {
             responses[idx].processedAt = new Date().toISOString();
-            responses[idx].response = result;
+            // Guardar la respuesta íntegra del servidor fiscal (incluye resultado de hka_serial)
+            responses[idx].response = result.resultado || result;
           }
           saveFiscalResponses(app, responses);
         }
