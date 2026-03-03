@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, globalShortcut } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, Menu } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
@@ -76,6 +76,67 @@ const APP_URL =
 
 let mainWindow;
 
+function setupNativeContextMenu(window) {
+  if (!window) return;
+
+  window.webContents.on('context-menu', (event, params) => {
+    const { editFlags } = params || {};
+    const hasSelection = Boolean(params && params.selectionText && params.selectionText.trim());
+    const isEditable = Boolean(params && params.isEditable);
+
+    const template = [];
+
+    if (isEditable) {
+      template.push(
+        {
+          label: 'Cortar',
+          enabled: Boolean(editFlags && editFlags.canCut),
+          click: () => window.webContents.cut(),
+        },
+        {
+          label: 'Copiar',
+          enabled: Boolean(editFlags && editFlags.canCopy),
+          click: () => window.webContents.copy(),
+        },
+        {
+          label: 'Pegar',
+          enabled: Boolean(editFlags && editFlags.canPaste),
+          click: () => window.webContents.paste(),
+        },
+        { type: 'separator' },
+        {
+          label: 'Seleccionar todo',
+          enabled: Boolean(editFlags && editFlags.canSelectAll),
+          click: () => window.webContents.selectAll(),
+        }
+      );
+    } else if (hasSelection) {
+      template.push(
+        {
+          label: 'Copiar',
+          enabled: true,
+          click: () => window.webContents.copy(),
+        },
+        { type: 'separator' },
+        {
+          label: 'Seleccionar todo',
+          enabled: Boolean(editFlags && editFlags.canSelectAll),
+          click: () => window.webContents.selectAll(),
+        }
+      );
+    } else {
+      template.push({
+        label: 'Seleccionar todo',
+        enabled: Boolean(editFlags && editFlags.canSelectAll),
+        click: () => window.webContents.selectAll(),
+      });
+    }
+
+    const menu = Menu.buildFromTemplate(template);
+    menu.popup({ window });
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -93,6 +154,8 @@ function createWindow() {
   });
 
   mainWindow.loadURL(APP_URL);
+
+  setupNativeContextMenu(mainWindow);
 
   mainWindow.webContents.openDevTools();
 
