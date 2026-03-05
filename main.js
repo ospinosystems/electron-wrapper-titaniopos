@@ -72,8 +72,8 @@ const decodeFromJWT = (token) => {
 
 // URL de tu PWA (cambiar en producción)
 const APP_URL =
-  // process.env.TITANIOPOS_URL || "https://frontend.titanio-pos.com";
-  process.env.TITANIOPOS_URL || "http://localhost:3001";
+  process.env.TITANIOPOS_URL || "https://frontend.titanio-pos.com";
+  // process.env.TITANIOPOS_URL || "http://localhost:3001";
 
 let mainWindow;
 
