@@ -5,6 +5,7 @@ const fs = require('fs');
 const jwt = require('jsonwebtoken');
 const { registerPrinterHandlers } = require('./printer-handlers');
 const { registerFiscalHandlers } = require('./fiscal-handlers');
+const { registerPinpadHandlers } = require('./pinpad-handlers');
 const { 
   startFiscalServer, 
   stopFiscalServer, 
@@ -1484,6 +1485,10 @@ app.whenReady().then(() => {
   // Register fiscal handlers for HKA fiscal machine
   registerFiscalHandlers(app);
   console.log('🧾 [FISCAL] Fiscal machine system initialized');
+
+  // Register pinpad handlers for local LAN proxy
+  registerPinpadHandlers();
+  console.log('💳 [PINPAD] Local proxy initialized');
   
   // Start fiscal server automatically (async, non-blocking)
   (async () => {

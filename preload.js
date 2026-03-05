@@ -126,6 +126,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   printerTest: (method, printerName, content, options = {}) => 
     ipcRenderer.invoke('printer-test', method, printerName, content, options),
 
+  // ==================== PINPAD ====================
+
+  /**
+   * Process pinpad transaction through local Electron proxy
+   * @param {object} payload - Pinpad transaction payload
+   * @returns {Promise<{success: boolean, status?: number, data?: object, error?: string}>}
+   */
+  pinpadTransaction: (payload) => ipcRenderer.invoke('pinpad-transaction', payload),
+
   // ==================== FISCAL MACHINE (HKA) ====================
   
   /**
