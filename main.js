@@ -72,8 +72,8 @@ const decodeFromJWT = (token) => {
 
 // URL de tu PWA (cambiar en producción)
 const APP_URL =
-  process.env.TITANIOPOS_URL || "https://frontend.titanio-pos.com";
-  // process.env.TITANIOPOS_URL || "http://localhost:3001";
+  // process.env.TITANIOPOS_URL || "https://frontend.titanio-pos.com";
+  process.env.TITANIOPOS_URL || "http://localhost:3001";
 
 let mainWindow;
 
@@ -157,6 +157,36 @@ function createWindow() {
   mainWindow.loadURL(APP_URL);
 
   setupNativeContextMenu(mainWindow);
+
+  // ==================== KEYBOARD / ZOOM CUSTOMIZATIONS ====================
+
+  // Ctrl+Scroll → browser-like zoom
+  mainWindow.webContents.on('zoom-changed', (event, zoomDirection) => {
+    const current = mainWindow.webContents.getZoomFactor();
+    if (zoomDirection === 'in') {
+      mainWindow.webContents.setZoomFactor(Math.min(current + 0.1, 3.0));
+    } else {
+      mainWindow.webContents.setZoomFactor(Math.max(current - 0.1, 0.3));
+    }
+  });
+
+  // Intercept specific key combos via before-input-event
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return;
+
+    // Ctrl+M → completely disabled
+    if (input.control && !input.shift && !input.alt && !input.meta && input.key.toLowerCase() === 'm') {
+      event.preventDefault();
+      return;
+    }
+
+    // Ctrl+F5 → hard reload (clear cache)
+    if (input.control && !input.shift && !input.alt && !input.meta && input.code === 'F5') {
+      event.preventDefault();
+      mainWindow.webContents.reloadIgnoringCache();
+      return;
+    }
+  });
 
   mainWindow.webContents.openDevTools();
 
@@ -441,6 +471,8 @@ let barcodeTimeout = null;
 const BARCODE_CHAR_THRESHOLD = 50; // ms entre caracteres
 const BARCODE_MIN_LENGTH = 3;
 let isModalOpen = false; // Estado para rastrear si hay un modal abierto
+let modalOpenTimeout = null; // Safety timeout to auto-reset isModalOpen
+const MODAL_OPEN_SAFETY_MS = 30000; // Auto-reset modal state after 30s (stale guard)
 let isScannerEnabled = true;
 
 // Función para enviar código de barras al renderer
@@ -510,8 +542,17 @@ function setupBarcodeScanner(window) {
 
     // Solo aceptar caracteres imprimibles (alfanuméricos y algunos símbolos)
     if (input.key && input.key.length === 1 && !input.control && !input.alt && !input.meta) {
-      // Si estamos acumulando un código de barras, PREVENIR que los caracteres lleguen al navegador
-      if (barcodeBuffer.length > 0 || timeSinceLastKey < BARCODE_CHAR_THRESHOLD) {
+      // A barcode scanner fires chars at ≤20ms intervals.
+      // Block the char from reaching the browser if:
+      //   - we already have chars in the buffer (mid-scan), OR
+      //   - this char arrived fast enough to be scanner input (timeSinceLastKey < threshold), OR
+      //   - this is the FIRST char but there is already a pending buffer timeout
+      //     (i.e., scanner started accumulating before this path reset it).
+      // The key insight: even the first char must be blocked when it arrives within
+      // BARCODE_CHAR_THRESHOLD ms of the previous key (which the scanner always does).
+      const isScannerSpeed = timeSinceLastKey < BARCODE_CHAR_THRESHOLD;
+      const isMidScan = barcodeBuffer.length > 0;
+      if (isScannerSpeed || isMidScan) {
         event.preventDefault();
       }
       
@@ -546,9 +587,27 @@ ipcMain.handle('barcode-scanner-enable', async (event, enabled) => {
 ipcMain.handle('barcode-scanner-set-modal-state', async (event, modalOpen) => {
   isModalOpen = modalOpen;
   console.log('📱 [BARCODE] Modal', modalOpen ? 'abierto - scanner desactivado' : 'cerrado - scanner activado');
+
+  // Clear any previous safety timeout
+  if (modalOpenTimeout) {
+    clearTimeout(modalOpenTimeout);
+    modalOpenTimeout = null;
+  }
+
   if (modalOpen) {
     clearBarcodeBuffer();
+    // Safety guard: auto-reset isModalOpen after MODAL_OPEN_SAFETY_MS
+    // to prevent a stale modal state from permanently disabling the scanner
+    // (e.g., renderer unmounted without sending the close event).
+    modalOpenTimeout = setTimeout(() => {
+      if (isModalOpen) {
+        console.warn('📱 [BARCODE] Safety reset: modal state was stuck open, resetting');
+        isModalOpen = false;
+        modalOpenTimeout = null;
+      }
+    }, MODAL_OPEN_SAFETY_MS);
   }
+
   return { success: true, isModalOpen };
 });
 
