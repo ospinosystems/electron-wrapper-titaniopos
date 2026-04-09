@@ -61,31 +61,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
    */
   backupDeleteOrder: (orderId) => ipcRenderer.invoke('backup-delete-order', orderId),
 
-  // ==================== PISTOLA DE CÓDIGOS DE BARRAS ====================
-  
-  /**
-   * Escuchar eventos de códigos de barras escaneados
-   * @param {function} callback - Función que recibe el código escaneado
-   * @returns {function} Función para remover el listener
-   */
-  onBarcodeScanned: (callback) => {
-    const listener = (event, barcode) => callback(barcode);
-    ipcRenderer.on('barcode-scanned', listener);
-    return () => ipcRenderer.removeListener('barcode-scanned', listener);
-  },
-
-  /**
-   * Habilitar/deshabilitar detección de pistola de barras
-   * @param {boolean} enabled - true para habilitar, false para deshabilitar
-   */
-  barcodeScannerEnable: (enabled) => ipcRenderer.invoke('barcode-scanner-enable', enabled),
-
-  /**
-   * Notificar a Electron sobre el estado de los modales
-   * @param {boolean} isOpen - true si hay un modal abierto, false si está cerrado
-   */
-  barcodeScannerSetModalState: (isOpen) => ipcRenderer.invoke('barcode-scanner-set-modal-state', isOpen),
-
   // ==================== PRINTER CONFIGURATION ====================
   
   /**

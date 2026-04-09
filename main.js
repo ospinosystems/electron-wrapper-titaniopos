@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
@@ -204,9 +204,6 @@ function createWindow() {
       silentPrint();
     }
   });
-
-  // Configurar detección de pistola de barras
-  setupBarcodeScanner(mainWindow);
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -461,154 +458,6 @@ ipcMain.handle('silent-print', async (event, htmlContent, options = {}) => {
 ipcMain.handle('get-printers', async () => {
   const printers = await mainWindow.webContents.getPrintersAsync();
   return printers;
-});
-
-// ==================== DETECCIÓN DE PISTOLA DE BARRAS ====================
-
-let barcodeBuffer = '';
-let lastKeyTime = 0;
-let barcodeTimeout = null;
-const BARCODE_CHAR_THRESHOLD = 50; // ms entre caracteres
-const BARCODE_MIN_LENGTH = 3;
-let isModalOpen = false; // Estado para rastrear si hay un modal abierto
-let modalOpenTimeout = null; // Safety timeout to auto-reset isModalOpen
-const MODAL_OPEN_SAFETY_MS = 30000; // Auto-reset modal state after 30s (stale guard)
-let isScannerEnabled = true;
-
-// Función para enviar código de barras al renderer
-function sendBarcodeToRenderer(barcode) {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    console.log('📱 [BARCODE] Enviando código:', barcode);
-
-    // Enviar evento personalizado al navegador usando IIFE para evitar conflictos de scope
-    mainWindow.webContents.executeJavaScript(`
-      (function() {
-        const barcodeEvent = new CustomEvent('barcode-scanned', { 
-          detail: { barcode: '${barcode}', timestamp: Date.now() } 
-        });
-        window.dispatchEvent(barcodeEvent);
-      })();
-    `);
-  }
-}
-
-// Función para limpiar el buffer
-function clearBarcodeBuffer() {
-  barcodeBuffer = '';
-  if (barcodeTimeout) {
-    clearTimeout(barcodeTimeout);
-    barcodeTimeout = null;
-  }
-}
-
-// Configurar listener de pistola de barras
-function setupBarcodeScanner(window) {
-  window.webContents.on('before-input-event', (event, input) => {
-    // Solo procesar eventos de keyDown
-    if (input.type !== 'keyDown') return;
-
-    if (!isScannerEnabled) {
-      clearBarcodeBuffer();
-      return;
-    }
-
-    // NO procesar si hay un modal abierto
-    if (isModalOpen) {
-      clearBarcodeBuffer();
-      return;
-    }
-
-    const now = Date.now();
-    const timeSinceLastKey = now - lastKeyTime;
-
-    // Si el tiempo entre teclas es mayor al umbral, limpiar buffer
-    if (timeSinceLastKey > BARCODE_CHAR_THRESHOLD && barcodeBuffer.length > 0) {
-      clearBarcodeBuffer();
-    }
-
-    lastKeyTime = now;
-
-    // Enter finaliza el código
-    if (input.key === 'Enter' || input.code === 'Enter') {
-      const barcode = barcodeBuffer.trim();
-      if (barcode.length >= BARCODE_MIN_LENGTH) {
-        // PREVENIR que el evento llegue al navegador
-        event.preventDefault();
-        sendBarcodeToRenderer(barcode);
-      }
-      clearBarcodeBuffer();
-      return;
-    }
-
-    // Solo aceptar caracteres imprimibles (alfanuméricos y algunos símbolos)
-    if (input.key && input.key.length === 1 && !input.control && !input.alt && !input.meta) {
-      // A barcode scanner fires chars at ≤20ms intervals.
-      // Block the char from reaching the browser if:
-      //   - we already have chars in the buffer (mid-scan), OR
-      //   - this char arrived fast enough to be scanner input (timeSinceLastKey < threshold), OR
-      //   - this is the FIRST char but there is already a pending buffer timeout
-      //     (i.e., scanner started accumulating before this path reset it).
-      // The key insight: even the first char must be blocked when it arrives within
-      // BARCODE_CHAR_THRESHOLD ms of the previous key (which the scanner always does).
-      const isScannerSpeed = timeSinceLastKey < BARCODE_CHAR_THRESHOLD;
-      const isMidScan = barcodeBuffer.length > 0;
-      if (isScannerSpeed || isMidScan) {
-        event.preventDefault();
-      }
-
-      barcodeBuffer += input.key;
-
-      // Resetear timeout de limpieza
-      if (barcodeTimeout) {
-        clearTimeout(barcodeTimeout);
-      }
-
-      // Limpiar buffer si no hay Enter después de 200ms
-      barcodeTimeout = setTimeout(() => {
-        clearBarcodeBuffer();
-      }, 200);
-    }
-  });
-
-  console.log('📱 [BARCODE] Scanner configurado');
-}
-
-// IPC handler para habilitar/deshabilitar detección de pistola
-ipcMain.handle('barcode-scanner-enable', async (event, enabled) => {
-  console.log('📱 [BARCODE] Scanner', enabled ? 'habilitado' : 'deshabilitado');
-  isScannerEnabled = !!enabled;
-  if (!isScannerEnabled) {
-    clearBarcodeBuffer();
-  }
-  return { success: true, enabled };
-});
-
-// IPC handler para notificar cuando se abre/cierra un modal
-ipcMain.handle('barcode-scanner-set-modal-state', async (event, modalOpen) => {
-  isModalOpen = modalOpen;
-  console.log('📱 [BARCODE] Modal', modalOpen ? 'abierto - scanner desactivado' : 'cerrado - scanner activado');
-
-  // Clear any previous safety timeout
-  if (modalOpenTimeout) {
-    clearTimeout(modalOpenTimeout);
-    modalOpenTimeout = null;
-  }
-
-  if (modalOpen) {
-    clearBarcodeBuffer();
-    // Safety guard: auto-reset isModalOpen after MODAL_OPEN_SAFETY_MS
-    // to prevent a stale modal state from permanently disabling the scanner
-    // (e.g., renderer unmounted without sending the close event).
-    modalOpenTimeout = setTimeout(() => {
-      if (isModalOpen) {
-        console.warn('📱 [BARCODE] Safety reset: modal state was stuck open, resetting');
-        isModalOpen = false;
-        modalOpenTimeout = null;
-      }
-    }, MODAL_OPEN_SAFETY_MS);
-  }
-
-  return { success: true, isModalOpen };
 });
 
 // IPC handler para imprimir a impresora específica con HTML
