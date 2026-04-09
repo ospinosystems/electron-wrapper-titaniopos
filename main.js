@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
@@ -6,11 +6,11 @@ const jwt = require('jsonwebtoken');
 const { registerPrinterHandlers } = require('./printer-handlers');
 const { registerFiscalHandlers } = require('./fiscal-handlers');
 const { registerPinpadHandlers } = require('./pinpad-handlers');
-const { 
-  startFiscalServer, 
-  stopFiscalServer, 
-  getServerStatus, 
-  checkPythonInstalled 
+const {
+  startFiscalServer,
+  stopFiscalServer,
+  getServerStatus,
+  checkPythonInstalled
 } = require('./fiscal-server-manager');
 
 // Secret key para JWT - en producción debería estar en variable de entorno
@@ -72,8 +72,8 @@ const decodeFromJWT = (token) => {
 
 // URL de tu PWA (cambiar en producción)
 const APP_URL =
-  // process.env.TITANIOPOS_URL || "https://frontend.titanio-pos.com";
   process.env.TITANIOPOS_URL || "http://localhost:3001";
+// process.env.TITANIOPOS_URL || "https://frontend.titanio-pos.com";
 
 let mainWindow;
 
@@ -205,9 +205,6 @@ function createWindow() {
     }
   });
 
-  // Configurar detección de pistola de barras
-  setupBarcodeScanner(mainWindow);
-
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -328,7 +325,7 @@ function printHtmlInHiddenWindow(html, printerName = null, pageWidth = '80mm', o
 
     printWindow.webContents.on('did-finish-load', async () => {
       console.log('🖨️ [MAIN] Contenido cargado');
-      
+
       try {
         await new Promise(r => setTimeout(r, 800));
 
@@ -358,11 +355,11 @@ function printHtmlInHiddenWindow(html, printerName = null, pageWidth = '80mm', o
 
         // Usar PowerShell con Adobe Acrobat COM object para impresión silenciosa
         const { exec } = require('child_process');
-        
+
         // Escapar comillas y backslashes para PowerShell
         const escapedPath = pdfPath.replace(/\\/g, '\\\\').replace(/"/g, '`"');
         const escapedPrinter = targetPrinter.replace(/"/g, '`"');
-        
+
         // Script PowerShell que usa el objeto COM de Adobe/Acrobat para imprimir
         const psScript = `
 $ErrorActionPreference = 'Stop'
@@ -439,7 +436,7 @@ try {
 // IPC handler para impresión silenciosa con HTML
 ipcMain.handle('silent-print', async (event, htmlContent, options = {}) => {
   console.log('🖨️ [MAIN] silent-print recibido');
-  
+
   if (!htmlContent) {
     console.error('❌ [MAIN] HTML content vacío');
     return { success: false, error: 'HTML content vacío' };
@@ -448,7 +445,7 @@ ipcMain.handle('silent-print', async (event, htmlContent, options = {}) => {
   try {
     const pageWidth = options.pageWidth || '80mm';
     const printerName = options.printerName || null;
-    
+
     const result = await printHtmlInHiddenWindow(htmlContent, printerName, pageWidth, options);
     return result;
   } catch (error) {
@@ -463,158 +460,10 @@ ipcMain.handle('get-printers', async () => {
   return printers;
 });
 
-// ==================== DETECCIÓN DE PISTOLA DE BARRAS ====================
-
-let barcodeBuffer = '';
-let lastKeyTime = 0;
-let barcodeTimeout = null;
-const BARCODE_CHAR_THRESHOLD = 50; // ms entre caracteres
-const BARCODE_MIN_LENGTH = 3;
-let isModalOpen = false; // Estado para rastrear si hay un modal abierto
-let modalOpenTimeout = null; // Safety timeout to auto-reset isModalOpen
-const MODAL_OPEN_SAFETY_MS = 30000; // Auto-reset modal state after 30s (stale guard)
-let isScannerEnabled = true;
-
-// Función para enviar código de barras al renderer
-function sendBarcodeToRenderer(barcode) {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    console.log('📱 [BARCODE] Enviando código:', barcode);
-    
-    // Enviar evento personalizado al navegador usando IIFE para evitar conflictos de scope
-    mainWindow.webContents.executeJavaScript(`
-      (function() {
-        const barcodeEvent = new CustomEvent('barcode-scanned', { 
-          detail: { barcode: '${barcode}', timestamp: Date.now() } 
-        });
-        window.dispatchEvent(barcodeEvent);
-      })();
-    `);
-  }
-}
-
-// Función para limpiar el buffer
-function clearBarcodeBuffer() {
-  barcodeBuffer = '';
-  if (barcodeTimeout) {
-    clearTimeout(barcodeTimeout);
-    barcodeTimeout = null;
-  }
-}
-
-// Configurar listener de pistola de barras
-function setupBarcodeScanner(window) {
-  window.webContents.on('before-input-event', (event, input) => {
-    // Solo procesar eventos de keyDown
-    if (input.type !== 'keyDown') return;
-
-    if (!isScannerEnabled) {
-      clearBarcodeBuffer();
-      return;
-    }
-
-    // NO procesar si hay un modal abierto
-    if (isModalOpen) {
-      clearBarcodeBuffer();
-      return;
-    }
-
-    const now = Date.now();
-    const timeSinceLastKey = now - lastKeyTime;
-
-    // Si el tiempo entre teclas es mayor al umbral, limpiar buffer
-    if (timeSinceLastKey > BARCODE_CHAR_THRESHOLD && barcodeBuffer.length > 0) {
-      clearBarcodeBuffer();
-    }
-
-    lastKeyTime = now;
-
-    // Enter finaliza el código
-    if (input.key === 'Enter' || input.code === 'Enter') {
-      const barcode = barcodeBuffer.trim();
-      if (barcode.length >= BARCODE_MIN_LENGTH) {
-        // PREVENIR que el evento llegue al navegador
-        event.preventDefault();
-        sendBarcodeToRenderer(barcode);
-      }
-      clearBarcodeBuffer();
-      return;
-    }
-
-    // Solo aceptar caracteres imprimibles (alfanuméricos y algunos símbolos)
-    if (input.key && input.key.length === 1 && !input.control && !input.alt && !input.meta) {
-      // A barcode scanner fires chars at ≤20ms intervals.
-      // Block the char from reaching the browser if:
-      //   - we already have chars in the buffer (mid-scan), OR
-      //   - this char arrived fast enough to be scanner input (timeSinceLastKey < threshold), OR
-      //   - this is the FIRST char but there is already a pending buffer timeout
-      //     (i.e., scanner started accumulating before this path reset it).
-      // The key insight: even the first char must be blocked when it arrives within
-      // BARCODE_CHAR_THRESHOLD ms of the previous key (which the scanner always does).
-      const isScannerSpeed = timeSinceLastKey < BARCODE_CHAR_THRESHOLD;
-      const isMidScan = barcodeBuffer.length > 0;
-      if (isScannerSpeed || isMidScan) {
-        event.preventDefault();
-      }
-      
-      barcodeBuffer += input.key;
-
-      // Resetear timeout de limpieza
-      if (barcodeTimeout) {
-        clearTimeout(barcodeTimeout);
-      }
-
-      // Limpiar buffer si no hay Enter después de 200ms
-      barcodeTimeout = setTimeout(() => {
-        clearBarcodeBuffer();
-      }, 200);
-    }
-  });
-
-  console.log('📱 [BARCODE] Scanner configurado');
-}
-
-// IPC handler para habilitar/deshabilitar detección de pistola
-ipcMain.handle('barcode-scanner-enable', async (event, enabled) => {
-  console.log('📱 [BARCODE] Scanner', enabled ? 'habilitado' : 'deshabilitado');
-  isScannerEnabled = !!enabled;
-  if (!isScannerEnabled) {
-    clearBarcodeBuffer();
-  }
-  return { success: true, enabled };
-});
-
-// IPC handler para notificar cuando se abre/cierra un modal
-ipcMain.handle('barcode-scanner-set-modal-state', async (event, modalOpen) => {
-  isModalOpen = modalOpen;
-  console.log('📱 [BARCODE] Modal', modalOpen ? 'abierto - scanner desactivado' : 'cerrado - scanner activado');
-
-  // Clear any previous safety timeout
-  if (modalOpenTimeout) {
-    clearTimeout(modalOpenTimeout);
-    modalOpenTimeout = null;
-  }
-
-  if (modalOpen) {
-    clearBarcodeBuffer();
-    // Safety guard: auto-reset isModalOpen after MODAL_OPEN_SAFETY_MS
-    // to prevent a stale modal state from permanently disabling the scanner
-    // (e.g., renderer unmounted without sending the close event).
-    modalOpenTimeout = setTimeout(() => {
-      if (isModalOpen) {
-        console.warn('📱 [BARCODE] Safety reset: modal state was stuck open, resetting');
-        isModalOpen = false;
-        modalOpenTimeout = null;
-      }
-    }, MODAL_OPEN_SAFETY_MS);
-  }
-
-  return { success: true, isModalOpen };
-});
-
 // IPC handler para imprimir a impresora específica con HTML
 ipcMain.handle('print-to-printer', async (event, printerName, htmlContent, options = {}) => {
   console.log('🖨️ [MAIN] print-to-printer:', printerName);
-  
+
   if (!htmlContent) {
     return { success: false, error: 'HTML content vacío' };
   }
@@ -637,10 +486,10 @@ ipcMain.handle('backup-save-order', async (event, order) => {
     const backupDir = getBackupDir();
     const fileName = `order_${order.id || Date.now()}.json`;
     const filePath = path.join(backupDir, fileName);
-    
+
     fs.writeFileSync(filePath, JSON.stringify(order, null, 2), 'utf-8');
     console.log('💾 [BACKUP] Orden guardada:', fileName);
-    
+
     return { success: true, path: filePath };
   } catch (error) {
     console.error('❌ [BACKUP] Error guardando orden:', error);
@@ -662,23 +511,23 @@ ipcMain.handle('backup-save-all-orders', async (event, orders) => {
   try {
     const backupDir = getBackupDir();
     const dateStr = getDateString();
-    
+
     // Solo archivo de backup diario
     const dailyBackupPath = path.join(backupDir, `backup_${dateStr}.json`);
-    
+
     const backupData = {
       lastSync: new Date().toISOString(),
       date: dateStr,
       count: orders.length,
       orders: orders
     };
-    
+
     // Codificar como JWT para seguridad
     const encodedData = encodeToJWT(backupData);
-    
+
     // Guardar JWT en archivo
     fs.writeFileSync(dailyBackupPath, JSON.stringify({ token: encodedData }, null, 2), 'utf-8');
-    
+
     console.log(`💾 [BACKUP] ${orders.length} órdenes guardadas (JWT) en backup_${dateStr}.json`);
     return { success: true, count: orders.length, date: dateStr };
   } catch (error) {
@@ -693,15 +542,15 @@ ipcMain.handle('backup-get-all-orders', async () => {
     const backupDir = getBackupDir();
     const dateStr = getDateString();
     const todayBackupPath = path.join(backupDir, `backup_${dateStr}.json`);
-    
+
     // Solo cargar órdenes del día actual
     if (!fs.existsSync(todayBackupPath)) {
       console.log(`📂 [BACKUP] No hay backup para hoy (${dateStr})`);
       return { success: true, orders: [], lastSync: null, date: dateStr };
     }
-    
+
     const fileContent = JSON.parse(fs.readFileSync(todayBackupPath, 'utf-8'));
-    
+
     let data;
     // Verificar si es formato JWT o JSON plano (backward compatibility)
     if (fileContent.token) {
@@ -718,10 +567,10 @@ ipcMain.handle('backup-get-all-orders', async () => {
       data = fileContent;
       console.log(`📂 [BACKUP] ${data.orders?.length || 0} órdenes recuperadas (JSON) del día ${dateStr}`);
     }
-    
-    return { 
-      success: true, 
-      orders: data.orders || [], 
+
+    return {
+      success: true,
+      orders: data.orders || [],
       lastSync: data.lastSync,
       count: data.count,
       date: dateStr
@@ -743,7 +592,7 @@ ipcMain.handle('backup-delete-order', async (event, orderId) => {
     const backupDir = getBackupDir();
     const dateStr = getDateString();
     const todayBackupPath = path.join(backupDir, `backup_${dateStr}.json`);
-    
+
     if (fs.existsSync(todayBackupPath)) {
       const data = JSON.parse(fs.readFileSync(todayBackupPath, 'utf-8'));
       data.orders = data.orders.filter(o => o.id !== orderId);
@@ -751,13 +600,13 @@ ipcMain.handle('backup-delete-order', async (event, orderId) => {
       data.lastSync = new Date().toISOString();
       fs.writeFileSync(todayBackupPath, JSON.stringify(data, null, 2), 'utf-8');
     }
-    
+
     // También eliminar archivo individual si existe
     const individualPath = path.join(backupDir, `order_${orderId}.json`);
     if (fs.existsSync(individualPath)) {
       fs.unlinkSync(individualPath);
     }
-    
+
     console.log('🗑️ [BACKUP] Orden eliminada:', orderId);
     return { success: true };
   } catch (error) {
@@ -856,7 +705,7 @@ ipcMain.handle('printer-test-native', async (event, printerName, testContent) =>
 
     await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
     printWindow.setTitle('TitanioPOS - Test Ticket');
-    
+
     // Esperar más tiempo para asegurar renderizado completo
     await new Promise(r => setTimeout(r, 2000));
 
@@ -881,17 +730,17 @@ ipcMain.handle('printer-test-native', async (event, printerName, testContent) =>
     return new Promise((resolve) => {
       printWindow.webContents.print(printOptions, (success, failureReason) => {
         console.log(success ? ' Impresión enviada' : ` Falló: ${failureReason}`);
-        
+
         printWindow.close();
-        
+
         // Limpiar archivo HTML después de un tiempo
         setTimeout(() => {
-          try { if (fs.existsSync(htmlPath)) fs.unlinkSync(htmlPath); } catch (e) {}
+          try { if (fs.existsSync(htmlPath)) fs.unlinkSync(htmlPath); } catch (e) { }
         }, 5000);
 
-        resolve({ 
-          success, 
-          method: 'Native Electron Print API (Optimizado)', 
+        resolve({
+          success,
+          method: 'Native Electron Print API (Optimizado)',
           htmlPath,
           error: success ? undefined : failureReason,
           config: 'Márgenes: none, Color: false, PageSize: 80x200mm'
@@ -961,7 +810,7 @@ ipcMain.handle('printer-test-pdf', async (event, printerName, testContent) => {
 
     exec(printCommand, (error) => {
       setTimeout(() => {
-        try { if (fs.existsSync(pdfPath)) fs.unlinkSync(pdfPath); } catch (e) {}
+        try { if (fs.existsSync(pdfPath)) fs.unlinkSync(pdfPath); } catch (e) { }
       }, 5000);
     });
 
@@ -975,7 +824,7 @@ ipcMain.handle('printer-test-pdf', async (event, printerName, testContent) => {
 // Técnica 3: node-thermal-printer Library
 ipcMain.handle('printer-test-thermal', async (event, printerName, testContent) => {
   console.log('🖨️ [DEBUG] Técnica 3: node-thermal-printer');
-  
+
   const printerTypes = [
     { type: PrinterTypes.EPSON, name: 'EPSON' },
     { type: PrinterTypes.STAR, name: 'STAR' },
@@ -987,7 +836,7 @@ ipcMain.handle('printer-test-thermal', async (event, printerName, testContent) =
   for (const printerType of printerTypes) {
     try {
       console.log(`🖨️ Intentando con tipo: ${printerType.name}`);
-      
+
       let printer;
       try {
         printer = new ThermalPrinter({
@@ -1030,20 +879,20 @@ ipcMain.handle('printer-test-thermal', async (event, printerName, testContent) =
       const { exec } = require('child_process');
       const tempFile = path.join(app.getPath('temp'), `thermal_${Date.now()}.prn`);
       fs.writeFileSync(tempFile, buffer);
-      
+
       await new Promise((resolve, reject) => {
         exec(`print /D:"${printerName}" "${tempFile}"`, (error) => {
           setTimeout(() => {
-            try { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (e) {}
+            try { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (e) { }
           }, 2000);
-          
+
           if (error) reject(error);
           else resolve();
         });
       });
 
-      return { 
-        success: true, 
+      return {
+        success: true,
         method: `node-thermal-printer (${printerType.name})`,
         bytes: buffer.length
       };
@@ -1060,15 +909,15 @@ ipcMain.handle('printer-test-thermal', async (event, printerName, testContent) =
 // Técnica 4: ESC/POS Raw Commands via Spooler
 ipcMain.handle('printer-test-escpos', async (event, printerName, testContent, manualUsbPort) => {
   console.log('🖨️ [DEBUG] Técnica 4: ESC/POS Raw Commands');
-  
+
   return new Promise(async (resolve) => {
     try {
       const { exec } = require('child_process');
       const backupDir = path.join(app.getPath('documents'), 'TitanioPOS-Backups');
       if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
-      
+
       const tempFile = path.join(backupDir, `escpos_${Date.now()}.prn`);
-      
+
       // Generar comandos ESC/POS raw
       const ESC = '\x1B';
       const GS = '\x1D';
@@ -1085,28 +934,28 @@ ipcMain.handle('printer-test-escpos', async (event, printerName, testContent, ma
       data += 'Metodo: ESC/POS Raw Spooler\n';
       data += '\n\n\n';
       data += GS + 'V' + '\x00';            // Cortar papel
-      
+
       fs.writeFileSync(tempFile, data, 'binary');
       console.log('📄 Archivo ESC/POS generado:', tempFile);
-      
+
       // Usar puerto USB manual o detectar automáticamente
       let usbPort = manualUsbPort;
-      
+
       if (!usbPort) {
         const printers = await mainWindow.webContents.getPrintersAsync();
         const targetPrinter = printers.find(p => p.name === printerName);
-        
+
         if (targetPrinter && targetPrinter.options && targetPrinter.options.portName) {
           usbPort = targetPrinter.options.portName;
         }
       }
-      
+
       console.log(`📌 Puerto USB: ${usbPort || 'No detectado'}`);
       if (manualUsbPort) console.log(`   (Configurado manualmente: ${manualUsbPort})`);
-      
+
       // Intentar múltiples métodos
       const methods = [];
-      
+
       // Método 1: Windows Spooler API directo con RAW datatype (el más confiable para ESC/POS)
       // Crear script de PowerShell en archivo temporal
       const psScript = `
@@ -1162,32 +1011,32 @@ $bytes = [System.IO.File]::ReadAllBytes('${tempFile.replace(/\\/g, '\\\\')}')
 $result = [RawPrinter]::SendBytesToPrinter('${printerName}', $bytes)
 if ($result) { Write-Host 'SUCCESS' } else { Write-Host 'FAILED'; exit 1 }
 `;
-      
+
       const psScriptFile = path.join(backupDir, `print_${Date.now()}.ps1`);
       fs.writeFileSync(psScriptFile, psScript, 'utf8');
-      
+
       methods.push({
         cmd: `powershell -ExecutionPolicy Bypass -File "${psScriptFile}"`,
         name: 'WinSpool RAW API',
         cleanup: psScriptFile
       });
-      
+
       // Método 2: print /D tradicional
-      methods.push({ 
-        cmd: `print /D:"${printerName}" "${tempFile}"`, 
-        name: 'print /D' 
+      methods.push({
+        cmd: `print /D:"${printerName}" "${tempFile}"`,
+        name: 'print /D'
       });
-      
+
       let lastError = null;
       for (const method of methods) {
         console.log(`🖨️ Intentando: ${method.name}`);
         console.log(`   Comando: ${method.cmd}`);
-        
+
         const result = await new Promise((methodResolve) => {
           exec(method.cmd, (error, stdout, stderr) => {
             if (stdout) console.log(`   stdout: ${stdout}`);
             if (stderr) console.log(`   stderr: ${stderr}`);
-            
+
             if (!error) {
               console.log(`✅ ${method.name} ejecutado sin errores`);
               methodResolve({ success: true, method: method.name, command: method.cmd });
@@ -1198,16 +1047,16 @@ if ($result) { Write-Host 'SUCCESS' } else { Write-Host 'FAILED'; exit 1 }
             }
           });
         });
-        
+
         if (result.success) {
           setTimeout(() => {
-            try { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (e) {}
+            try { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (e) { }
             if (method.cleanup) {
-              try { if (fs.existsSync(method.cleanup)) fs.unlinkSync(method.cleanup); } catch (e) {}
+              try { if (fs.existsSync(method.cleanup)) fs.unlinkSync(method.cleanup); } catch (e) { }
             }
           }, 3000);
-          resolve({ 
-            success: true, 
+          resolve({
+            success: true,
             method: `ESC/POS ${result.method}`,
             file: tempFile,
             command: result.command,
@@ -1216,20 +1065,20 @@ if ($result) { Write-Host 'SUCCESS' } else { Write-Host 'FAILED'; exit 1 }
           return;
         }
       }
-      
+
       // Limpiar archivos temporales si todos fallaron
       setTimeout(() => {
-        try { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (e) {}
+        try { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (e) { }
         methods.forEach(m => {
           if (m.cleanup) {
-            try { if (fs.existsSync(m.cleanup)) fs.unlinkSync(m.cleanup); } catch (e) {}
+            try { if (fs.existsSync(m.cleanup)) fs.unlinkSync(m.cleanup); } catch (e) { }
           }
         });
       }, 3000);
-      
-      resolve({ 
-        success: false, 
-        error: lastError?.message || 'Todos los métodos fallaron', 
+
+      resolve({
+        success: false,
+        error: lastError?.message || 'Todos los métodos fallaron',
         file: tempFile,
         port: usbPort,
         triedMethods: methods.length
@@ -1244,20 +1093,20 @@ if ($result) { Write-Host 'SUCCESS' } else { Write-Host 'FAILED'; exit 1 }
 // Técnica 5: Serial Port Direct Communication
 ipcMain.handle('printer-test-serial', async (event, portName, testContent) => {
   console.log('🖨️ [DEBUG] Técnica 5: Serial Port Direct');
-  
+
   if (!portName) {
     return { success: false, error: 'No se especificó puerto serial' };
   }
 
   const baudRates = [9600, 19200, 38400, 115200];
-  
+
   for (const baudRate of baudRates) {
     try {
       console.log(`🖨️ Intentando ${portName} a ${baudRate} baud`);
-      
+
       const result = await new Promise((resolve, reject) => {
         let port;
-        
+
         try {
           port = new SerialPort({
             path: portName,
@@ -1282,7 +1131,7 @@ ipcMain.handle('printer-test-serial', async (event, portName, testContent) => {
 
           const ESC = '\x1B';
           const GS = '\x1D';
-          
+
           let data = '';
           data += ESC + '@';
           data += ESC + 'a' + '\x01';
@@ -1334,14 +1183,14 @@ ipcMain.handle('printer-test-powershell-raw', async (event, printerName, testCon
   console.log('🖨️ [DEBUG] Técnica 6: PowerShell RAW Printing');
   try {
     const { exec } = require('child_process');
-    
+
     // Crear archivo temporal con comandos ESC/POS
     const tempDir = app.getPath('temp');
     const tempFile = path.join(tempDir, `print_${Date.now()}.txt`);
-    
+
     const ESC = '\x1B';
     const content = `${ESC}@${ESC}a\x01${ESC}E\x01TEST - POWERSHELL RAW${ESC}E\x00${ESC}a\x00\n\n${testContent || 'Test PowerShell RAW'}\nFecha: ${new Date().toLocaleString()}\nMétodo: PowerShell RAW\n\n\n`;
-    
+
     fs.writeFileSync(tempFile, content);
 
     const psScript = `
@@ -1362,7 +1211,7 @@ ipcMain.handle('printer-test-powershell-raw', async (event, printerName, testCon
 
     exec(command, (error, stdout, stderr) => {
       setTimeout(() => {
-        try { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (e) {}
+        try { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (e) { }
       }, 2000);
     });
 
@@ -1381,15 +1230,15 @@ ipcMain.handle('printer-test-raw-spooler', async (event, printerName, testConten
       return { success: false, error: 'No se especificó impresora' };
     }
     const { exec } = require('child_process');
-    
+
     // Crear archivo temporal con comandos ESC/POS
     const tempDir = app.getPath('temp');
     const tempFile = path.join(tempDir, `raw_${Date.now()}.txt`);
-    
+
     // Comandos ESC/POS puros
     const ESC = '\x1B';
     const GS = '\x1D';
-    
+
     let rawData = '';
     rawData += ESC + '@'; // Inicializar
     rawData += ESC + 'a' + '\x01'; // Centrar
@@ -1404,7 +1253,7 @@ ipcMain.handle('printer-test-raw-spooler', async (event, printerName, testConten
     rawData += '=================\n';
     rawData += '\n\n\n';
     rawData += GS + 'V' + '\x00'; // Cortar
-    
+
     fs.writeFileSync(tempFile, rawData, 'binary');
 
     // Intentar múltiples métodos
@@ -1470,7 +1319,7 @@ if($res){'OK'}else{'FAIL'}"`;
     for (let i = 0; i < methods.length; i++) {
       const command = methods[i];
       console.log(`🖨️ Intentando método ${i + 1}: ${command.substring(0, 80)}...`);
-      
+
       const result = await new Promise((resolve) => {
         exec(command, { timeout: 10000 }, (error, stdout, stderr) => {
           const out = stdout?.toString() || '';
@@ -1497,14 +1346,14 @@ if($res){'OK'}else{'FAIL'}"`;
 
       if (result.success) {
         setTimeout(() => {
-          try { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (e) {}
+          try { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (e) { }
         }, 2000);
         return result;
       }
     }
 
     setTimeout(() => {
-      try { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (e) {}
+      try { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (e) { }
     }, 2000);
 
     return { success: false, error: 'Todos los métodos RAW fallaron' };
@@ -1533,14 +1382,14 @@ app.whenReady().then(() => {
   const backupPath = getBackupDir();
   console.log('📁 [BACKUP] Backup directory:', backupPath);
   console.log('📱 [BARCODE] Barcode scanner system initialized');
-  
+
   createWindow();
   setupAutoUpdater();
-  
+
   // Register printer handlers immediately after window is created
   registerPrinterHandlers(app, mainWindow);
   console.log('🖨️ [PRINTER] Printer system initialized');
-  
+
   // Register fiscal handlers for HKA fiscal machine
   registerFiscalHandlers(app);
   console.log('🧾 [FISCAL] Fiscal machine system initialized');
@@ -1548,7 +1397,7 @@ app.whenReady().then(() => {
   // Register pinpad handlers for local LAN proxy
   registerPinpadHandlers();
   console.log('💳 [PINPAD] Local proxy initialized');
-  
+
   // Start fiscal server automatically (async, non-blocking)
   (async () => {
     try {
@@ -1575,7 +1424,7 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   // Stop fiscal server before quitting
   stopFiscalServer();
-  
+
   if (process.platform !== 'darwin') {
     app.quit();
   }
