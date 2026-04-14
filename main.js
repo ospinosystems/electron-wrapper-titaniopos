@@ -46,7 +46,6 @@ loadEnvFile(path.join(__dirname, '.env'), path.join(__dirname, '.env'));
 // Secret key para JWT - en producción debería estar en variable de entorno
 const JWT_SECRET = process.env.TITANIOPOS_JWT_SECRET || 'titaniopos-secure-key-2024-change-in-production';
 
-// Directorio para backups de órdenes - en Documentos para fácil acceso
 const getBackupDir = () => {
   const documentsPath = app.getPath('documents');
   const backupDir = path.join(documentsPath, 'TitanioPOS-Backups');
@@ -55,8 +54,6 @@ const getBackupDir = () => {
   }
   return backupDir;
 };
-
-// Load .env from fiscal-server (portable config for port/path)
 const loadFiscalEnv = () => {
   loadEnvFile(
     path.join(__dirname, 'fiscal-server', '.env'),
