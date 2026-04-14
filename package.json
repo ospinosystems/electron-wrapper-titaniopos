@@ -5,9 +5,10 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --win",
-    "build:portable": "electron-builder --win portable",
-    "publish": "electron-builder --publish always --win"
+    "build": "electron-builder --win --publish never",
+    "build:portable": "electron-builder --win portable --publish never",
+    "release": "electron-builder --win --publish always",
+    "publish": "electron-builder --win --publish always"
   },
   "author": "TitanioPOS",
   "license": "MIT",
@@ -43,17 +44,31 @@
     ],
     "win": {
       "target": [
-        "nsis",
-        "portable"
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "icon.ico",
       "signAndEditExecutable": false
     },
     "nsis": {
+      "artifactName": "TitanioPOS-Setup.${ext}",
       "oneClick": true,
       "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
+    },
+    "portable": {
+      "artifactName": "TitanioPOS-Portable.${ext}"
     },
     "forceCodeSigning": false
   }

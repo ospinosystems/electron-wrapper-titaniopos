@@ -1405,7 +1405,11 @@ app.whenReady().then(() => {
   console.log('📱 [BARCODE] Barcode scanner system initialized');
 
   createWindow();
-  setupAutoUpdater();
+  if (app.isPackaged) {
+    setupAutoUpdater();
+  } else {
+    console.log('[UPDATER] Omitido en desarrollo (solo app empaquetada)');
+  }
 
   // Register printer handlers immediately after window is created
   registerPrinterHandlers(app, mainWindow);
