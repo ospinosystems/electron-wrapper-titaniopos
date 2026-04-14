@@ -1,0 +1,35 @@
+# Compila el .exe en Windows y lo sube a GitHub Releases.
+# No necesitas GH_TOKEN en tu máquina: usa el token del propio repositorio.
+#
+# Cómo usarlo:
+# 1. Sube estos cambios al repo de GitHub (ospinosystems/electron-wrapper-titaniopos).
+# 2. En package.json sube "version" (ej. 1.0.1), commit y push a la rama principal.
+# 3. GitHub → pestaña Actions → "Release Windows" → Run workflow → Run workflow.
+
+name: Release Windows
+
+on:
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run release
