@@ -5,6 +5,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Versiones de la app y runtimes
   getVersions: () => ipcRenderer.invoke('app-versions'),
 
+  /** Recarga forzada sin caché (tras mostrar feedback en el renderer). */
+  reloadIgnoringCache: () => ipcRenderer.invoke('reload-ignoring-cache'),
+
   /**
    * Impresión silenciosa con HTML
    * @param {string} html - Contenido HTML a imprimir

@@ -13,6 +13,36 @@ const {
   checkPythonInstalled
 } = require('./fiscal-server-manager');
 
+// Cargar .env de la raíz del proyecto antes de leer process.env (Electron no lo hace solo).
+const loadEnvFile = (envPath, logTag) => {
+  try {
+    if (!fs.existsSync(envPath)) return;
+    const content = fs.readFileSync(envPath, 'utf-8');
+    content.split(/\r?\n/).forEach((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) return;
+      const idx = trimmed.indexOf('=');
+      if (idx === -1) return;
+      const key = trimmed.slice(0, idx).trim();
+      let val = trimmed.slice(idx + 1).trim();
+      if (
+        (val.startsWith('"') && val.endsWith('"')) ||
+        (val.startsWith("'") && val.endsWith("'"))
+      ) {
+        val = val.slice(1, -1);
+      }
+      if (key && !(key in process.env)) {
+        process.env[key] = val;
+      }
+    });
+    if (logTag) console.log('[ENV] Loaded', logTag);
+  } catch (error) {
+    console.warn('[ENV] Could not load', envPath, error.message);
+  }
+};
+
+loadEnvFile(path.join(__dirname, '.env'), path.join(__dirname, '.env'));
+
 // Secret key para JWT - en producción debería estar en variable de entorno
 const JWT_SECRET = process.env.TITANIOPOS_JWT_SECRET || 'titaniopos-secure-key-2024-change-in-production';
 
@@ -28,25 +58,10 @@ const getBackupDir = () => {
 
 // Load .env from fiscal-server (portable config for port/path)
 const loadFiscalEnv = () => {
-  try {
-    const envPath = path.join(__dirname, 'fiscal-server', '.env');
-    if (!fs.existsSync(envPath)) return;
-    const content = fs.readFileSync(envPath, 'utf-8');
-    content.split(/\r?\n/).forEach((line) => {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) return;
-      const idx = trimmed.indexOf('=');
-      if (idx === -1) return;
-      const key = trimmed.slice(0, idx).trim();
-      const val = trimmed.slice(idx + 1).trim();
-      if (key && !(key in process.env)) {
-        process.env[key] = val;
-      }
-    });
-    console.log('[FISCAL SERVER] .env loaded from fiscal-server/.env');
-  } catch (error) {
-    console.warn('[FISCAL SERVER] Could not load .env:', error.message);
-  }
+  loadEnvFile(
+    path.join(__dirname, 'fiscal-server', '.env'),
+    'fiscal-server/.env'
+  );
 };
 
 // Codificar datos como JWT (sin expiración para mantener respaldo indefinidamente)
@@ -74,6 +89,11 @@ const decodeFromJWT = (token) => {
 const APP_URL =
   process.env.TITANIOPOS_URL || "http://localhost:3001";
 // process.env.TITANIOPOS_URL || "https://frontend.titanio-pos.com";
+
+console.log(
+  '[ENV] TITANIOPOS_URL:',
+  process.env.TITANIOPOS_URL ? `desde .env/entorno → ${APP_URL}` : `por defecto → ${APP_URL}`
+);
 
 let mainWindow;
 
@@ -180,12 +200,7 @@ function createWindow() {
       return;
     }
 
-    // Ctrl+F5 → hard reload (clear cache)
-    if (input.control && !input.shift && !input.alt && !input.meta && input.code === 'F5') {
-      event.preventDefault();
-      mainWindow.webContents.reloadIgnoringCache();
-      return;
-    }
+    // Ctrl+F5: handled in the renderer (toast) + ipcMain 'reload-ignoring-cache'
   });
 
   mainWindow.webContents.openDevTools();
@@ -217,6 +232,12 @@ ipcMain.handle('app-versions', () => ({
   chrome: process.versions.chrome,
   node: process.versions.node,
 }));
+
+ipcMain.handle('reload-ignoring-cache', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.reloadIgnoringCache();
+  }
+});
 
 // Auto-actualización
 function setupAutoUpdater() {
