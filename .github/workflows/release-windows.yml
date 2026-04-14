@@ -1,15 +1,21 @@
 # Compila el .exe en Windows y lo sube a GitHub Releases.
-# No necesitas GH_TOKEN en tu máquina: usa el token del propio repositorio.
+# No necesitas GH_TOKEN en tu máquina.
 #
-# Cómo usarlo:
-# 1. Sube estos cambios al repo de GitHub (ospinosystems/electron-wrapper-titaniopos).
-# 2. En package.json sube "version" (ej. 1.0.1), commit y push a la rama principal.
-# 3. GitHub → pestaña Actions → "Release Windows" → Run workflow → Run workflow.
+# Forma habitual (sin entrar a Actions):
+#   git tag v1.0.1
+#   git push origin v1.0.1
+# El workflow toma la versión del tag (v1.0.1 → 1.0.1 en package.json solo en CI).
+#
+# Opcional: Actions → Release Windows → Run workflow (útil para pruebas).
+# Si usas solo el botón, sube "version" en package.json antes y haz push.
 
 name: Release Windows
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - "v*"
 
 jobs:
   release:
@@ -28,6 +34,19 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Align package.json version with git tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          TAG_VER="${GITHUB_REF_NAME#v}"
+          node -e "
+            const fs = require('fs');
+            const f = 'package.json';
+            const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+            j.version = process.argv[1];
+            fs.writeFileSync(f, JSON.stringify(j, null, 2) + '\n');
+          " "$TAG_VER"
 
       - name: Build and publish release
         env:
