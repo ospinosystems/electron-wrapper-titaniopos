@@ -245,7 +245,28 @@ ipcMain.handle('reload-ignoring-cache', () => {
 });
 
 // Auto-actualización: descarga e instalación solo con confirmación (o al cerrar la app)
+// Debe coincidir con build.publish en package.json (solo para mensajes de error)
+const UPDATER_GITHUB_REPO = 'ospinosystems/electron-wrapper-titaniopos';
+
 let updateCheckRequestedByUser = false;
+
+function formatUpdaterErrorForUser(err) {
+  const raw = err && err.message ? String(err.message) : String(err);
+  console.error('[UPDATER] Detalle técnico:', err);
+  if (/404|Not Found|releases\.atom|HtmlError/i.test(raw)) {
+    return [
+      'GitHub respondió “no encontrado” (404) al leer la lista de versiones.',
+      '',
+      'Causas habituales:',
+      '• El repositorio es privado. La app instalada no envía token; los releases tienen que ser accesibles sin login (repo público o releases en un repo público).',
+      '• Aún no hay ningún release publicado en GitHub.',
+      '• El nombre del repo en package.json no coincide con el real.',
+      '',
+      `Repo configurado: ${UPDATER_GITHUB_REPO}`,
+    ].join('\n');
+  }
+  return raw.length > 800 ? `${raw.slice(0, 800)}…` : raw;
+}
 
 function checkForUpdatesManual() {
   if (!app.isPackaged) {
@@ -262,7 +283,7 @@ function checkForUpdatesManual() {
     dialog.showMessageBox(mainWindow, {
       type: 'error',
       title: 'Error al buscar actualizaciones',
-      message: err.message || String(err),
+      message: formatUpdaterErrorForUser(err),
     });
   });
 }
@@ -360,7 +381,7 @@ function setupAutoUpdater() {
         dialog.showMessageBox(win, {
           type: 'error',
           title: 'Descarga fallida',
-          message: err.message || String(err),
+          message: formatUpdaterErrorForUser(err),
         });
       }
     }
@@ -386,8 +407,8 @@ function setupAutoUpdater() {
       const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
       dialog.showMessageBox(win, {
         type: 'error',
-        title: 'Actualizaciones',
-        message: err.message || String(err),
+        title: 'Error al buscar actualizaciones',
+        message: formatUpdaterErrorForUser(err),
       });
     }
   });
