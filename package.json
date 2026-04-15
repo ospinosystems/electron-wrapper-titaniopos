@@ -62,7 +62,7 @@
       ],
       "icon": "icon.ico",
       "executableName": "TitanioPOS",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": true
     },
     "nsis": {
       "artifactName": "TitanioPOS-Setup.${ext}",
