@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, dialog } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
@@ -42,6 +42,13 @@ const loadEnvFile = (envPath, logTag) => {
 };
 
 loadEnvFile(path.join(__dirname, '.env'), path.join(__dirname, '.env'));
+
+// Windows: mismo valor que "build.appId" en package.json — icono correcto en la barra de tareas
+// con el instalador NSIS (sin esto suele verse el logo genérico de Electron).
+const APP_ID = 'com.titaniopos.desktop';
+if (process.platform === 'win32') {
+  app.setAppUserModelId(APP_ID);
+}
 
 // Secret key para JWT - en producción debería estar en variable de entorno
 const JWT_SECRET = process.env.TITANIOPOS_JWT_SECRET || 'titaniopos-secure-key-2024-change-in-production';
@@ -174,6 +181,7 @@ function createWindow() {
   mainWindow.loadURL(APP_URL);
 
   setupNativeContextMenu(mainWindow);
+  buildApplicationMenu();
 
   // ==================== KEYBOARD / ZOOM CUSTOMIZATIONS ====================
 
@@ -236,37 +244,182 @@ ipcMain.handle('reload-ignoring-cache', () => {
   }
 });
 
-// Auto-actualización
+// Auto-actualización: descarga e instalación solo con confirmación (o al cerrar la app)
+let updateCheckRequestedByUser = false;
+
+function checkForUpdatesManual() {
+  if (!app.isPackaged) {
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: 'Actualizaciones',
+      message: 'Las actualizaciones solo aplican a la aplicación instalada (no en modo desarrollo).',
+    });
+    return;
+  }
+  updateCheckRequestedByUser = true;
+  autoUpdater.checkForUpdates().catch((err) => {
+    updateCheckRequestedByUser = false;
+    dialog.showMessageBox(mainWindow, {
+      type: 'error',
+      title: 'Error al buscar actualizaciones',
+      message: err.message || String(err),
+    });
+  });
+}
+
+function buildApplicationMenu() {
+  const isMac = process.platform === 'darwin';
+
+  /** @type {Electron.MenuItemConstructorOptions[]} */
+  const template = [
+    ...(isMac
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: 'about' },
+              { type: 'separator' },
+              { role: 'services' },
+              { type: 'separator' },
+              { role: 'hide' },
+              { role: 'hideOthers' },
+              { role: 'unhide' },
+              { type: 'separator' },
+              { role: 'quit' },
+            ],
+          },
+        ]
+      : []),
+    {
+      label: 'File',
+      submenu: [isMac ? { role: 'close' } : { role: 'quit' }],
+    },
+    { role: 'editMenu' },
+    { role: 'viewMenu' },
+    {
+      label: 'Window',
+      submenu: [
+        { role: 'minimize' },
+        ...(isMac
+          ? [
+              { role: 'zoom' },
+              { type: 'separator' },
+              { role: 'front' },
+              { type: 'separator' },
+              { role: 'window' },
+            ]
+          : [{ role: 'close' }]),
+      ],
+    },
+    {
+      label: 'Help',
+      submenu: [
+        {
+          label: 'Buscar actualizaciones…',
+          enabled: app.isPackaged,
+          click: () => checkForUpdatesManual(),
+        },
+        { type: 'separator' },
+        {
+          label: `Versión ${app.getVersion()}`,
+          enabled: false,
+        },
+      ],
+    },
+  ];
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 function setupAutoUpdater() {
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+
   autoUpdater.on('checking-for-update', () => {
-    console.log('🔎 Buscando actualizaciones...');
+    console.log('[UPDATER] Buscando actualizaciones...');
   });
 
-  autoUpdater.on('update-available', (info) => {
-    console.log(`⬇️ Actualización disponible: ${info.version}`);
+  autoUpdater.on('update-available', async (info) => {
+    console.log('[UPDATER] Actualización disponible:', info.version);
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'info',
+      title: 'Actualización disponible',
+      message: `Hay una nueva versión: ${info.version}.`,
+      detail:
+        '¿Descargar ahora? Puedes posponerlo; también desde el menú Help → Buscar actualizaciones… (Alt para ver la barra de menús).',
+      buttons: ['Descargar', 'Ahora no'],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response === 0) {
+      try {
+        await autoUpdater.downloadUpdate();
+      } catch (err) {
+        console.error('[UPDATER] Error descargando actualización:', err);
+        dialog.showMessageBox(win, {
+          type: 'error',
+          title: 'Descarga fallida',
+          message: err.message || String(err),
+        });
+      }
+    }
   });
 
   autoUpdater.on('update-not-available', () => {
-    console.log('✅ No hay actualizaciones disponibles.');
+    console.log('[UPDATER] No hay actualizaciones disponibles.');
+    if (updateCheckRequestedByUser) {
+      updateCheckRequestedByUser = false;
+      const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+      dialog.showMessageBox(win, {
+        type: 'info',
+        title: 'Actualizaciones',
+        message: 'Ya tienes la última versión.',
+      });
+    }
   });
 
   autoUpdater.on('error', (err) => {
-    console.error('❌ Error en autoUpdater:', err);
+    console.error('[UPDATER] Error:', err);
+    if (updateCheckRequestedByUser) {
+      updateCheckRequestedByUser = false;
+      const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+      dialog.showMessageBox(win, {
+        type: 'error',
+        title: 'Actualizaciones',
+        message: err.message || String(err),
+      });
+    }
   });
 
   autoUpdater.on('download-progress', (progressObj) => {
     console.log(
-      `⬇️ Descargando: ${Math.round(progressObj.percent)}% ` +
+      `[UPDATER] Descargando: ${Math.round(progressObj.percent)}% ` +
       `(vel: ${Math.round(progressObj.bytesPerSecond / 1024)} KB/s)`
     );
   });
 
-  autoUpdater.on('update-downloaded', () => {
-    console.log('📦 Actualización descargada, instalando...');
-    autoUpdater.quitAndInstall();
+  autoUpdater.on('update-downloaded', async () => {
+    console.log('[UPDATER] Actualización descargada.');
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'info',
+      title: 'Actualización lista',
+      message: 'La actualización se descargó correctamente.',
+      detail:
+        '¿Reiniciar ahora para instalar? Si eliges "Después", se instalará al cerrar TitanioPOS.',
+      buttons: ['Reiniciar ahora', 'Después'],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response === 0) {
+      autoUpdater.quitAndInstall(false, true);
+    }
   });
 
-  autoUpdater.checkForUpdatesAndNotify();
+  autoUpdater.checkForUpdates().catch((err) => {
+    console.warn('[UPDATER] No se pudo comprobar actualizaciones al iniciar:', err.message);
+  });
 }
 
 // Impresión silenciosa
