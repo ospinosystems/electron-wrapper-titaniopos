@@ -58,7 +58,8 @@ const loadEnvFile = (envPath, logTag) => {
   }
 };
 
-loadEnvFile(path.join(__dirname, '.env'), path.join(__dirname, '.env'));
+const ROOT_ENV_PATH = path.join(__dirname, '.env');
+loadEnvFile(ROOT_ENV_PATH, ROOT_ENV_PATH);
 
 // Secret key para JWT - en producción debería estar en variable de entorno
 const JWT_SECRET = process.env.TITANIOPOS_JWT_SECRET || 'titaniopos-secure-key-2024-change-in-production';
@@ -99,15 +100,24 @@ const decodeFromJWT = (token) => {
   }
 };
 
-// URL de tu PWA (cambiar en producción)
-const APP_URL =
-  process.env.TITANIOPOS_URL || "http://localhost:3001";
-// process.env.TITANIOPOS_URL || "https://frontend.titanio-pos.com";
+// URL de la PWA: si no hay .env o TITANIOPOS_URL vacía → local (así ves claro si se leyó la config)
+const DEFAULT_APP_URL = 'http://localhost:3001';
+const rootEnvExists = fs.existsSync(ROOT_ENV_PATH);
+const rawAppUrl = (process.env.TITANIOPOS_URL || '').trim();
+const APP_URL = rawAppUrl || DEFAULT_APP_URL;
 
-console.log(
-  '[ENV] TITANIOPOS_URL:',
-  process.env.TITANIOPOS_URL ? `desde .env/entorno → ${APP_URL}` : `por defecto → ${APP_URL}`
-);
+if (!rootEnvExists) {
+  console.warn(
+    `[ENV] Sin archivo .env (${ROOT_ENV_PATH}) → TITANIOPOS_URL = ${APP_URL}. ` +
+      'En producción debe existir .env empaquetado o variable de entorno del sistema.'
+  );
+} else if (!rawAppUrl) {
+  console.warn(
+    `[ENV] .env leído pero TITANIOPOS_URL vacía o ausente → usando local: ${APP_URL}`
+  );
+} else {
+  console.log('[ENV] TITANIOPOS_URL:', APP_URL);
+}
 
 let mainWindow;
 

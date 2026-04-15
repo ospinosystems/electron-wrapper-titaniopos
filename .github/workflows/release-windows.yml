@@ -8,6 +8,10 @@
 #
 # Opcional: Actions → Release Windows → Run workflow (útil para pruebas).
 # Si usas solo el botón, sube "version" en package.json antes y haz push.
+#
+# Valores empaquetados en el .exe (GitHub → Settings → Secrets and variables → Actions):
+#   Variables: TITANIOPOS_URL (si no existe, se usa http://localhost:3001 en el .env del build)
+#   Secrets: TITANIOPOS_JWT_SECRET
 
 name: Release Windows
 
@@ -47,6 +51,20 @@ jobs:
             j.version = process.argv[1];
             fs.writeFileSync(f, JSON.stringify(j, null, 2) + '\n');
           " "$TAG_VER"
+
+      - name: Create .env from GitHub Variables and Secrets
+        shell: pwsh
+        env:
+          TITANIOPOS_URL_INPUT: ${{ vars.TITANIOPOS_URL }}
+          TITANIOPOS_JWT_SECRET: ${{ secrets.TITANIOPOS_JWT_SECRET }}
+        run: |
+          $url = $env:TITANIOPOS_URL_INPUT
+          if ([string]::IsNullOrWhiteSpace($url)) {
+            $url = 'http://localhost:3001'
+          }
+          $jwt = if ($null -eq $env:TITANIOPOS_JWT_SECRET) { '' } else { $env:TITANIOPOS_JWT_SECRET }
+          $content = "TITANIOPOS_URL=$url`nTITANIOPOS_JWT_SECRET=$jwt`n"
+          Set-Content -Path .env -Encoding utf8 -Value $content
 
       - name: Build and publish release
         env:
