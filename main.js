@@ -1,7 +1,24 @@
-const { app, BrowserWindow, ipcMain, Menu, dialog } = require('electron');
-const { autoUpdater } = require('electron-updater');
+const { app, BrowserWindow, ipcMain, Menu, dialog, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
+
+function readBuildAppId() {
+  try {
+    const pkgPath = path.join(__dirname, 'package.json');
+    if (!fs.existsSync(pkgPath)) return 'com.titaniopos.desktop';
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    return (pkg.build && pkg.build.appId) || 'com.titaniopos.desktop';
+  } catch {
+    return 'com.titaniopos.desktop';
+  }
+}
+
+const APP_ID = readBuildAppId();
+if (process.platform === 'win32') {
+  app.setAppUserModelId(APP_ID);
+}
+
+const { autoUpdater } = require('electron-updater');
 const jwt = require('jsonwebtoken');
 const { registerPrinterHandlers } = require('./printer-handlers');
 const { registerFiscalHandlers } = require('./fiscal-handlers');
@@ -42,13 +59,6 @@ const loadEnvFile = (envPath, logTag) => {
 };
 
 loadEnvFile(path.join(__dirname, '.env'), path.join(__dirname, '.env'));
-
-// Windows: mismo valor que "build.appId" en package.json — icono correcto en la barra de tareas
-// con el instalador NSIS (sin esto suele verse el logo genérico de Electron).
-const APP_ID = 'com.titaniopos.desktop';
-if (process.platform === 'win32') {
-  app.setAppUserModelId(APP_ID);
-}
 
 // Secret key para JWT - en producción debería estar en variable de entorno
 const JWT_SECRET = process.env.TITANIOPOS_JWT_SECRET || 'titaniopos-secure-key-2024-change-in-production';
@@ -162,7 +172,53 @@ function setupNativeContextMenu(window) {
   });
 }
 
+// icon.ico no puede cargarse con nativeImage desde dentro de app.asar en Windows.
+// En package.json: asarUnpack de archivos .ico → app.asar.unpacked.
+function getAppIconPath() {
+  const candidates = [];
+  if (app.isPackaged) {
+    candidates.push(path.join(process.resourcesPath, 'app.asar.unpacked', 'icon.ico'));
+  }
+  candidates.push(path.join(__dirname, 'icon.ico'));
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+function resolveWindowIcon() {
+  const icoPath = getAppIconPath();
+  if (!icoPath) {
+    console.warn('[APP] No se encontró icon.ico en disco (rutas comprobadas para empaquetado + dev).');
+    return undefined;
+  }
+  try {
+    const img = nativeImage.createFromPath(icoPath);
+    if (img.isEmpty()) {
+      console.warn('[APP] icon.ico no se pudo decodificar (archivo vacío o formato inválido).');
+      return undefined;
+    }
+    return img;
+  } catch (e) {
+    console.warn('[APP] Error cargando icon.ico:', e.message);
+    return undefined;
+  }
+}
+
 function createWindow() {
+  if (process.platform === 'win32' && !app.isPackaged) {
+    console.log(
+      '[APP] Desarrollo (npm start): en la barra de tareas suele verse el icono de Electron porque el proceso es electron.exe. ' +
+      'Para ver el icono de TitanioPOS, ejecuta el instalador o dist\\win-unpacked\\TitanioPOS.exe.'
+    );
+  }
+
+  if (process.platform === 'win32') {
+    app.setAppUserModelId(APP_ID);
+  }
+
+  const winIcon = resolveWindowIcon();
+
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -173,12 +229,22 @@ function createWindow() {
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js')
     },
-    icon: path.join(__dirname, 'icon.ico'),
+    icon: winIcon,
     autoHideMenuBar: true,
     title: 'TitanioPOS'
   });
 
   mainWindow.loadURL(APP_URL);
+
+  if (process.platform === 'win32' && winIcon) {
+    mainWindow.once('show', () => {
+      try {
+        mainWindow.setIcon(winIcon);
+      } catch (_) {
+        /* ignore */
+      }
+    });
+  }
 
   setupNativeContextMenu(mainWindow);
   buildApplicationMenu();

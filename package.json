@@ -31,6 +31,9 @@
   "build": {
     "appId": "com.titaniopos.desktop",
     "productName": "TitanioPOS",
+    "asarUnpack": [
+      "**/*.ico"
+    ],
     "directories": {
       "output": "dist"
     },
@@ -58,10 +61,13 @@
         }
       ],
       "icon": "icon.ico",
+      "executableName": "TitanioPOS",
       "signAndEditExecutable": false
     },
     "nsis": {
       "artifactName": "TitanioPOS-Setup.${ext}",
+      "shortcutName": "TitanioPOS",
+      "uninstallDisplayName": "TitanioPOS",
       "oneClick": true,
       "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
