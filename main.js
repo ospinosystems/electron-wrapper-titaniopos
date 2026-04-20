@@ -101,7 +101,7 @@ const decodeFromJWT = (token) => {
 };
 
 // URL de la PWA: si no hay .env o TITANIOPOS_URL vacía → local (así ves claro si se leyó la config)
-const DEFAULT_APP_URL = 'http://localhost:3001';
+const DEFAULT_APP_URL = "http://localhost:3001";
 const rootEnvExists = fs.existsSync(ROOT_ENV_PATH);
 const rawAppUrl = (process.env.TITANIOPOS_URL || '').trim();
 const APP_URL = rawAppUrl || DEFAULT_APP_URL;
