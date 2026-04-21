@@ -47,10 +47,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   backupSaveAllOrders: (orders) => ipcRenderer.invoke('backup-save-all-orders', orders),
   
   /**
-   * Obtener todas las órdenes del backup
+   * Obtener órdenes del backup (hoy por defecto, o rango inclusivo { from, to } en YYYY-MM-DD).
+   * @param {{ from: string, to: string }|null|undefined} range - opcional; p. ej. apertura de jornada → hoy
    * @returns {Promise<{success: boolean, orders: array, lastSync: string}>}
    */
-  backupGetAllOrders: () => ipcRenderer.invoke('backup-get-all-orders'),
+  backupGetAllOrders: (range) => ipcRenderer.invoke('backup-get-all-orders', range ?? null),
   
   /**
    * Obtener la ruta del directorio de backups

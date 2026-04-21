@@ -944,6 +944,65 @@ const getDateString = () => {
   return `${year}-${month}-${day}`;
 };
 
+const BACKUP_YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MAX_BACKUP_RANGE_DAYS = 62;
+
+const parseLocalYmd = (ymd) => {
+  if (!BACKUP_YMD_RE.test(ymd)) return null;
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(y, m - 1, d);
+};
+
+const formatLocalYmd = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+/** Fechas locales YYYY-MM-DD inclusivas; si from/to son inválidos, solo hoy. */
+const enumerateInclusiveBackupDates = (fromStr, toStr) => {
+  const from = parseLocalYmd(fromStr);
+  const to = parseLocalYmd(toStr);
+  if (!from || !to) {
+    return [getDateString()];
+  }
+  const start = from <= to ? from : to;
+  const end = from <= to ? to : from;
+  const startDay = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const endDay = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+  const dayCount =
+    Math.round((endDay.getTime() - startDay.getTime()) / 86400000) + 1;
+  if (dayCount > MAX_BACKUP_RANGE_DAYS) {
+    throw new Error(
+      `Rango de respaldo demasiado amplio (${dayCount} días, máximo ${MAX_BACKUP_RANGE_DAYS})`,
+    );
+  }
+  const out = [];
+  const cursor = new Date(startDay);
+  while (cursor <= endDay) {
+    out.push(formatLocalYmd(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return out;
+};
+
+const mergeOrdersIntoMap = (map, orders) => {
+  if (!Array.isArray(orders)) return;
+  for (const order of orders) {
+    if (order == null || order.id == null) continue;
+    const id = String(order.id);
+    const prev = map.get(id);
+    if (!prev) {
+      map.set(id, order);
+      continue;
+    }
+    const tNew = new Date(order.updated_at || order.created_at || 0).getTime();
+    const tOld = new Date(prev.updated_at || prev.created_at || 0).getTime();
+    if (tNew >= tOld) map.set(id, order);
+  }
+};
+
 // Guardar múltiples órdenes - solo backup diario con JWT
 ipcMain.handle('backup-save-all-orders', async (event, orders) => {
   try {
@@ -974,44 +1033,72 @@ ipcMain.handle('backup-save-all-orders', async (event, orders) => {
   }
 });
 
-// Obtener órdenes del backup del día actual (para restauración)
-ipcMain.handle('backup-get-all-orders', async () => {
+// Obtener órdenes del backup: día actual, o rango { from, to } YYYY-MM-DD (p. ej. cierre de jornada de ayer)
+ipcMain.handle('backup-get-all-orders', async (event, range) => {
   try {
     const backupDir = getBackupDir();
-    const dateStr = getDateString();
-    const todayBackupPath = path.join(backupDir, `backup_${dateStr}.json`);
-
-    // Solo cargar órdenes del día actual
-    if (!fs.existsSync(todayBackupPath)) {
-      console.log(`📂 [BACKUP] No hay backup para hoy (${dateStr})`);
-      return { success: true, orders: [], lastSync: null, date: dateStr };
+    let dates;
+    if (
+      range &&
+      typeof range === 'object' &&
+      BACKUP_YMD_RE.test(range.from) &&
+      BACKUP_YMD_RE.test(range.to)
+    ) {
+      dates = enumerateInclusiveBackupDates(range.from, range.to);
+    } else {
+      dates = [getDateString()];
     }
 
-    const fileContent = JSON.parse(fs.readFileSync(todayBackupPath, 'utf-8'));
+    const merged = new Map();
+    let lastSyncBest = null;
+    let filesRead = 0;
 
-    let data;
-    // Verificar si es formato JWT o JSON plano (backward compatibility)
-    if (fileContent.token) {
-      // Formato nuevo: JWT
-      try {
-        data = decodeFromJWT(fileContent.token);
-        console.log(`📂 [BACKUP] ${data.orders?.length || 0} órdenes recuperadas (JWT) del día ${dateStr}`);
-      } catch (jwtError) {
-        console.error('❌ [BACKUP] Error decodificando JWT:', jwtError);
-        return { success: false, error: 'Token JWT inválido o manipulado', errorCode: 'JWT_INVALID_SIGNATURE', orders: [] };
+    for (const dateStr of dates) {
+      const backupPath = path.join(backupDir, `backup_${dateStr}.json`);
+      if (!fs.existsSync(backupPath)) continue;
+      filesRead += 1;
+      const fileContent = JSON.parse(fs.readFileSync(backupPath, 'utf-8'));
+      let data;
+      if (fileContent.token) {
+        try {
+          data = decodeFromJWT(fileContent.token);
+        } catch (jwtError) {
+          console.error('❌ [BACKUP] Error decodificando JWT:', jwtError);
+          return {
+            success: false,
+            error: 'Token JWT inválido o manipulado',
+            errorCode: 'JWT_INVALID_SIGNATURE',
+            orders: [],
+          };
+        }
+      } else {
+        data = fileContent;
       }
+      mergeOrdersIntoMap(merged, data.orders);
+      const ls = data.lastSync;
+      if (ls && (!lastSyncBest || ls > lastSyncBest)) lastSyncBest = ls;
+    }
+
+    const orders = Array.from(merged.values());
+    const dateLabel =
+      dates.length === 1 ? dates[0] : `${dates[0]}:${dates[dates.length - 1]}`;
+
+    if (filesRead === 0) {
+      console.log(
+        `📂 [BACKUP] Sin archivos en rango ${dateLabel} (${dates.length} día(s) comprobados)`,
+      );
     } else {
-      // Formato antiguo: JSON plano (para compatibilidad)
-      data = fileContent;
-      console.log(`📂 [BACKUP] ${data.orders?.length || 0} órdenes recuperadas (JSON) del día ${dateStr}`);
+      console.log(
+        `📂 [BACKUP] ${orders.length} órdenes únicas tras fusionar ${filesRead} archivo(s) (${dateLabel})`,
+      );
     }
 
     return {
       success: true,
-      orders: data.orders || [],
-      lastSync: data.lastSync,
-      count: data.count,
-      date: dateStr
+      orders,
+      lastSync: lastSyncBest,
+      count: orders.length,
+      date: dateLabel,
     };
   } catch (error) {
     console.error('❌ [BACKUP] Error leyendo backup:', error);
