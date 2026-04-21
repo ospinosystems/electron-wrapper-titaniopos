@@ -10,8 +10,9 @@
 # Si usas solo el botón, sube "version" en package.json antes y haz push.
 #
 # Valores empaquetados en el .exe (GitHub → Settings → Secrets and variables → Actions):
-#   Variables: TITANIOPOS_URL (si no existe, se usa http://localhost:3001 en el .env del build)
-#   Secrets: TITANIOPOS_JWT_SECRET
+#   Variables: TITANIOPOS_URL (si no existe → http://localhost:3001)
+#              TITANIOPOS_OPEN_DEVTOOLS_ON_START (opcional; si vacío → false en el build)
+#   Secrets: TITANIOPOS_JWT_SECRET, TITANIOPOS_DEVTOOLS_PASSWORD (opcional)
 
 name: Release Windows
 
@@ -57,13 +58,26 @@ jobs:
         env:
           TITANIOPOS_URL_INPUT: ${{ vars.TITANIOPOS_URL }}
           TITANIOPOS_JWT_SECRET: ${{ secrets.TITANIOPOS_JWT_SECRET }}
+          TITANIOPOS_OPEN_DEVTOOLS_ON_START: ${{ vars.TITANIOPOS_OPEN_DEVTOOLS_ON_START }}
+          TITANIOPOS_DEVTOOLS_PASSWORD: ${{ secrets.TITANIOPOS_DEVTOOLS_PASSWORD }}
         run: |
           $url = $env:TITANIOPOS_URL_INPUT
           if ([string]::IsNullOrWhiteSpace($url)) {
             $url = 'http://localhost:3001'
           }
           $jwt = if ($null -eq $env:TITANIOPOS_JWT_SECRET) { '' } else { $env:TITANIOPOS_JWT_SECRET }
-          $content = "TITANIOPOS_URL=$url`nTITANIOPOS_JWT_SECRET=$jwt`n"
+          $openDt = $env:TITANIOPOS_OPEN_DEVTOOLS_ON_START
+          if ([string]::IsNullOrWhiteSpace($openDt)) {
+            $openDt = 'false'
+          }
+          $dtPwd = if ($null -eq $env:TITANIOPOS_DEVTOOLS_PASSWORD) { '' } else { $env:TITANIOPOS_DEVTOOLS_PASSWORD }
+          $content = @(
+            "TITANIOPOS_URL=$url"
+            "TITANIOPOS_JWT_SECRET=$jwt"
+            "TITANIOPOS_OPEN_DEVTOOLS_ON_START=$openDt"
+            "TITANIOPOS_DEVTOOLS_PASSWORD=$dtPwd"
+          ) -join "`n"
+          $content += "`n"
           Set-Content -Path .env -Encoding utf8 -Value $content
 
       - name: Build and publish release

@@ -119,7 +119,30 @@ if (!rootEnvExists) {
   console.log('[ENV] TITANIOPOS_URL:', APP_URL);
 }
 
+function envFlagTrue(name) {
+  const v = String(process.env[name] || '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+}
+
+/** Solo si está en .env: abre DevTools al arrancar (sin pedir contraseña). */
+const OPEN_DEVTOOLS_ON_START = envFlagTrue('TITANIOPOS_OPEN_DEVTOOLS_ON_START');
+
 let mainWindow;
+let devtoolsPasswordPromptWindow = null;
+
+// Una sola instancia de la app (Windows/Linux: evita dos TitanioPOS en paralelo).
+// Si el usuario abre el .exe de nuevo, esta instancia sale y la primera recibe 'second-instance'.
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.exit(0);
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+}
 
 function setupNativeContextMenu(window) {
   if (!window) return;
@@ -215,6 +238,117 @@ function resolveWindowIcon() {
   }
 }
 
+const DEVTOOLS_PWD_SUBMIT = 'devtools-password-submit';
+const DEVTOOLS_PWD_CANCEL = 'devtools-password-cancel';
+
+function openDevToolsWithPasswordDialog(browserWindow) {
+  const win = browserWindow && !browserWindow.isDestroyed() ? browserWindow : mainWindow;
+  if (!win || win.isDestroyed()) return;
+
+  if (win.webContents.isDevToolsOpened()) {
+    try {
+      const dc = win.webContents.devToolsWebContents;
+      if (dc && !dc.isDestroyed()) dc.focus();
+    } catch (_) {
+      /* ignore */
+    }
+    return;
+  }
+
+  // Mismo flag que abre DevTools al arrancar: modo desarrollo/diagnóstico sin contraseña
+  if (OPEN_DEVTOOLS_ON_START) {
+    win.webContents.openDevTools();
+    return;
+  }
+
+  const expected = (process.env.TITANIOPOS_DEVTOOLS_PASSWORD || '').trim();
+  if (!expected) {
+    dialog.showMessageBox(win, {
+      type: 'warning',
+      title: 'Consola de desarrollo',
+      message: 'La consola está protegida por contraseña, pero no hay ninguna definida.',
+      detail:
+        'Añada TITANIOPOS_DEVTOOLS_PASSWORD en el archivo .env junto a la app de TitanioPOS (o en variables de entorno del sistema).',
+    });
+    return;
+  }
+
+  if (devtoolsPasswordPromptWindow && !devtoolsPasswordPromptWindow.isDestroyed()) {
+    devtoolsPasswordPromptWindow.focus();
+    return;
+  }
+
+  const promptWin = new BrowserWindow({
+    parent: win,
+    modal: true,
+    width: 440,
+    height: 240,
+    show: false,
+    autoHideMenuBar: true,
+    title: 'Consola de desarrollo',
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false,
+    },
+  });
+  devtoolsPasswordPromptWindow = promptWin;
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+    body{font-family:system-ui,sans-serif;margin:16px;background:#f5f5f5;}
+    .box{background:#fff;padding:16px;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.12);}
+    label{display:block;margin-bottom:8px;font-size:13px;color:#333;}
+    input{width:100%;box-sizing:border-box;padding:8px;margin-bottom:12px;border:1px solid #ccc;border-radius:4px;}
+    .row{margin-top:8px;}
+    button{padding:8px 16px;margin-right:8px;border-radius:4px;cursor:pointer;}
+    #e{color:#c00;font-size:12px;margin-top:8px;min-height:16px;}
+  </style></head><body><div class="box">
+  <label>Contraseña</label>
+  <input type="password" id="p" autofocus />
+  <div class="row"><button type="button" id="ok">Abrir consola</button><button type="button" id="cancel">Cancelar</button></div>
+  <div id="e"></div>
+  <script>
+    const { ipcRenderer } = require('electron');
+    const submit = () => ipcRenderer.send('${DEVTOOLS_PWD_SUBMIT}', document.getElementById('p').value);
+    document.getElementById('ok').onclick = submit;
+    document.getElementById('cancel').onclick = () => ipcRenderer.send('${DEVTOOLS_PWD_CANCEL}');
+    document.getElementById('p').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') submit(); });
+  </script>
+</div></body></html>`;
+
+  const finish = () => {
+    if (!promptWin.isDestroyed()) promptWin.close();
+  };
+
+  const onSubmit = (event, pwd) => {
+    if (event.sender !== promptWin.webContents) return;
+    if (String(pwd || '').trim() === expected) {
+      if (!win.isDestroyed()) win.webContents.openDevTools();
+      finish();
+      return;
+    }
+    promptWin.webContents
+      .executeJavaScript(`document.getElementById('e').textContent = 'Contraseña incorrecta';`)
+      .catch(() => {});
+  };
+
+  const onCancel = (event) => {
+    if (event.sender !== promptWin.webContents) return;
+    finish();
+  };
+
+  promptWin.on('closed', () => {
+    ipcMain.removeListener(DEVTOOLS_PWD_SUBMIT, onSubmit);
+    ipcMain.removeListener(DEVTOOLS_PWD_CANCEL, onCancel);
+    devtoolsPasswordPromptWindow = null;
+  });
+
+  ipcMain.on(DEVTOOLS_PWD_SUBMIT, onSubmit);
+  ipcMain.on(DEVTOOLS_PWD_CANCEL, onCancel);
+
+  promptWin.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  promptWin.once('ready-to-show', () => promptWin.show());
+}
+
 function createWindow() {
   if (process.platform === 'win32' && !app.isPackaged) {
     console.log(
@@ -275,6 +409,22 @@ function createWindow() {
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return;
 
+    const isMac = process.platform === 'darwin';
+    const mod = isMac ? input.meta : input.control;
+    const keyLower = input.key.toLowerCase();
+
+    // Atajos de DevTools de Chromium → pedir contraseña (no abrir consola directamente)
+    const isDevtoolsShortcut =
+      input.key === 'F12' ||
+      (mod && input.shift && !input.alt && ['i', 'j', 'c'].includes(keyLower)) ||
+      (isMac && mod && input.alt && ['i', 'j', 'c'].includes(keyLower));
+
+    if (isDevtoolsShortcut) {
+      event.preventDefault();
+      openDevToolsWithPasswordDialog(mainWindow);
+      return;
+    }
+
     // Ctrl+M → completely disabled
     if (input.control && !input.shift && !input.alt && !input.meta && input.key.toLowerCase() === 'm') {
       event.preventDefault();
@@ -284,7 +434,9 @@ function createWindow() {
     // Ctrl+F5: handled in the renderer (toast) + ipcMain 'reload-ignoring-cache'
   });
 
-  mainWindow.webContents.openDevTools();
+  if (OPEN_DEVTOOLS_ON_START) {
+    mainWindow.webContents.openDevTools();
+  }
 
   mainWindow.webContents.on('did-finish-load', () => {
     mainWindow.webContents.executeJavaScript(`
@@ -392,7 +544,25 @@ function buildApplicationMenu() {
       submenu: [isMac ? { role: 'close' } : { role: 'quit' }],
     },
     { role: 'editMenu' },
-    { role: 'viewMenu' },
+    {
+      label: 'Ver',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+        { type: 'separator' },
+        {
+          label: 'Consola de desarrollo…',
+          accelerator: process.platform === 'darwin' ? 'Cmd+Alt+I' : 'Ctrl+Shift+I',
+          click: () => openDevToolsWithPasswordDialog(mainWindow),
+        },
+      ],
+    },
     {
       label: 'Window',
       submenu: [
