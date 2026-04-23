@@ -23,6 +23,11 @@ const jwt = require('jsonwebtoken');
 const { registerPrinterHandlers } = require('./printer-handlers');
 const { registerFiscalHandlers } = require('./fiscal-handlers');
 const { registerPinpadHandlers } = require('./pinpad-handlers');
+const { registerCajaConfigHandlers } = require('./caja-config-handlers');
+const {
+  migrateToUnifiedSettings,
+  splitFiscalResponsesFromUnifiedIfPresent,
+} = require('./titaniopos-settings-file');
 const {
   startFiscalServer,
   stopFiscalServer,
@@ -1904,6 +1909,9 @@ app.whenReady().then(() => {
   // Load fiscal env before starting anything related to fiscal server
   loadFiscalEnv();
 
+  migrateToUnifiedSettings(app);
+  splitFiscalResponsesFromUnifiedIfPresent(app);
+
   const backupPath = getBackupDir();
   console.log('📁 [BACKUP] Backup directory:', backupPath);
   console.log('📱 [BARCODE] Barcode scanner system initialized');
@@ -1926,6 +1934,9 @@ app.whenReady().then(() => {
   // Register pinpad handlers for local LAN proxy
   registerPinpadHandlers();
   console.log('💳 [PINPAD] Local proxy initialized');
+
+  registerCajaConfigHandlers(app);
+  console.log('🏪 [CAJA] Caja config (JSON) initialized');
 
   // Start fiscal server automatically (async, non-blocking)
   (async () => {

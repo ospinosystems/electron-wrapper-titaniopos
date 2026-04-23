@@ -6,31 +6,28 @@
  * 1. Native Electron Print API (optimized for thermal printers)
  * 2. ESC/POS RAW commands via Windows Spooler API
  * 
- * Configuration is stored per-machine to support multi-PC deployments.
+ * Configuration is stored in titaniopos-settings.json (sección thermalPrinter)
  */
 
-const fs = require('fs');
-const path = require('path');
 const { app } = require('electron');
+const { readSettings, writeSettings, normalizeThermal, getSettingsPath } = require('./titaniopos-settings-file');
 
 /**
- * Get the printer configuration file path
- * Stored in user's AppData for per-machine configuration
+ * Ruta al JSON unificado (Documentos/TitanioPOS-Settings/…)
  */
 function getConfigPath() {
-  const userDataPath = app.getPath('userData');
-  return path.join(userDataPath, 'printer-config.json');
+  return getSettingsPath(app);
 }
 
 /**
  * Default printer configuration
  */
 const DEFAULT_CONFIG = {
-  printerName: '',           // Windows printer name (e.g., "XP-58")
-  usbPort: 'USB003',         // USB port for ESC/POS (e.g., "USB001", "USB002", "USB003")
-  method: 'escpos',          // Preferred method: 'native' or 'escpos'
-  paperWidth: '80mm',        // Paper width: '58mm' or '80mm'
-  lastUpdated: null
+  printerName: '',
+  usbPort: 'USB003',
+  method: 'escpos',
+  paperWidth: '80mm',
+  lastUpdated: null,
 };
 
 /**
@@ -39,18 +36,9 @@ const DEFAULT_CONFIG = {
  */
 function loadConfig() {
   try {
-    const configPath = getConfigPath();
-    
-    if (!fs.existsSync(configPath)) {
-      console.log('📄 [PRINTER CONFIG] No config found, using defaults');
-      return { ...DEFAULT_CONFIG };
-    }
-    
-    const data = fs.readFileSync(configPath, 'utf8');
-    const config = JSON.parse(data);
-    
-    console.log('📄 [PRINTER CONFIG] Loaded:', config.printerName || 'Not configured');
-    return { ...DEFAULT_CONFIG, ...config };
+    const merged = { ...DEFAULT_CONFIG, ...normalizeThermal(readSettings(app).thermalPrinter) };
+    console.log('📄 [PRINTER CONFIG] Loaded:', merged.printerName || 'Not configured');
+    return merged;
   } catch (error) {
     console.error('❌ [PRINTER CONFIG] Error loading config:', error.message);
     return { ...DEFAULT_CONFIG };
@@ -64,14 +52,13 @@ function loadConfig() {
  */
 function saveConfig(config) {
   try {
-    const configPath = getConfigPath();
-    const configToSave = {
+    const s = readSettings(app);
+    const configToSave = normalizeThermal({
       ...config,
-      lastUpdated: new Date().toISOString()
-    };
-    
-    fs.writeFileSync(configPath, JSON.stringify(configToSave, null, 2), 'utf8');
-    
+      lastUpdated: new Date().toISOString(),
+    });
+    s.thermalPrinter = configToSave;
+    writeSettings(app, s);
     console.log('💾 [PRINTER CONFIG] Saved:', configToSave.printerName);
     return { success: true, config: configToSave };
   } catch (error) {

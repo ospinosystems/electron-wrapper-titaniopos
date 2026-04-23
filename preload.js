@@ -79,7 +79,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @returns {Promise<{success: boolean, config?: object, error?: string}>}
    */
   printerConfigSave: (config) => ipcRenderer.invoke('printer-config-save', config),
-  
+
+  // ==================== CAJA (sin fiscal) ====================
+
+  /** @returns {Promise<{ success: boolean, config?: object, path?: string, error?: string }>} */
+  cajaConfigGet: () => ipcRenderer.invoke('caja-config-get'),
+
+  /** @param {object} partial - campos a fusionar en caja-config.json */
+  cajaConfigSave: (partial) => ipcRenderer.invoke('caja-config-save', partial),
+
   /**
    * Get list of available printers
    * @returns {Promise<{success: boolean, printers: array}>}

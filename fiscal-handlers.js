@@ -4,8 +4,6 @@
  */
 
 const { ipcMain } = require('electron');
-const path = require('path');
-const fs = require('fs');
 const http = require('http');
 const { 
   startFiscalServer, 
@@ -14,6 +12,14 @@ const {
   restartFiscalServer,
   checkPythonInstalled 
 } = require('./fiscal-server-manager');
+const {
+  readSettings,
+  writeSettings,
+  normalizeFiscal,
+  getSettingsPath,
+  readFiscalResponsesFile,
+  writeFiscalResponsesFile,
+} = require('./titaniopos-settings-file');
 
 // Configuración por defecto
 const DEFAULT_FISCAL_CONFIG = {
@@ -26,48 +32,23 @@ const DEFAULT_FISCAL_CONFIG = {
   lastConfigUpdate: '',
 };
 
-// Directorio para almacenar respuestas fiscales localmente
-const getFiscalDataDir = (app) => {
-  const documentsPath = app.getPath('documents');
-  const fiscalDir = path.join(documentsPath, 'TitanioPOS-Fiscal');
-  if (!fs.existsSync(fiscalDir)) {
-    fs.mkdirSync(fiscalDir, { recursive: true });
-  }
-  return fiscalDir;
-};
-
-// Obtener archivo de configuración fiscal
-const getFiscalConfigPath = (app) => {
-  return path.join(getFiscalDataDir(app), 'fiscal-config.json');
-};
-
-// Obtener archivo de respuestas pendientes
-const getFiscalResponsesPath = (app) => {
-  return path.join(getFiscalDataDir(app), 'fiscal-responses.json');
-};
-
-// Cargar configuración fiscal
+// Cargar configuración fiscal (sección fiscal del JSON unificado)
 const loadFiscalConfig = (app) => {
   try {
-    const configPath = getFiscalConfigPath(app);
-    if (fs.existsSync(configPath)) {
-      const data = fs.readFileSync(configPath, 'utf-8').trim();
-      if (data) {
-        return { ...DEFAULT_FISCAL_CONFIG, ...JSON.parse(data) };
-      }
-    }
+    return normalizeFiscal(readSettings(app).fiscal);
   } catch (error) {
     console.error('[FISCAL] Error loading config:', error);
+    return { ...DEFAULT_FISCAL_CONFIG };
   }
-  return DEFAULT_FISCAL_CONFIG;
 };
 
 // Guardar configuración fiscal
 const saveFiscalConfig = (app, config) => {
   try {
-    const configPath = getFiscalConfigPath(app);
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
-    console.log('[FISCAL] Config saved:', configPath);
+    const s = readSettings(app);
+    s.fiscal = normalizeFiscal({ ...s.fiscal, ...config });
+    writeSettings(app, s);
+    console.log('[FISCAL] Config saved (unified):', getSettingsPath(app));
     return true;
   } catch (error) {
     console.error('[FISCAL] Error saving config:', error);
@@ -75,27 +56,19 @@ const saveFiscalConfig = (app, config) => {
   }
 };
 
-// Cargar respuestas fiscales pendientes
+// Respuestas pendientes: fiscal-responses.json (aparte del JSON unificado de caja/thermal)
 const loadFiscalResponses = (app) => {
   try {
-    const responsesPath = getFiscalResponsesPath(app);
-    if (fs.existsSync(responsesPath)) {
-      const data = fs.readFileSync(responsesPath, 'utf-8').trim();
-      if (data) {
-        return JSON.parse(data);
-      }
-    }
+    return readFiscalResponsesFile(app);
   } catch (error) {
     console.error('[FISCAL] Error loading responses:', error);
+    return [];
   }
-  return [];
 };
 
-// Guardar respuestas fiscales
 const saveFiscalResponses = (app, responses) => {
   try {
-    const responsesPath = getFiscalResponsesPath(app);
-    fs.writeFileSync(responsesPath, JSON.stringify(responses, null, 2), 'utf-8');
+    writeFiscalResponsesFile(app, Array.isArray(responses) ? responses : []);
     return true;
   } catch (error) {
     console.error('[FISCAL] Error saving responses:', error);
