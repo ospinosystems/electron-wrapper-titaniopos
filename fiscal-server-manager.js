@@ -7,6 +7,18 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
+const os = require('os');
+
+// Log a archivo en producción para poder diagnosticar sin consola
+const LOG_FILE = path.join(os.homedir(), 'titaniopos-fiscal-server.log');
+const logToFile = (msg) => {
+  try {
+    const line = `${new Date().toISOString()} ${msg}\n`;
+    fs.appendFileSync(LOG_FILE, line, 'utf8');
+  } catch (_) { /* si falla el log, no bloquear */ }
+};
+const log = (...args) => { const m = args.join(' '); console.log(m); logToFile(m); };
+const logErr = (...args) => { const m = args.join(' '); console.error(m); logToFile('[ERROR] ' + m); };
 
 // Estado del servidor
 let fiscalServerProcess = null;
@@ -17,19 +29,17 @@ const MAX_START_ATTEMPTS = 3;
 
 // Obtener rutas
 const getFiscalServerDir = () => {
+  // En producción (empaquetado), resourcesPath apunta a la carpeta real fuera del .asar
+  // Debe tener prioridad porque __dirname dentro de .asar no es accesible por Python
+  if (process.resourcesPath) {
+    const prodPath = path.join(process.resourcesPath, 'fiscal-server');
+    if (fs.existsSync(prodPath)) {
+      return prodPath;
+    }
+  }
+
   // En desarrollo, usar la carpeta del proyecto
-  // En producción, usar la carpeta de recursos de la app
   const devPath = path.join(__dirname, 'fiscal-server');
-  if (fs.existsSync(devPath)) {
-    return devPath;
-  }
-  
-  // En producción (empaquetado)
-  const prodPath = path.join(process.resourcesPath, 'fiscal-server');
-  if (fs.existsSync(prodPath)) {
-    return prodPath;
-  }
-  
   return devPath;
 };
 
@@ -122,36 +132,39 @@ const startFiscalServer = async (options = {}) => {
   serverPort = port;
   
   if (isServerRunning && fiscalServerProcess) {
-    console.log('[FISCAL SERVER] Server already running');
+    log('[FISCAL SERVER] Server already running');
     return { success: true, message: 'Server already running', port: serverPort };
   }
-  
+
   // Verificar si el script existe
   const scriptPath = getFiscalScript();
+  log('[FISCAL SERVER] resourcesPath:', process.resourcesPath);
+  log('[FISCAL SERVER] fiscalServerDir:', getFiscalServerDir());
+  log('[FISCAL SERVER] scriptPath:', scriptPath, '| exists:', fs.existsSync(scriptPath));
   if (!fs.existsSync(scriptPath)) {
-    console.error('[FISCAL SERVER] Script not found:', scriptPath);
-    return { success: false, error: 'Fiscal server script not found' };
+    logErr('[FISCAL SERVER] Script not found:', scriptPath);
+    return { success: false, error: `Fiscal server script not found at: ${scriptPath}` };
   }
-  
+
   // Verificar Python
   const pythonCheck = await checkPythonInstalled();
   if (!pythonCheck.installed) {
-    console.error('[FISCAL SERVER] Python not installed');
+    logErr('[FISCAL SERVER] Python not installed');
     return { success: false, error: 'Python is not installed on this system' };
   }
-  
-  console.log('[FISCAL SERVER] Starting fiscal server...');
-  console.log('[FISCAL SERVER] Script:', scriptPath);
-  console.log('[FISCAL SERVER] Python:', pythonCheck.command);
-  console.log('[FISCAL SERVER] Port:', port);
-  
+
+  log('[FISCAL SERVER] Starting fiscal server...');
+  log('[FACIAL SERVER] Script:', scriptPath);
+  log('[FISCAL SERVER] Python:', pythonCheck.command);
+  log('[FISCAL SERVER] Port:', port);
+
   // Configurar variables de entorno
   const env = { ...process.env };
   env.FISCAL_SERVER_PORT = port.toString();
   if (intfhkaPath) {
     env.INTFHKA_PATH = intfhkaPath;
   }
-  
+
   return new Promise((resolve) => {
     try {
       fiscalServerProcess = spawn(pythonCheck.command, [scriptPath], {
@@ -160,58 +173,58 @@ const startFiscalServer = async (options = {}) => {
         shell: true,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
-      
+
       fiscalServerProcess.stdout.on('data', (data) => {
-        console.log('[FISCAL SERVER]', data.toString().trim());
+        log('[FISCAL SERVER]', data.toString().trim());
       });
-      
+
       fiscalServerProcess.stderr.on('data', (data) => {
-        console.error('[FISCAL SERVER ERROR]', data.toString().trim());
+        logErr('[FISCAL SERVER ERROR]', data.toString().trim());
       });
-      
+
       fiscalServerProcess.on('error', (error) => {
-        console.error('[FISCAL SERVER] Process error:', error);
+        logErr('[FISCAL SERVER] Process error:', error);
         isServerRunning = false;
         fiscalServerProcess = null;
       });
-      
+
       fiscalServerProcess.on('close', (code) => {
-        console.log('[FISCAL SERVER] Process closed with code:', code);
+        log('[FISCAL SERVER] Process closed with code:', code);
         isServerRunning = false;
         fiscalServerProcess = null;
-        
+
         // Intentar reiniciar si se cerró inesperadamente
         if (serverStartAttempts < MAX_START_ATTEMPTS) {
           serverStartAttempts++;
-          console.log(`[FISCAL SERVER] Attempting restart (${serverStartAttempts}/${MAX_START_ATTEMPTS})...`);
+          log(`[FISCAL SERVER] Attempting restart (${serverStartAttempts}/${MAX_START_ATTEMPTS})...`);
           setTimeout(() => startFiscalServer(options), 2000);
         }
       });
-      
+
       // Esperar a que el servidor esté listo
       let checkCount = 0;
       const maxChecks = 60; // 30 segundos para darle más tiempo a Flask
-      
+
       const checkReady = setInterval(async () => {
         checkCount++;
         const health = await checkServerHealth(port);
-        
+
         if (health.healthy) {
           clearInterval(checkReady);
           isServerRunning = true;
           serverStartAttempts = 0;
-          console.log('[FISCAL SERVER] Server is ready!');
+          log('[FISCAL SERVER] Server is ready!');
           resolve({ success: true, message: 'Server started successfully', port: port });
         } else if (checkCount >= maxChecks) {
           clearInterval(checkReady);
-          console.error('[FISCAL SERVER] Server failed to start in time');
+          logErr('[FISCAL SERVER] Server failed to start in time');
           stopFiscalServer();
           resolve({ success: false, error: 'Server failed to start in time' });
         }
       }, 500);
-      
+
     } catch (error) {
-      console.error('[FISCAL SERVER] Failed to start:', error);
+      logErr('[FISCAL SERVER] Failed to start:', error);
       resolve({ success: false, error: error.message });
     }
   });
@@ -222,7 +235,7 @@ const startFiscalServer = async (options = {}) => {
  */
 const stopFiscalServer = () => {
   if (fiscalServerProcess) {
-    console.log('[FISCAL SERVER] Stopping server...');
+    log('[FISCAL SERVER] Stopping server...');
     
     // En Windows, necesitamos matar el proceso de forma diferente
     if (process.platform === 'win32') {
@@ -233,7 +246,7 @@ const stopFiscalServer = () => {
     
     fiscalServerProcess = null;
     isServerRunning = false;
-    console.log('[FISCAL SERVER] Server stopped');
+    log('[FISCAL SERVER] Server stopped');
   }
 };
 
