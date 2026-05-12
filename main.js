@@ -105,6 +105,43 @@ const decodeFromJWT = (token) => {
   }
 };
 
+// Decodificar backup con tolerancia:
+// 1) JWT verificado (modo normal)
+// 2) JWT sin verificación de firma (modo temporal)
+// 3) JSON plano serializado dentro de "token"
+const decodeBackupTokenSafely = (token) => {
+  if (typeof token !== 'string' || !token.trim()) return null;
+
+  try {
+    return decodeFromJWT(token);
+  } catch (verifiedError) {
+    if (BACKUP_STRICT_JWT) throw verifiedError;
+    console.warn('⚠️ [BACKUP] JWT no verificable, usando lectura tolerante temporal.');
+  }
+
+  try {
+    const unverified = jwt.decode(token);
+    if (unverified && typeof unverified === 'object') {
+      if (unverified.data && typeof unverified.data === 'object') return unverified.data;
+      if (unverified.orders && Array.isArray(unverified.orders)) return unverified;
+    }
+  } catch (decodeError) {
+    console.warn('⚠️ [BACKUP] No se pudo decodificar JWT sin verificar:', decodeError.message);
+  }
+
+  try {
+    const parsed = JSON.parse(token);
+    if (parsed && typeof parsed === 'object') {
+      if (parsed.data && typeof parsed.data === 'object') return parsed.data;
+      return parsed;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+};
+
 // URL de la PWA: si no hay .env o TITANIOPOS_URL vacía → local (así ves claro si se leyó la config)
 const DEFAULT_APP_URL = "http://localhost:3001";
 const rootEnvExists = fs.existsSync(ROOT_ENV_PATH);
@@ -131,6 +168,8 @@ function envFlagTrue(name) {
 
 /** Solo si está en .env: abre DevTools al arrancar (sin pedir contraseña). */
 const OPEN_DEVTOOLS_ON_START = envFlagTrue('TITANIOPOS_OPEN_DEVTOOLS_ON_START');
+// Temporal: por defecto no bloquea backups con JWT inválido; activa true para volver a modo estricto.
+const BACKUP_STRICT_JWT = envFlagTrue('TITANIOPOS_BACKUP_STRICT_JWT');
 
 let mainWindow;
 let devtoolsPasswordPromptWindow = null;
@@ -1066,13 +1105,22 @@ ipcMain.handle('backup-get-all-orders', async (event, range) => {
       let data;
       if (fileContent.token) {
         try {
-          data = decodeFromJWT(fileContent.token);
+          data = decodeBackupTokenSafely(fileContent.token);
         } catch (jwtError) {
           console.error('❌ [BACKUP] Error decodificando JWT:', jwtError);
           return {
             success: false,
             error: 'Token JWT inválido o manipulado',
             errorCode: 'JWT_INVALID_SIGNATURE',
+            orders: [],
+          };
+        }
+        if (!data) {
+          console.error('❌ [BACKUP] Token sin formato soportado');
+          return {
+            success: false,
+            error: 'Token sin formato soportado',
+            errorCode: 'BACKUP_TOKEN_UNSUPPORTED',
             orders: [],
           };
         }
