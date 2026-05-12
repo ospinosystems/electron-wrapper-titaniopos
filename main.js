@@ -170,6 +170,8 @@ function envFlagTrue(name) {
 const OPEN_DEVTOOLS_ON_START = envFlagTrue('TITANIOPOS_OPEN_DEVTOOLS_ON_START');
 // Temporal: por defecto no bloquea backups con JWT inválido; activa true para volver a modo estricto.
 const BACKUP_STRICT_JWT = envFlagTrue('TITANIOPOS_BACKUP_STRICT_JWT');
+// Temporal: por defecto escribe backups en JSON plano. Mantiene lectura retrocompatible JWT.
+const BACKUP_WRITE_JWT = envFlagTrue('TITANIOPOS_BACKUP_WRITE_JWT');
 
 let mainWindow;
 let devtoolsPasswordPromptWindow = null;
@@ -1031,6 +1033,64 @@ const enumerateInclusiveBackupDates = (fromStr, toStr) => {
   return out;
 };
 
+const normalizeBackupData = (raw, fallbackDate = getDateString()) => {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      lastSync: null,
+      date: fallbackDate,
+      count: 0,
+      orders: [],
+    };
+  }
+
+  const orders = Array.isArray(raw.orders) ? raw.orders : [];
+  const rawDate = typeof raw.date === 'string' && BACKUP_YMD_RE.test(raw.date) ? raw.date : fallbackDate;
+  const rawLastSync = typeof raw.lastSync === 'string' ? raw.lastSync : new Date().toISOString();
+
+  return {
+    lastSync: rawLastSync,
+    date: rawDate,
+    count: orders.length,
+    orders,
+  };
+};
+
+const writeBackupFileAtomic = (filePath, backupData, useJwt = BACKUP_WRITE_JWT) => {
+  const normalized = normalizeBackupData(backupData);
+  const payload = useJwt
+    ? { token: encodeToJWT(normalized) }
+    : normalized;
+  const tmpPath = `${filePath}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), 'utf-8');
+  fs.renameSync(tmpPath, filePath);
+};
+
+const readBackupFileNormalized = (backupPath, opts = {}) => {
+  const { migrateJwtToPlain = !BACKUP_WRITE_JWT } = opts;
+  const fileContent = JSON.parse(fs.readFileSync(backupPath, 'utf-8'));
+
+  if (fileContent && typeof fileContent === 'object' && fileContent.token) {
+    const decoded = decodeBackupTokenSafely(fileContent.token);
+    if (!decoded) {
+      const err = new Error('Token sin formato soportado');
+      err.code = 'BACKUP_TOKEN_UNSUPPORTED';
+      throw err;
+    }
+    const normalized = normalizeBackupData(decoded);
+    if (migrateJwtToPlain) {
+      try {
+        writeBackupFileAtomic(backupPath, normalized, false);
+        console.log(`♻️ [BACKUP] Migrado JWT → JSON plano: ${path.basename(backupPath)}`);
+      } catch (migrationError) {
+        console.warn('⚠️ [BACKUP] No se pudo migrar archivo JWT a plano:', migrationError.message);
+      }
+    }
+    return normalized;
+  }
+
+  return normalizeBackupData(fileContent);
+};
+
 const mergeOrdersIntoMap = (map, orders) => {
   if (!Array.isArray(orders)) return;
   for (const order of orders) {
@@ -1047,7 +1107,7 @@ const mergeOrdersIntoMap = (map, orders) => {
   }
 };
 
-// Guardar múltiples órdenes - solo backup diario con JWT
+// Guardar múltiples órdenes - backup diario (plano por defecto, JWT opcional por flag)
 ipcMain.handle('backup-save-all-orders', async (event, orders) => {
   try {
     const backupDir = getBackupDir();
@@ -1056,21 +1116,18 @@ ipcMain.handle('backup-save-all-orders', async (event, orders) => {
     // Solo archivo de backup diario
     const dailyBackupPath = path.join(backupDir, `backup_${dateStr}.json`);
 
-    const backupData = {
+    const backupData = normalizeBackupData({
       lastSync: new Date().toISOString(),
       date: dateStr,
-      count: orders.length,
-      orders: orders
-    };
+      count: Array.isArray(orders) ? orders.length : 0,
+      orders: Array.isArray(orders) ? orders : [],
+    }, dateStr);
 
-    // Codificar como JWT para seguridad
-    const encodedData = encodeToJWT(backupData);
+    writeBackupFileAtomic(dailyBackupPath, backupData, BACKUP_WRITE_JWT);
 
-    // Guardar JWT en archivo
-    fs.writeFileSync(dailyBackupPath, JSON.stringify({ token: encodedData }, null, 2), 'utf-8');
-
-    console.log(`💾 [BACKUP] ${orders.length} órdenes guardadas (JWT) en backup_${dateStr}.json`);
-    return { success: true, count: orders.length, date: dateStr };
+    const modeLabel = BACKUP_WRITE_JWT ? 'JWT' : 'PLANO';
+    console.log(`💾 [BACKUP] ${backupData.count} órdenes guardadas (${modeLabel}) en backup_${dateStr}.json`);
+    return { success: true, count: backupData.count, date: dateStr };
   } catch (error) {
     console.error('❌ [BACKUP] Error en sync:', error);
     return { success: false, error: error.message };
@@ -1101,31 +1158,23 @@ ipcMain.handle('backup-get-all-orders', async (event, range) => {
       const backupPath = path.join(backupDir, `backup_${dateStr}.json`);
       if (!fs.existsSync(backupPath)) continue;
       filesRead += 1;
-      const fileContent = JSON.parse(fs.readFileSync(backupPath, 'utf-8'));
       let data;
-      if (fileContent.token) {
-        try {
-          data = decodeBackupTokenSafely(fileContent.token);
-        } catch (jwtError) {
-          console.error('❌ [BACKUP] Error decodificando JWT:', jwtError);
-          return {
-            success: false,
-            error: 'Token JWT inválido o manipulado',
-            errorCode: 'JWT_INVALID_SIGNATURE',
-            orders: [],
-          };
-        }
-        if (!data) {
-          console.error('❌ [BACKUP] Token sin formato soportado');
-          return {
-            success: false,
-            error: 'Token sin formato soportado',
-            errorCode: 'BACKUP_TOKEN_UNSUPPORTED',
-            orders: [],
-          };
-        }
-      } else {
-        data = fileContent;
+      try {
+        data = readBackupFileNormalized(backupPath, { migrateJwtToPlain: !BACKUP_WRITE_JWT });
+      } catch (readError) {
+        const errorCode = readError?.code === 'BACKUP_TOKEN_UNSUPPORTED'
+          ? 'BACKUP_TOKEN_UNSUPPORTED'
+          : 'JWT_INVALID_SIGNATURE';
+        const errorMessage = errorCode === 'BACKUP_TOKEN_UNSUPPORTED'
+          ? 'Token sin formato soportado'
+          : 'Token JWT inválido o manipulado';
+        console.error('❌ [BACKUP] Error leyendo backup:', readError);
+        return {
+          success: false,
+          error: errorMessage,
+          errorCode,
+          orders: [],
+        };
       }
       mergeOrdersIntoMap(merged, data.orders);
       const ls = data.lastSync;
@@ -1172,11 +1221,11 @@ ipcMain.handle('backup-delete-order', async (event, orderId) => {
     const todayBackupPath = path.join(backupDir, `backup_${dateStr}.json`);
 
     if (fs.existsSync(todayBackupPath)) {
-      const data = JSON.parse(fs.readFileSync(todayBackupPath, 'utf-8'));
-      data.orders = data.orders.filter(o => o.id !== orderId);
+      const data = readBackupFileNormalized(todayBackupPath, { migrateJwtToPlain: !BACKUP_WRITE_JWT });
+      data.orders = data.orders.filter((o) => String(o.id) !== String(orderId));
       data.count = data.orders.length;
       data.lastSync = new Date().toISOString();
-      fs.writeFileSync(todayBackupPath, JSON.stringify(data, null, 2), 'utf-8');
+      writeBackupFileAtomic(todayBackupPath, data, BACKUP_WRITE_JWT);
     }
 
     // También eliminar archivo individual si existe
