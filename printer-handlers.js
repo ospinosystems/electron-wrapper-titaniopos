@@ -8,6 +8,7 @@
 const { ipcMain } = require('electron');
 const printerConfig = require('./printer-config');
 const printerMethods = require('./printer-methods');
+const { printWithDirect, ensureHelper } = require('./printer-direct');
 
 /**
  * Register all printer-related IPC handlers
@@ -15,7 +16,15 @@ const printerMethods = require('./printer-methods');
  * @param {Electron.BrowserWindow} mainWindow - Main window instance
  */
 function registerPrinterHandlers(app, mainWindow) {
-  
+  // Pre-compile direct helper on startup (non-blocking)
+  ensureHelper(app).then((exePath) => {
+    if (exePath) {
+      console.log('✅ [PRINTER] Direct helper ready:', exePath);
+    } else {
+      console.log('⚠️ [PRINTER] Direct helper unavailable, will use PowerShell fallback');
+    }
+  });
+
   // ==================== CONFIGURATION HANDLERS ====================
   
   /**
@@ -86,18 +95,23 @@ function registerPrinterHandlers(app, mainWindow) {
         };
       }
       
-      // Force ESC/POS for low-end CPU performance; fallback if explicitly set to native
-      const effectiveMethod = (config.method === 'native') ? 'native' : 'escpos';
-      if (config.method !== effectiveMethod) {
-        console.log(`🖨️ [PRINT] Method "${config.method}" invalid; falling back to ESC/POS`);
-      } else {
-        console.log(`🖨️ [PRINT] Using method: ${effectiveMethod}`);
+      // Priority: direct (fastest) > escpos > native (slowest)
+      let effectiveMethod = config.method;
+      if (effectiveMethod !== 'native' && effectiveMethod !== 'escpos' && effectiveMethod !== 'direct') {
+        effectiveMethod = 'escpos';
       }
 
-      // Warn if content looks like ESC/POS but method is native
-      if (effectiveMethod === 'native' && /[\x1B\x1D]/.test(content)) {
-        console.warn('⚠️ [PRINT] Content contains ESC/POS commands but method is native. Consider switching to ESC/POS for better performance.');
+      // Auto-upgrade to direct if helper is available and method is escpos
+      let useDirect = false;
+      if (effectiveMethod === 'escpos' || effectiveMethod === 'direct') {
+        const exePath = await ensureHelper(app);
+        if (exePath) {
+          useDirect = true;
+          effectiveMethod = 'direct';
+        }
       }
+
+      console.log(`🖨️ [PRINT] Using method: ${effectiveMethod}`);
 
       let result;
       if (effectiveMethod === 'native') {
@@ -108,6 +122,18 @@ function registerPrinterHandlers(app, mainWindow) {
           config.paperWidth,
           { debugPdf: config.debugPdf === true }
         );
+      } else if (useDirect) {
+        try {
+          result = await printWithDirect(app, config.printerName, content);
+        } catch (directErr) {
+          console.warn('⚠️ [PRINT] Direct method failed, falling back to ESC/POS:', directErr.message);
+          result = await printerMethods.printWithESCPOS(
+            app,
+            config.printerName,
+            content,
+            config.usbPort
+          );
+        }
       } else {
         result = await printerMethods.printWithESCPOS(
           app,
@@ -116,7 +142,7 @@ function registerPrinterHandlers(app, mainWindow) {
           config.usbPort
         );
       }
-      
+
       return result;
     } catch (error) {
       console.error('❌ [PRINT] Error:', error);
@@ -148,10 +174,16 @@ function registerPrinterHandlers(app, mainWindow) {
           content,
           options.usbPort || 'USB003'
         );
+      } else if (method === 'direct') {
+        try {
+          result = await printWithDirect(app, printerName, content);
+        } catch (directErr) {
+          return { success: false, error: `Direct method failed: ${directErr.message}` };
+        }
       } else {
-        return { 
-          success: false, 
-          error: `Unknown test method: ${method}` 
+        return {
+          success: false,
+          error: `Unknown test method: ${method}`
         };
       }
       

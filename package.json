@@ -5,10 +5,11 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --win --publish never",
-    "build:portable": "electron-builder --win portable --publish never",
-    "release": "electron-builder --win --publish always",
-    "publish": "electron-builder --win --publish always"
+    "prebuild": "node prebuild.js",
+    "build": "npm run prebuild && electron-builder --win --publish never",
+    "build:portable": "npm run prebuild && electron-builder --win portable --publish never",
+    "release": "npm run prebuild && electron-builder --win --publish always",
+    "publish": "npm run prebuild && electron-builder --win --publish always"
   },
   "author": "TitanioPOS",
   "license": "MIT",
@@ -39,6 +40,11 @@
         "from": "fiscal-server",
         "to": "fiscal-server",
         "filter": ["**/*"]
+      },
+      {
+        "from": "bin",
+        "to": "bin",
+        "filter": ["*.exe"]
       }
     ],
     "directories": {

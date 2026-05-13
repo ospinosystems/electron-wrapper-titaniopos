@@ -212,12 +212,13 @@ async function printWithESCPOS(app, printerName, textContent, usbPort = 'USB003'
       data += '\n\n\n';
       data += GS + 'V' + '\x00';  // Cut paper
 
-      // Save ESC/POS commands to a single temp file (required for PowerShell ReadAllBytes)
+      // Save ESC/POS commands to a single temp file
       fs.writeFileSync(tempFile, data, 'binary');
       console.log('📄 [ESC/POS] Commands file created:', tempFile);
       console.log(`📌 [ESC/POS] USB Port: ${usbPort}`);
 
       // Build PowerShell script (inline, no .ps1 file)
+      // Reads the .prn file and sends to printer via winspool
       const psScript = `
 Add-Type -TypeDefinition @"
 using System;

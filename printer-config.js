@@ -84,15 +84,15 @@ function validateConfig(config) {
     errors.push('USB port must be in format USB001, USB002, etc.');
   }
   
-  if (!['native', 'escpos'].includes(config.method)) {
-    errors.push('Method must be either "native" or "escpos"');
+  if (!['native', 'escpos', 'direct'].includes(config.method)) {
+    errors.push('Method must be either "native", "escpos" or "direct"');
   }
   
   if (!['58mm', '80mm'].includes(config.paperWidth)) {
     errors.push('Paper width must be either "58mm" or "80mm"');
   }
 
-  if (typeof config.debugPdf !== 'boolean') {
+  if ('debugPdf' in config && typeof config.debugPdf !== 'boolean') {
     errors.push('debugPdf must be a boolean');
   }
 
