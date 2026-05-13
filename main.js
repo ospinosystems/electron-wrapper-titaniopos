@@ -18,6 +18,10 @@ if (process.platform === 'win32') {
   app.setAppUserModelId(APP_ID);
 }
 
+// Apply low-end PC optimizations BEFORE anything else (must run before app.ready)
+const { applyElectronOptimizations } = require('./electron-optimization');
+applyElectronOptimizations();
+
 const { autoUpdater } = require('electron-updater');
 const jwt = require('jsonwebtoken');
 const { registerPrinterHandlers } = require('./printer-handlers');
@@ -417,7 +421,11 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, 'preload.js')
+      preload: path.join(__dirname, 'preload.js'),
+      backgroundThrottling: false,
+      spellcheck: false,
+      enablePreferredSizeMode: false,
+      offscreen: false,
     },
     icon: winIcon,
     autoHideMenuBar: true,
@@ -757,6 +765,7 @@ function silentPrint() {
 // Función para imprimir HTML en ventana oculta (método nativo simplificado)
 function printHtmlInHiddenWindow(html, printerName = null, pageWidth = '80mm', options = {}) {
   return new Promise(async (resolve, reject) => {
+    const debugPdf = options.debugPdf === true;
     const printWindow = new BrowserWindow({
       show: false,
       width: pageWidth === '58mm' ? 220 : 302,
@@ -779,18 +788,18 @@ function printHtmlInHiddenWindow(html, printerName = null, pageWidth = '80mm', o
           background: #fff !important;
         }
         .line { white-space: pre; line-height: 1.4; }
-        .total { 
-          font-weight: bold; 
-          font-size: 14px; 
-          border-top: 1px dashed #000; 
-          padding-top: 4px; 
-          margin-top: 4px; 
+        .total {
+          font-weight: bold;
+          font-size: 14px;
+          border-top: 1px dashed #000;
+          padding-top: 4px;
+          margin-top: 4px;
         }
-        .uuid { 
-          font-size: 8px; 
-          text-align: center; 
-          margin-top: 8px; 
-          word-break: break-all; 
+        .uuid {
+          font-size: 8px;
+          text-align: center;
+          margin-top: 8px;
+          word-break: break-all;
         }
         @media print {
           @page { margin: 0; }
@@ -811,7 +820,9 @@ function printHtmlInHiddenWindow(html, printerName = null, pageWidth = '80mm', o
       console.log('🖨️ [MAIN] Contenido cargado');
 
       try {
-        await new Promise(r => setTimeout(r, 800));
+        // Wait for DOM ready instead of fixed 800ms delay
+        await printWindow.webContents.executeJavaScript('document.readyState');
+        await new Promise(r => setTimeout(r, 200));
 
         let targetPrinter = printerName;
         if (!targetPrinter) {
@@ -821,42 +832,62 @@ function printHtmlInHiddenWindow(html, printerName = null, pageWidth = '80mm', o
         }
         console.log('🖨️ [MAIN] Impresora:', targetPrinter);
 
-        // Generar PDF primero
         const backupDir = getBackupDir();
-        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const pdfPath = path.join(backupDir, `print_${stamp}.pdf`);
+        let pdfPath = null;
 
-        const pdfBuffer = await printWindow.webContents.printToPDF({
-          printBackground: true,
-          marginsType: 1,
-          pageSize: { width: pageWidth === '58mm' ? 58000 : 80000, height: 297000 }
-        });
+        if (debugPdf) {
+          // Generate PDF only when explicitly debugging
+          const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+          pdfPath = path.join(backupDir, `print_${stamp}.pdf`);
 
-        fs.writeFileSync(pdfPath, pdfBuffer);
-        console.log('📄 [MAIN] PDF generado:', pdfPath);
+          const pdfBuffer = await printWindow.webContents.printToPDF({
+            printBackground: true,
+            marginsType: 1,
+            pageSize: { width: pageWidth === '58mm' ? 58000 : 80000, height: 297000 }
+          });
+
+          fs.writeFileSync(pdfPath, pdfBuffer);
+          console.log('📄 [MAIN] Debug PDF generado:', pdfPath);
+        }
+
+        // If not debugging PDF, print directly via Electron's native API (faster)
+        if (!debugPdf) {
+          const printOptions = {
+            silent: true,
+            deviceName: targetPrinter,
+            printBackground: true,
+            color: false,
+            margins: { marginType: 'none' },
+            pageSize: {
+              width: pageWidth === '58mm' ? 58000 : 80000,
+              height: 297000
+            }
+          };
+          return printWindow.webContents.print(printOptions, (success, failureReason) => {
+            console.log(success ? '✅ [MAIN] Print sent' : `❌ [MAIN] Failed: ${failureReason}`);
+            try { printWindow.close(); } catch (e) {}
+            resolve({ success, printerName: targetPrinter, error: success ? undefined : failureReason });
+          });
+        }
 
         printWindow.close();
 
-        // Usar PowerShell con Adobe Acrobat COM object para impresión silenciosa
+        // Legacy PDF-based printing for debug mode only
         const { exec } = require('child_process');
-
-        // Escapar comillas y backslashes para PowerShell
         const escapedPath = pdfPath.replace(/\\/g, '\\\\').replace(/"/g, '`"');
         const escapedPrinter = targetPrinter.replace(/"/g, '`"');
 
-        // Script PowerShell que usa el objeto COM de Adobe/Acrobat para imprimir
         const psScript = `
 $ErrorActionPreference = 'Stop'
 try {
   Add-Type -AssemblyName System.Drawing
   Add-Type -AssemblyName System.Windows.Forms
-  
-  # Intentar con Adobe Acrobat
+
   try {
     $acrobat = New-Object -ComObject AcroExch.PDDoc
     if ($acrobat.Open("${escapedPath}")) {
       $acrobat.PrintPages(0, $acrobat.GetNumPages() - 1, 2, 1, 0)
-      Start-Sleep -Milliseconds 2000
+      Start-Sleep -Milliseconds 500
       $acrobat.Close()
       [System.Runtime.Interopservices.Marshal]::ReleaseComObject($acrobat) | Out-Null
       Write-Output "Impreso con Adobe"
@@ -865,13 +896,12 @@ try {
   } catch {
     Write-Output "Adobe no disponible: $_"
   }
-  
-  # Fallback: usar shell para imprimir
+
   $shell = New-Object -ComObject Shell.Application
   $folder = $shell.NameSpace((Split-Path "${escapedPath}"))
   $file = $folder.ParseName((Split-Path "${escapedPath}" -Leaf))
   $file.InvokeVerb("print")
-  Start-Sleep -Milliseconds 2000
+  Start-Sleep -Milliseconds 500
   Write-Output "Impreso con Shell"
   exit 0
 } catch {
@@ -881,8 +911,7 @@ try {
 `.trim();
 
         const printCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "${psScript.replace(/"/g, '\\"')}"`;
-
-        console.log('🖨️ [MAIN] Ejecutando impresión con PowerShell');
+        console.log('🖨️ [MAIN] Ejecutando impresión con PowerShell (debug PDF)');
 
         exec(printCommand, { timeout: 30000 }, (error, stdout, stderr) => {
           if (error) {
@@ -895,7 +924,6 @@ try {
             resolve({ success: true, printerName: targetPrinter, pdfPath });
           }
 
-          // Limpiar PDF después de 10 segundos
           setTimeout(() => {
             try {
               if (fs.existsSync(pdfPath)) {
@@ -2006,6 +2034,11 @@ app.whenReady().then(() => {
   // Load fiscal env before starting anything related to fiscal server
   loadFiscalEnv();
 
+  // Prevent Windows from suspending the app (critical for POS uptime on low-end PCs)
+  const { powerSaveBlocker } = require('electron');
+  const psbId = powerSaveBlocker.start('prevent-app-suspension');
+  console.log('[PERF] Power save blocker started (id:', psbId + ')');
+
   migrateToUnifiedSettings(app);
   splitFiscalResponsesFromUnifiedIfPresent(app);
 
@@ -2034,6 +2067,34 @@ app.whenReady().then(() => {
 
   registerCajaConfigHandlers(app);
   console.log('🏪 [CAJA] Caja config (JSON) initialized');
+
+  // App config handlers (UI settings like reduceAnimations, debugPdf)
+  ipcMain.handle('app-config-get', async () => {
+    try {
+      const { readSettings, normalizeUi } = require('./titaniopos-settings-file');
+      const config = normalizeUi(readSettings(app).ui);
+      return { success: true, config };
+    } catch (error) {
+      console.error('❌ [APP CONFIG] Error getting:', error);
+      return { success: false, error: error.message, config: { reduceAnimations: false } };
+    }
+  });
+
+  ipcMain.handle('app-config-save', async (event, partial) => {
+    try {
+      const { readSettings, writeSettings, normalizeUi } = require('./titaniopos-settings-file');
+      const s = readSettings(app);
+      s.ui = normalizeUi({ ...(s.ui || {}), ...(partial && typeof partial === 'object' ? partial : {}) });
+      writeSettings(app, s);
+      console.log('💾 [APP CONFIG] Saved:', s.ui);
+      return { success: true, config: s.ui };
+    } catch (error) {
+      console.error('❌ [APP CONFIG] Error saving:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  console.log('⚙️ [APP CONFIG] UI config handlers registered');
 
   // Start fiscal server automatically (async, non-blocking)
   (async () => {

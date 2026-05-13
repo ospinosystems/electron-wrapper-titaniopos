@@ -27,6 +27,7 @@ const DEFAULT_CONFIG = {
   usbPort: 'USB003',
   method: 'escpos',
   paperWidth: '80mm',
+  debugPdf: false,
   lastUpdated: null,
 };
 
@@ -90,7 +91,11 @@ function validateConfig(config) {
   if (!['58mm', '80mm'].includes(config.paperWidth)) {
     errors.push('Paper width must be either "58mm" or "80mm"');
   }
-  
+
+  if (typeof config.debugPdf !== 'boolean') {
+    errors.push('debugPdf must be a boolean');
+  }
+
   return {
     valid: errors.length === 0,
     errors

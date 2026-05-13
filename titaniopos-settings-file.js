@@ -28,6 +28,7 @@ const DEFAULT_THERMAL = {
   usbPort: 'USB003',
   method: 'escpos',
   paperWidth: '80mm',
+  debugPdf: false,
   lastUpdated: null,
 };
 
@@ -41,11 +42,16 @@ const DEFAULT_FISCAL = {
   lastConfigUpdate: '',
 };
 
+const DEFAULT_UI = {
+  reduceAnimations: false,
+};
+
 const DEFAULT_SETTINGS = {
   schemaVersion: 1,
   caja: { ...DEFAULT_CAJA },
   thermalPrinter: { ...DEFAULT_THERMAL },
   fiscal: { ...DEFAULT_FISCAL },
+  ui: { ...DEFAULT_UI },
 };
 
 
@@ -70,6 +76,10 @@ function normalizeFiscal(raw) {
   return { ...DEFAULT_FISCAL, ...raw };
 }
 
+function normalizeUi(raw) {
+  return { ...DEFAULT_UI, ...(raw || {}) };
+}
+
 function normalizeSettings(raw) {
   if (!raw || typeof raw !== 'object') return clone(DEFAULT_SETTINGS);
   return {
@@ -77,6 +87,7 @@ function normalizeSettings(raw) {
     caja: normalizeCaja(raw.caja || {}),
     thermalPrinter: normalizeThermal(raw.thermalPrinter || raw.printer || {}),
     fiscal: normalizeFiscal(raw.fiscal || {}),
+    ui: normalizeUi(raw.ui || {}),
   };
 }
 
@@ -258,8 +269,10 @@ module.exports = {
   normalizeCaja,
   normalizeThermal,
   normalizeFiscal,
+  normalizeUi,
   DEFAULT_SETTINGS,
   DEFAULT_CAJA,
+  DEFAULT_UI,
   migrateToUnifiedSettings,
   SETTINGS_DIR,
   SETTINGS_FILENAME,

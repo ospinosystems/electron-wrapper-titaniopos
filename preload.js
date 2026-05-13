@@ -88,6 +88,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** @param {object} partial - campos a fusionar en caja-config.json */
   cajaConfigSave: (partial) => ipcRenderer.invoke('caja-config-save', partial),
 
+  /** @returns {Promise<{ success: boolean, config: { reduceAnimations: boolean }, error?: string }>} */
+  appConfigGet: () => ipcRenderer.invoke('app-config-get'),
+
+  /** @param {object} partial - campos a fusionar en ui config */
+  appConfigSave: (partial) => ipcRenderer.invoke('app-config-save', partial),
+
   /**
    * Get list of available printers
    * @returns {Promise<{success: boolean, printers: array}>}

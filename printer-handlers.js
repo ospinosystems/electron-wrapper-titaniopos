@@ -86,31 +86,35 @@ function registerPrinterHandlers(app, mainWindow) {
         };
       }
       
-      console.log(`🖨️ [PRINT] Using method: ${config.method}`);
-      
-      // Use configured method
+      // Force ESC/POS for low-end CPU performance; fallback if explicitly set to native
+      const effectiveMethod = (config.method === 'native') ? 'native' : 'escpos';
+      if (config.method !== effectiveMethod) {
+        console.log(`🖨️ [PRINT] Method "${config.method}" invalid; falling back to ESC/POS`);
+      } else {
+        console.log(`🖨️ [PRINT] Using method: ${effectiveMethod}`);
+      }
+
+      // Warn if content looks like ESC/POS but method is native
+      if (effectiveMethod === 'native' && /[\x1B\x1D]/.test(content)) {
+        console.warn('⚠️ [PRINT] Content contains ESC/POS commands but method is native. Consider switching to ESC/POS for better performance.');
+      }
+
       let result;
-      if (config.method === 'native') {
-        // Native API expects HTML content
+      if (effectiveMethod === 'native') {
         result = await printerMethods.printWithNativeAPI(
           app,
           config.printerName,
           content,
-          config.paperWidth
+          config.paperWidth,
+          { debugPdf: config.debugPdf === true }
         );
-      } else if (config.method === 'escpos') {
-        // ESC/POS expects plain text content
+      } else {
         result = await printerMethods.printWithESCPOS(
           app,
           config.printerName,
           content,
           config.usbPort
         );
-      } else {
-        return { 
-          success: false, 
-          error: `Unknown print method: ${config.method}` 
-        };
       }
       
       return result;
@@ -134,7 +138,8 @@ function registerPrinterHandlers(app, mainWindow) {
           app,
           printerName,
           content,
-          options.paperWidth || '80mm'
+          options.paperWidth || '80mm',
+          { debugPdf: options.debugPdf === true }
         );
       } else if (method === 'escpos') {
         result = await printerMethods.printWithESCPOS(
