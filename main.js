@@ -22,6 +22,7 @@ if (process.platform === 'win32') {
 const { applyElectronOptimizations } = require('./electron-optimization');
 applyElectronOptimizations();
 
+const crypto = require('crypto');
 const { autoUpdater } = require('electron-updater');
 const jwt = require('jsonwebtoken');
 const { registerPrinterHandlers } = require('./printer-handlers');
@@ -70,8 +71,28 @@ const loadEnvFile = (envPath, logTag) => {
 const ROOT_ENV_PATH = path.join(__dirname, '.env');
 loadEnvFile(ROOT_ENV_PATH, ROOT_ENV_PATH);
 
-// Secret key para JWT - en producción debería estar en variable de entorno
+// Secret key para JWT (legado) y HMAC (nuevo formato) — en producción debe venir por env.
 const JWT_SECRET = process.env.TITANIOPOS_JWT_SECRET || 'titaniopos-secure-key-2024-change-in-production';
+const BACKUP_HMAC_SECRET = process.env.TITANIOPOS_BACKUP_SECRET || JWT_SECRET;
+const BACKUP_FORMAT_VERSION = 2;
+
+// Firma HMAC-SHA256 sobre el JSON canónico de `data`. ~1ms para 50KB en Celeron — ~10x más
+// barato que JWT y el archivo queda legible: el JSON de las órdenes va plano y la firma es un
+// campo aparte. Si alguien edita el archivo a mano, la verificación falla al leer.
+const computeBackupSignature = (data) => {
+  const canonical = JSON.stringify(data);
+  return crypto.createHmac('sha256', BACKUP_HMAC_SECRET).update(canonical).digest('hex');
+};
+
+const verifyBackupSignature = (data, signature) => {
+  if (typeof signature !== 'string' || !signature) return false;
+  const expected = computeBackupSignature(data);
+  // timingSafeEqual exige buffers de la misma longitud — si difieren, no coinciden.
+  const a = Buffer.from(expected, 'hex');
+  const b = Buffer.from(signature, 'hex');
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+};
 
 const getBackupDir = () => {
   const documentsPath = app.getPath('documents');
@@ -1083,20 +1104,52 @@ const normalizeBackupData = (raw, fallbackDate = getDateString()) => {
   };
 };
 
+// Escribe el backup en formato firmado v2: { version, data, signature }.
+// `data` es JSON plano y legible. `signature` es HMAC-SHA256 de JSON.stringify(data).
 const writeBackupFileAtomic = (filePath, backupData, useJwt = BACKUP_WRITE_JWT) => {
   const normalized = normalizeBackupData(backupData);
-  const payload = useJwt
-    ? { token: encodeToJWT(normalized) }
-    : normalized;
+  let payload;
+  if (useJwt) {
+    // Legado: si alguien activa BACKUP_WRITE_JWT, respetamos el formato viejo.
+    payload = { token: encodeToJWT(normalized) };
+  } else {
+    payload = {
+      version: BACKUP_FORMAT_VERSION,
+      data: normalized,
+      signature: computeBackupSignature(normalized),
+    };
+  }
   const tmpPath = `${filePath}.tmp`;
   fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), 'utf-8');
   fs.renameSync(tmpPath, filePath);
 };
 
+// Lee y normaliza un backup, aceptando tres formatos:
+//   v2 firmado:  { version: 2, data, signature }     → verifica HMAC, falla si fue manipulado
+//   legado JWT:  { token: "..." }                    → decodifica, migra a v2 si corresponde
+//   legado v1:   { lastSync, date, orders, ... }     → sin firma, lo aceptamos y migramos a v2
 const readBackupFileNormalized = (backupPath, opts = {}) => {
-  const { migrateJwtToPlain = !BACKUP_WRITE_JWT } = opts;
+  const { migrateJwtToPlain = !BACKUP_WRITE_JWT, allowUnsigned = true } = opts;
   const fileContent = JSON.parse(fs.readFileSync(backupPath, 'utf-8'));
 
+  // v2 firmado
+  if (
+    fileContent &&
+    typeof fileContent === 'object' &&
+    typeof fileContent.signature === 'string' &&
+    fileContent.data &&
+    typeof fileContent.data === 'object'
+  ) {
+    const normalized = normalizeBackupData(fileContent.data);
+    if (!verifyBackupSignature(fileContent.data, fileContent.signature)) {
+      const err = new Error('Firma de backup inválida (archivo manipulado)');
+      err.code = 'BACKUP_SIGNATURE_INVALID';
+      throw err;
+    }
+    return normalized;
+  }
+
+  // Legado JWT
   if (fileContent && typeof fileContent === 'object' && fileContent.token) {
     const decoded = decodeBackupTokenSafely(fileContent.token);
     if (!decoded) {
@@ -1108,15 +1161,29 @@ const readBackupFileNormalized = (backupPath, opts = {}) => {
     if (migrateJwtToPlain) {
       try {
         writeBackupFileAtomic(backupPath, normalized, false);
-        console.log(`♻️ [BACKUP] Migrado JWT → JSON plano: ${path.basename(backupPath)}`);
+        console.log(`♻️ [BACKUP] Migrado JWT → firmado v2: ${path.basename(backupPath)}`);
       } catch (migrationError) {
-        console.warn('⚠️ [BACKUP] No se pudo migrar archivo JWT a plano:', migrationError.message);
+        console.warn('⚠️ [BACKUP] No se pudo migrar archivo JWT a v2:', migrationError.message);
       }
     }
     return normalized;
   }
 
-  return normalizeBackupData(fileContent);
+  // Legado v1 (JSON plano sin firma). Lo aceptamos solo si `allowUnsigned` y migramos a v2.
+  if (allowUnsigned) {
+    const normalized = normalizeBackupData(fileContent);
+    try {
+      writeBackupFileAtomic(backupPath, normalized, false);
+      console.log(`♻️ [BACKUP] Migrado v1 sin firma → firmado v2: ${path.basename(backupPath)}`);
+    } catch (migrationError) {
+      console.warn('⚠️ [BACKUP] No se pudo migrar v1 a v2:', migrationError.message);
+    }
+    return normalized;
+  }
+
+  const err = new Error('Backup sin firma rechazado');
+  err.code = 'BACKUP_UNSIGNED';
+  throw err;
 };
 
 const mergeOrdersIntoMap = (map, orders) => {
@@ -1190,12 +1257,22 @@ ipcMain.handle('backup-get-all-orders', async (event, range) => {
       try {
         data = readBackupFileNormalized(backupPath, { migrateJwtToPlain: !BACKUP_WRITE_JWT });
       } catch (readError) {
-        const errorCode = readError?.code === 'BACKUP_TOKEN_UNSUPPORTED'
-          ? 'BACKUP_TOKEN_UNSUPPORTED'
-          : 'JWT_INVALID_SIGNATURE';
-        const errorMessage = errorCode === 'BACKUP_TOKEN_UNSUPPORTED'
-          ? 'Token sin formato soportado'
-          : 'Token JWT inválido o manipulado';
+        const code = readError?.code;
+        let errorCode;
+        let errorMessage;
+        if (code === 'BACKUP_SIGNATURE_INVALID') {
+          errorCode = 'BACKUP_SIGNATURE_INVALID';
+          errorMessage = 'Firma de backup inválida (archivo manipulado)';
+        } else if (code === 'BACKUP_TOKEN_UNSUPPORTED') {
+          errorCode = 'BACKUP_TOKEN_UNSUPPORTED';
+          errorMessage = 'Token sin formato soportado';
+        } else if (code === 'BACKUP_UNSIGNED') {
+          errorCode = 'BACKUP_UNSIGNED';
+          errorMessage = 'Backup sin firma rechazado';
+        } else {
+          errorCode = 'JWT_INVALID_SIGNATURE';
+          errorMessage = 'Token JWT inválido o manipulado';
+        }
         console.error('❌ [BACKUP] Error leyendo backup:', readError);
         return {
           success: false,
@@ -1266,6 +1343,172 @@ ipcMain.handle('backup-delete-order', async (event, orderId) => {
     return { success: true };
   } catch (error) {
     console.error('❌ [BACKUP] Error eliminando:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// ==================== ADMIN: INSPECCIÓN / RE-FIRMA DE BACKUPS ====================
+// Estos handlers están pensados para una ventana admin oculta en la app: permiten listar
+// archivos del directorio de backup, leer uno sin verificar firma (para inspeccionarlo aunque
+// esté corrupto), reportar si la firma es válida, y re-firmar un payload editado manualmente.
+
+// Gate de contraseña para los handlers admin. Mantenemos en memoria si la sesión
+// del renderer ya se autenticó — al cerrar la app el flag se pierde y hay que
+// volver a teclear la contraseña.
+let inspectorUnlocked = false;
+
+const getInspectorPassword = () => {
+  const dedicated = (process.env.TITANIOPOS_INSPECTOR_PASSWORD || '').trim();
+  if (dedicated) return dedicated;
+  // Fallback: reutiliza la contraseña de DevTools si no se definió una dedicada.
+  return (process.env.TITANIOPOS_DEVTOOLS_PASSWORD || '').trim();
+};
+
+ipcMain.handle('backup-admin-unlock', async (event, password) => {
+  const expected = getInspectorPassword();
+  if (!expected) {
+    return {
+      success: false,
+      error:
+        'No hay contraseña configurada. Añade TITANIOPOS_INSPECTOR_PASSWORD al .env de la app.',
+    };
+  }
+  if (typeof password !== 'string' || !password) {
+    return { success: false, error: 'Contraseña requerida' };
+  }
+  const a = Buffer.from(password);
+  const b = Buffer.from(expected);
+  const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
+  if (!ok) return { success: false, error: 'Contraseña incorrecta' };
+  inspectorUnlocked = true;
+  return { success: true };
+});
+
+ipcMain.handle('backup-admin-lock', async () => {
+  inspectorUnlocked = false;
+  return { success: true };
+});
+
+ipcMain.handle('backup-admin-status', async () => {
+  return { unlocked: inspectorUnlocked, configured: Boolean(getInspectorPassword()) };
+});
+
+const requireInspectorUnlocked = () => {
+  if (!inspectorUnlocked) {
+    return { success: false, error: 'Inspector bloqueado', code: 'LOCKED' };
+  }
+  return null;
+};
+
+ipcMain.handle('backup-admin-list-files', async () => {
+  const locked = requireInspectorUnlocked();
+  if (locked) return { ...locked, files: [] };
+  try {
+    const backupDir = getBackupDir();
+    const entries = fs.readdirSync(backupDir, { withFileTypes: true });
+    const files = entries
+      .filter((e) => e.isFile() && e.name.endsWith('.json'))
+      .map((e) => {
+        const full = path.join(backupDir, e.name);
+        const stat = fs.statSync(full);
+        return {
+          name: e.name,
+          path: full,
+          size: stat.size,
+          mtime: stat.mtimeMs,
+        };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+    return { success: true, dir: backupDir, files };
+  } catch (error) {
+    return { success: false, error: error.message, files: [] };
+  }
+});
+
+// Lee un archivo de backup y reporta su formato + estado de firma SIN lanzar excepción.
+// Devuelve siempre `data` decodificado cuando es posible — útil para que el admin vea
+// el contenido aunque la firma esté rota.
+ipcMain.handle('backup-admin-inspect', async (event, filePath) => {
+  const locked = requireInspectorUnlocked();
+  if (locked) return locked;
+  try {
+    if (typeof filePath !== 'string' || !filePath) {
+      return { success: false, error: 'Ruta inválida' };
+    }
+    const backupDir = getBackupDir();
+    const resolved = path.resolve(filePath);
+    // Sandbox: solo permitimos rutas dentro del directorio oficial de backups.
+    if (!resolved.startsWith(path.resolve(backupDir) + path.sep) && resolved !== path.resolve(backupDir)) {
+      return { success: false, error: 'Ruta fuera del directorio de backups' };
+    }
+    if (!fs.existsSync(resolved)) return { success: false, error: 'Archivo no existe' };
+
+    const raw = fs.readFileSync(resolved, 'utf-8');
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return { success: true, format: 'invalid-json', signatureValid: false, data: null, raw };
+    }
+
+    // v2 firmado
+    if (parsed && typeof parsed === 'object' && typeof parsed.signature === 'string' && parsed.data) {
+      const valid = verifyBackupSignature(parsed.data, parsed.signature);
+      return {
+        success: true,
+        format: 'v2-signed',
+        signatureValid: valid,
+        data: normalizeBackupData(parsed.data),
+        version: parsed.version || 2,
+      };
+    }
+
+    // Legado JWT
+    if (parsed && typeof parsed === 'object' && parsed.token) {
+      const decoded = decodeBackupTokenSafely(parsed.token);
+      return {
+        success: true,
+        format: 'legacy-jwt',
+        signatureValid: Boolean(decoded),
+        data: decoded ? normalizeBackupData(decoded) : null,
+      };
+    }
+
+    // v1 plano
+    return {
+      success: true,
+      format: 'v1-unsigned',
+      signatureValid: false,
+      data: normalizeBackupData(parsed),
+    };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Re-firma un payload (lo que el admin acaba de editar) y lo escribe en formato v2.
+// Esto es lo que usa la ventana admin cuando tú editas un .json y quieres que la app
+// vuelva a aceptarlo: pasas el `data` modificado y se sobrescribe el archivo con firma válida.
+ipcMain.handle('backup-admin-resign', async (event, filePath, data) => {
+  const locked = requireInspectorUnlocked();
+  if (locked) return locked;
+  try {
+    if (typeof filePath !== 'string' || !filePath) {
+      return { success: false, error: 'Ruta inválida' };
+    }
+    const backupDir = getBackupDir();
+    const resolved = path.resolve(filePath);
+    if (!resolved.startsWith(path.resolve(backupDir) + path.sep)) {
+      return { success: false, error: 'Ruta fuera del directorio de backups' };
+    }
+    if (!data || typeof data !== 'object') {
+      return { success: false, error: 'data inválido' };
+    }
+    writeBackupFileAtomic(resolved, data, false);
+    console.log(`✍️ [BACKUP] Re-firmado por admin: ${path.basename(resolved)}`);
+    return { success: true };
+  } catch (error) {
+    console.error('❌ [BACKUP] Error re-firmando:', error);
     return { success: false, error: error.message };
   }
 });

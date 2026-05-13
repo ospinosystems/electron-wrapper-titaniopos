@@ -65,6 +65,37 @@ contextBridge.exposeInMainWorld('electronAPI', {
    */
   backupDeleteOrder: (orderId) => ipcRenderer.invoke('backup-delete-order', orderId),
 
+  /**
+   * Admin: desbloquear inspector con contraseña (verificada en main).
+   * @param {string} password
+   */
+  backupAdminUnlock: (password) => ipcRenderer.invoke('backup-admin-unlock', password),
+
+  /** Admin: bloquear inspector (cerrar sesión del gate). */
+  backupAdminLock: () => ipcRenderer.invoke('backup-admin-lock'),
+
+  /** Admin: estado del gate (unlocked + configured). */
+  backupAdminStatus: () => ipcRenderer.invoke('backup-admin-status'),
+
+  /**
+   * Admin: listar archivos del directorio de backups (requiere unlock previo).
+   * @returns {Promise<{success: boolean, dir: string, files: Array<{name,path,size,mtime}>}>}
+   */
+  backupAdminListFiles: () => ipcRenderer.invoke('backup-admin-list-files'),
+
+  /**
+   * Admin: leer un backup reportando su formato y validez de firma sin lanzar.
+   * @param {string} filePath
+   */
+  backupAdminInspect: (filePath) => ipcRenderer.invoke('backup-admin-inspect', filePath),
+
+  /**
+   * Admin: re-firmar un payload editado a mano y sobrescribir el archivo en formato v2.
+   * @param {string} filePath
+   * @param {object} data - normalized backup data (lastSync, date, count, orders)
+   */
+  backupAdminResign: (filePath, data) => ipcRenderer.invoke('backup-admin-resign', filePath, data),
+
   // ==================== PRINTER CONFIGURATION ====================
   
   /**
