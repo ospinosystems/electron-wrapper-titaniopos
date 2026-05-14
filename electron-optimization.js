@@ -81,6 +81,43 @@ function applyElectronOptimizations() {
     console.warn('[PERF] Could not disable GPU workarounds:', e.message);
   }
 
+  // 6. Compositing tweaks for Celeron / Intel HD: zero-copy transfer + GPU rasterization
+  //    pushes paint work off the CPU; capping raster threads to 1 prevents the GPU
+  //    queue from saturating on low-core machines.
+  try {
+    app.commandLine.appendSwitch('enable-zero-copy', '');
+    app.commandLine.appendSwitch('enable-gpu-rasterization', '');
+    app.commandLine.appendSwitch('canvas-msaa-sample-count', '0');
+    app.commandLine.appendSwitch('num-raster-threads', '1');
+    console.log('[PERF] Compositing tuned (zero-copy + GPU raster + 1 raster thread)');
+  } catch (e) {
+    console.warn('[PERF] Could not tune compositing:', e.message);
+  }
+
+  // 7. Disable expensive features that hit the renderer on every keystroke
+  //    or paint cycle and have no effect on a POS.
+  try {
+    app.commandLine.appendSwitch('disable-features', [
+      'CalculateNativeWinOcclusion',
+      'HardwareMediaKeyHandling',
+      'WebRtcHideLocalIpsWithMdns',
+      'IdleDetection',
+      'LazyFrameLoading',
+    ].join(','));
+    console.log('[PERF] Extra Chromium features disabled');
+  } catch (e) {
+    console.warn('[PERF] Could not disable extra features:', e.message);
+  }
+
+  // 8. Single renderer process — we never open child windows for the POS UI,
+  //    so collapsing them avoids the per-process overhead (~30-50 MB each).
+  try {
+    app.commandLine.appendSwitch('renderer-process-limit', '2');
+    console.log('[PERF] Renderer process limit set to 2');
+  } catch (e) {
+    console.warn('[PERF] Could not set renderer process limit:', e.message);
+  }
+
   console.log('[PERF] Conservative low-end PC optimizations applied');
 }
 
