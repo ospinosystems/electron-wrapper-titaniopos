@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(node -c electron-optimization.js)",
-      "Bash(node -c main.js)"
+      "Bash(node -c main.js)",
+      "Bash(grep -v \"^[0-9]\\\\+\\\\\\(\\\\.7z\\\\\\)\\\\?$\")",
+      "Read(//c/Users/Orbit/AppData/Local/electron-builder/Cache//**)"
     ]
   }
 }

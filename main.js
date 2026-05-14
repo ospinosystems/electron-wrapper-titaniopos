@@ -461,12 +461,10 @@ function createWindow() {
     height: 800,
     minWidth: 1024,
     minHeight: 600,
-    // Painting the window with the POS base color before the PWA loads
-    // avoids the ~80 ms white flash on Celeron / Intel HD.
+    // backgroundColor evita el flash blanco inicial sin afectar la carga.
+    // No usamos show:false porque cuando la PWA tarda en responder, el
+    // usuario se queda mirando una pantalla gris sin feedback.
     backgroundColor: '#111827',
-    // Hold the window hidden until the renderer fires 'ready-to-show'.
-    // Otherwise Chromium displays a blank frame while V8 still parses JS.
-    show: false,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -475,15 +473,6 @@ function createWindow() {
       spellcheck: false,
       enablePreferredSizeMode: false,
       offscreen: false,
-      // POS UI does not use WebGL or plugins — turning them off releases
-      // a GPU context and ~10 MB of resident memory per renderer.
-      webgl: false,
-      plugins: false,
-      // Cache compiled V8 bytecode between runs. First boot is unchanged,
-      // every subsequent boot shaves ~200 ms off renderer JS parse time.
-      v8CacheOptions: 'code',
-      enableWebSQL: false,
-      experimentalFeatures: false,
     },
     icon: winIcon,
     autoHideMenuBar: true,
@@ -491,10 +480,6 @@ function createWindow() {
   });
 
   mainWindow.loadURL(APP_URL);
-
-  mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
-  });
 
   if (process.platform === 'win32' && winIcon) {
     mainWindow.once('show', () => {
