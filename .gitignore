@@ -12,7 +12,9 @@ node_modules/
 # Build outputs
 dist/
 out/
-build/
+# NO ignoramos `build/` — nuestra carpeta build/ contiene assets de instalador
+# NSIS que electron-builder necesita (package.json → nsis.include apunta a
+# `build/installer.nsh`). Outputs de empaquetado van a dist/, no a build/.
 release/
 tmp/
 temp/
