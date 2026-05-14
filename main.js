@@ -1013,14 +1013,14 @@ ipcMain.handle('print-to-printer', async (event, printerName, htmlContent, optio
 
 // ==================== BACKUP DE ÓRDENES ====================
 
-// Guardar una orden en backup
+// Guardar una orden en backup (escritura asíncrona, sin pretty-print)
 ipcMain.handle('backup-save-order', async (event, order) => {
   try {
     const backupDir = getBackupDir();
     const fileName = `order_${order.id || Date.now()}.json`;
     const filePath = path.join(backupDir, fileName);
 
-    fs.writeFileSync(filePath, JSON.stringify(order, null, 2), 'utf-8');
+    await fs.promises.writeFile(filePath, JSON.stringify(order), 'utf-8');
     console.log('💾 [BACKUP] Orden guardada:', fileName);
 
     return { success: true, path: filePath };
@@ -1106,6 +1106,10 @@ const normalizeBackupData = (raw, fallbackDate = getDateString()) => {
 
 // Escribe el backup en formato firmado v2: { version, data, signature }.
 // `data` es JSON plano y legible. `signature` es HMAC-SHA256 de JSON.stringify(data).
+//
+// Versión SINCRÓNICA — solo se usa en operaciones críticas de admin (re-firma) y
+// migración legacy (JWT → v2) durante la lectura. El path de "guardado normal"
+// (cada vez que cambia el store) ya no la usa: ver `writeBackupFileAtomicAsync`.
 const writeBackupFileAtomic = (filePath, backupData, useJwt = BACKUP_WRITE_JWT) => {
   const normalized = normalizeBackupData(backupData);
   let payload;
@@ -1120,8 +1124,36 @@ const writeBackupFileAtomic = (filePath, backupData, useJwt = BACKUP_WRITE_JWT) 
     };
   }
   const tmpPath = `${filePath}.tmp`;
-  fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), 'utf-8');
+  // Sin pretty-print: en escrituras frecuentes, indentar duplica el tamaño y
+  // ralentiza I/O. Los inspect tools admin parsean JSON normal — no necesitan
+  // espacios. Para inspección humana, abrir en un editor que reformatee.
+  fs.writeFileSync(tmpPath, JSON.stringify(payload), 'utf-8');
   fs.renameSync(tmpPath, filePath);
+};
+
+// Versión ASÍNCRONA del writer atómico — para el path caliente de "guardar el
+// store completo". No bloquea el event loop de Electron, lo cual es crítico en
+// Celeron con HDD donde `writeFileSync` de 500KB-1MB puede tomar 100-300ms y
+// congelar el printer, fiscal handlers e IPC durante ese tiempo.
+//
+// Mantiene la misma semántica de atomicidad: escribe a `.tmp`, luego rename
+// atómico al destino. Si algo falla antes del rename, el archivo destino queda
+// intacto (no medio escrito).
+const writeBackupFileAtomicAsync = async (filePath, backupData, useJwt = BACKUP_WRITE_JWT) => {
+  const normalized = normalizeBackupData(backupData);
+  let payload;
+  if (useJwt) {
+    payload = { token: encodeToJWT(normalized) };
+  } else {
+    payload = {
+      version: BACKUP_FORMAT_VERSION,
+      data: normalized,
+      signature: computeBackupSignature(normalized),
+    };
+  }
+  const tmpPath = `${filePath}.tmp`;
+  await fs.promises.writeFile(tmpPath, JSON.stringify(payload), 'utf-8');
+  await fs.promises.rename(tmpPath, filePath);
 };
 
 // Lee y normaliza un backup, aceptando tres formatos:
@@ -1202,13 +1234,16 @@ const mergeOrdersIntoMap = (map, orders) => {
   }
 };
 
-// Guardar múltiples órdenes - backup diario (plano por defecto, JWT opcional por flag)
+// Guardar múltiples órdenes - backup diario (plano por defecto, JWT opcional por flag).
+//
+// Escritura ASÍNCRONA: no bloquea el event loop. El renderer mantiene el debounce
+// + hash-skip (ver use-checkout-orders backup subscription) para evitar rewrites
+// innecesarios. Acá nos limitamos a serializar+firmar+escribir lo más rápido posible.
 ipcMain.handle('backup-save-all-orders', async (event, orders) => {
   try {
     const backupDir = getBackupDir();
     const dateStr = getDateString();
 
-    // Solo archivo de backup diario
     const dailyBackupPath = path.join(backupDir, `backup_${dateStr}.json`);
 
     const backupData = normalizeBackupData({
@@ -1218,7 +1253,7 @@ ipcMain.handle('backup-save-all-orders', async (event, orders) => {
       orders: Array.isArray(orders) ? orders : [],
     }, dateStr);
 
-    writeBackupFileAtomic(dailyBackupPath, backupData, BACKUP_WRITE_JWT);
+    await writeBackupFileAtomicAsync(dailyBackupPath, backupData, BACKUP_WRITE_JWT);
 
     const modeLabel = BACKUP_WRITE_JWT ? 'JWT' : 'PLANO';
     console.log(`💾 [BACKUP] ${backupData.count} órdenes guardadas (${modeLabel}) en backup_${dateStr}.json`);
@@ -1330,13 +1365,13 @@ ipcMain.handle('backup-delete-order', async (event, orderId) => {
       data.orders = data.orders.filter((o) => String(o.id) !== String(orderId));
       data.count = data.orders.length;
       data.lastSync = new Date().toISOString();
-      writeBackupFileAtomic(todayBackupPath, data, BACKUP_WRITE_JWT);
+      await writeBackupFileAtomicAsync(todayBackupPath, data, BACKUP_WRITE_JWT);
     }
 
     // También eliminar archivo individual si existe
     const individualPath = path.join(backupDir, `order_${orderId}.json`);
     if (fs.existsSync(individualPath)) {
-      fs.unlinkSync(individualPath);
+      await fs.promises.unlink(individualPath);
     }
 
     console.log('🗑️ [BACKUP] Orden eliminada:', orderId);
@@ -1352,16 +1387,28 @@ ipcMain.handle('backup-delete-order', async (event, orderId) => {
 // archivos del directorio de backup, leer uno sin verificar firma (para inspeccionarlo aunque
 // esté corrupto), reportar si la firma es válida, y re-firmar un payload editado manualmente.
 
-// Gate de contraseña para los handlers admin. Mantenemos en memoria si la sesión
-// del renderer ya se autenticó — al cerrar la app el flag se pierde y hay que
-// volver a teclear la contraseña.
-let inspectorUnlocked = false;
+// Gate de contraseña para los handlers admin.
+//
+// Antes: una vez desbloqueado, el flag duraba toda la vida del proceso → entrar
+// una vez en el día dejaba el inspector accesible hasta que se cerrara la app.
+// Ahora: idle-timeout. Cada operación admin extiende la sesión 5 minutos. Si
+// pasan 5 min sin actividad, vuelve a pedir contraseña.
+const INSPECTOR_IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutos
+let inspectorUnlockedUntil = 0; // epoch ms; 0 = bloqueado
 
 const getInspectorPassword = () => {
   const dedicated = (process.env.TITANIOPOS_INSPECTOR_PASSWORD || '').trim();
   if (dedicated) return dedicated;
   // Fallback: reutiliza la contraseña de DevTools si no se definió una dedicada.
   return (process.env.TITANIOPOS_DEVTOOLS_PASSWORD || '').trim();
+};
+
+const isInspectorUnlocked = () => Date.now() < inspectorUnlockedUntil;
+
+const touchInspectorSession = () => {
+  if (isInspectorUnlocked()) {
+    inspectorUnlockedUntil = Date.now() + INSPECTOR_IDLE_TIMEOUT_MS;
+  }
 };
 
 ipcMain.handle('backup-admin-unlock', async (event, password) => {
@@ -1380,23 +1427,38 @@ ipcMain.handle('backup-admin-unlock', async (event, password) => {
   const b = Buffer.from(expected);
   const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
   if (!ok) return { success: false, error: 'Contraseña incorrecta' };
-  inspectorUnlocked = true;
-  return { success: true };
+  inspectorUnlockedUntil = Date.now() + INSPECTOR_IDLE_TIMEOUT_MS;
+  return { success: true, idleTimeoutMs: INSPECTOR_IDLE_TIMEOUT_MS };
 });
 
 ipcMain.handle('backup-admin-lock', async () => {
-  inspectorUnlocked = false;
+  inspectorUnlockedUntil = 0;
   return { success: true };
 });
 
 ipcMain.handle('backup-admin-status', async () => {
-  return { unlocked: inspectorUnlocked, configured: Boolean(getInspectorPassword()) };
+  return {
+    unlocked: isInspectorUnlocked(),
+    configured: Boolean(getInspectorPassword()),
+    idleTimeoutMs: INSPECTOR_IDLE_TIMEOUT_MS,
+    expiresAt: isInspectorUnlocked() ? inspectorUnlockedUntil : null,
+  };
+});
+
+// Extiende la sesión cuando el renderer reporta actividad (mouse/teclado).
+// Evita que se bloquee mientras el usuario está mirando o editando.
+ipcMain.handle('backup-admin-touch', async () => {
+  if (!isInspectorUnlocked()) return { unlocked: false };
+  touchInspectorSession();
+  return { unlocked: true, expiresAt: inspectorUnlockedUntil };
 });
 
 const requireInspectorUnlocked = () => {
-  if (!inspectorUnlocked) {
+  if (!isInspectorUnlocked()) {
     return { success: false, error: 'Inspector bloqueado', code: 'LOCKED' };
   }
+  // Cualquier operación válida extiende la sesión — actividad real.
+  touchInspectorSession();
   return null;
 };
 

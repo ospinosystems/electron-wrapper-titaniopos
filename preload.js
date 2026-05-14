@@ -74,8 +74,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Admin: bloquear inspector (cerrar sesión del gate). */
   backupAdminLock: () => ipcRenderer.invoke('backup-admin-lock'),
 
-  /** Admin: estado del gate (unlocked + configured). */
+  /** Admin: estado del gate (unlocked + configured + idleTimeoutMs + expiresAt). */
   backupAdminStatus: () => ipcRenderer.invoke('backup-admin-status'),
+
+  /** Admin: extiende la sesión por actividad (mouse/teclado en el renderer). */
+  backupAdminTouch: () => ipcRenderer.invoke('backup-admin-touch'),
 
   /**
    * Admin: listar archivos del directorio de backups (requiere unlock previo).
