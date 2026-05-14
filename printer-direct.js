@@ -13,6 +13,7 @@
  * In production, the EXE is shipped via electron-builder extraResources.
  */
 
+
 const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
