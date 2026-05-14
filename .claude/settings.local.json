@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -c electron-optimization.js)",
+      "Bash(node -c main.js)"
+    ]
+  }
+}

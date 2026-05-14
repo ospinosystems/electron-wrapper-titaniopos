@@ -19,7 +19,11 @@ if (process.platform === 'win32') {
 }
 
 // Apply low-end PC optimizations BEFORE anything else (must run before app.ready)
-const { applyElectronOptimizations } = require('./electron-optimization');
+const {
+  applyElectronOptimizations,
+  applyRuntimeOptimizations,
+  raiseRendererPriority,
+} = require('./electron-optimization');
 applyElectronOptimizations();
 
 const crypto = require('crypto');
@@ -276,6 +280,24 @@ function setupNativeContextMenu(window) {
   });
 }
 
+// Cierra una BrowserWindow efímera de impresión y dispara GC manual en el main
+// process. Las print windows acumulan buffers de PDF/imagen que V8 sólo libera
+// cuando le da la gana — en Celeron 4 GB ese delay hace que la siguiente venta
+// arranque ya en presión de memoria. El delay de 500 ms da tiempo a que
+// Chromium destruya el renderer antes de pedir el GC.
+function closeAndGcPrintWindow(printWindow) {
+  try {
+    if (printWindow && !printWindow.isDestroyed()) printWindow.close();
+  } catch (_) {
+    /* ignore */
+  }
+  if (global.gc) {
+    setTimeout(() => {
+      try { global.gc(); } catch (_) { /* ignore */ }
+    }, 500);
+  }
+}
+
 // icon.ico no puede cargarse con nativeImage desde dentro de app.asar en Windows.
 // En package.json: asarUnpack de archivos .ico → app.asar.unpacked.
 function getAppIconPath() {
@@ -439,6 +461,12 @@ function createWindow() {
     height: 800,
     minWidth: 1024,
     minHeight: 600,
+    // Painting the window with the POS base color before the PWA loads
+    // avoids the ~80 ms white flash on Celeron / Intel HD.
+    backgroundColor: '#111827',
+    // Hold the window hidden until the renderer fires 'ready-to-show'.
+    // Otherwise Chromium displays a blank frame while V8 still parses JS.
+    show: false,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -447,6 +475,15 @@ function createWindow() {
       spellcheck: false,
       enablePreferredSizeMode: false,
       offscreen: false,
+      // POS UI does not use WebGL or plugins — turning them off releases
+      // a GPU context and ~10 MB of resident memory per renderer.
+      webgl: false,
+      plugins: false,
+      // Cache compiled V8 bytecode between runs. First boot is unchanged,
+      // every subsequent boot shaves ~200 ms off renderer JS parse time.
+      v8CacheOptions: 'code',
+      enableWebSQL: false,
+      experimentalFeatures: false,
     },
     icon: winIcon,
     autoHideMenuBar: true,
@@ -454,6 +491,10 @@ function createWindow() {
   });
 
   mainWindow.loadURL(APP_URL);
+
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+  });
 
   if (process.platform === 'win32' && winIcon) {
     mainWindow.once('show', () => {
@@ -464,6 +505,12 @@ function createWindow() {
       }
     });
   }
+
+  // Renderer is spawned NORMAL even when main is HIGH — raise it once the
+  // PID is real (did-finish-load is the first event with a valid OS PID).
+  mainWindow.webContents.once('did-finish-load', () => {
+    raiseRendererPriority(mainWindow.webContents);
+  });
 
   setupNativeContextMenu(mainWindow);
   buildApplicationMenu();
@@ -886,12 +933,12 @@ function printHtmlInHiddenWindow(html, printerName = null, pageWidth = '80mm', o
           };
           return printWindow.webContents.print(printOptions, (success, failureReason) => {
             console.log(success ? '✅ [MAIN] Print sent' : `❌ [MAIN] Failed: ${failureReason}`);
-            try { printWindow.close(); } catch (e) {}
+            closeAndGcPrintWindow(printWindow);
             resolve({ success, printerName: targetPrinter, error: success ? undefined : failureReason });
           });
         }
 
-        printWindow.close();
+        closeAndGcPrintWindow(printWindow);
 
         // Legacy PDF-based printing for debug mode only
         const { exec } = require('child_process');
@@ -957,7 +1004,7 @@ try {
           }, 10000);
         });
       } catch (error) {
-        printWindow.close();
+        closeAndGcPrintWindow(printWindow);
         reject(error);
       }
     });
@@ -1691,7 +1738,7 @@ ipcMain.handle('printer-test-native', async (event, printerName, testContent) =>
       printWindow.webContents.print(printOptions, (success, failureReason) => {
         console.log(success ? ' Impresión enviada' : ` Falló: ${failureReason}`);
 
-        printWindow.close();
+        closeAndGcPrintWindow(printWindow);
 
         // Limpiar archivo HTML después de un tiempo
         setTimeout(() => {
@@ -1762,7 +1809,7 @@ ipcMain.handle('printer-test-pdf', async (event, printerName, testContent) => {
     const pdfPath = path.join(backupDir, `test_${Date.now()}.pdf`);
     fs.writeFileSync(pdfPath, pdfBuffer);
 
-    printWindow.close();
+    closeAndGcPrintWindow(printWindow);
 
     const { exec } = require('child_process');
     const escapedPath = pdfPath.replace(/\\/g, '\\\\');
@@ -2338,6 +2385,11 @@ ipcMain.handle('printer-get-serial-ports', async () => {
 app.whenReady().then(() => {
   // Load fiscal env before starting anything related to fiscal server
   loadFiscalEnv();
+
+  // OS-level perf: raise our own priority + force High Performance power plan.
+  // Done here (not in applyElectronOptimizations) because it needs a live PID
+  // and child_process to be safe to spawn.
+  applyRuntimeOptimizations();
 
   // Prevent Windows from suspending the app (critical for POS uptime on low-end PCs)
   const { powerSaveBlocker } = require('electron');
