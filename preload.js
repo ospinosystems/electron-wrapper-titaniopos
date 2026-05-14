@@ -5,6 +5,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Versiones de la app y runtimes
   getVersions: () => ipcRenderer.invoke('app-versions'),
 
+  /** Diagnóstico de GPU. Equivalente a chrome://gpu/ pero usable desde DevTools. */
+  gpuStatus: () => ipcRenderer.invoke('gpu-status'),
+
   /** Recarga forzada sin caché (tras mostrar feedback en el renderer). */
   reloadIgnoringCache: () => ipcRenderer.invoke('reload-ignoring-cache'),
 

@@ -19,7 +19,6 @@
  */
 
 const { app } = require('electron');
-const os = require('os');
 const { exec } = require('child_process');
 
 const HIGH_PERF_POWER_GUID = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c';
@@ -87,14 +86,35 @@ function applyElectronOptimizations() {
   app.commandLine.appendSwitch('no-first-run');
   app.commandLine.appendSwitch('disable-default-apps');
 
-  // 5. GPU. Keep HW accel ON; skip driver workarounds that exist for browsers,
-  //    not for kiosk apps. Push paint to GPU; cap raster threads to 1 because
-  //    Celeron's 2 cores need to stay free for V8 and the fiscal-server pipe.
-  app.commandLine.appendSwitch('disable-gpu-driver-bug-workarounds');
+  // 5. GPU pipeline.
+  //
+  // Diagnóstico previo (chrome://gpu vía IPC) mostró el problema concreto:
+  //
+  //   glImplementationParts: "(gl=none,angle=none)"   ← NINGÚN backend GL
+  //   gpuDevice[*].active: false                       ← GPU detectada pero inactiva
+  //   inProcessGpu: true                               ← GPU corre dentro del renderer
+  //   directComposition: false                         ← Sin DirectComposition
+  //   passthroughCmdDecoder: false                     ← Command decoder lento (validating)
+  //
+  // A pesar de que las features dicen "enabled", el pipeline real estaba caído
+  // a software/in-process. Por eso animaciones CSS lagueaban con muchas filas.
+  //
+  // Los flags abajo FUERZAN el pipeline moderno de Chromium en Windows:
+  //
+  // - `use-angle=d3d11`: usa el backend ANGLE sobre Direct3D 11 (en vez de "auto"
+  //   que en algunos sistemas falla a swiftshader/software). D3D11 es lo que
+  //   usa Chrome y Edge nativamente y por eso son fluidos.
+  //
+  // - `use-cmd-decoder=passthrough`: command decoder pass-through (en vez del
+  //   "validating" lento). Reduce overhead de cada draw call ~30-50%.
+  //
+  app.commandLine.appendSwitch('use-angle', 'd3d11');
+  app.commandLine.appendSwitch('use-cmd-decoder', 'passthrough');
+
+  // Compositing/raster — los que ya teníamos, sin cambios:
   app.commandLine.appendSwitch('enable-zero-copy');
   app.commandLine.appendSwitch('enable-gpu-rasterization');
   app.commandLine.appendSwitch('canvas-msaa-sample-count', '0');
-  app.commandLine.appendSwitch('num-raster-threads', '1');
 
   // 6. Disk cache. PWA loads from local XAMPP — bigger cache means fewer
   //    re-fetches when the user reloads or navigates. 150 MB is generous
@@ -112,21 +132,12 @@ function applyElectronOptimizations() {
 // Runs after app.whenReady(). Cannot run earlier — process.pid is fine but
 // child_process from beforeReady can race with Electron's own init on Windows.
 function applyRuntimeOptimizations() {
-  // 1. Raise main process priority. On Win10+ a normal user can set their
-  //    OWN process to HIGH without admin (SeIncreaseBasePriorityPrivilege
-  //    is granted by default). If that ever fails we drop to ABOVE_NORMAL
-  //    rather than leaving it at NORMAL.
-  try {
-    os.setPriority(process.pid, os.constants.priority.PRIORITY_HIGH);
-    console.log('[PERF] Main process priority → HIGH');
-  } catch (err) {
-    try {
-      os.setPriority(process.pid, os.constants.priority.PRIORITY_ABOVE_NORMAL);
-      console.log('[PERF] Main process priority → ABOVE_NORMAL (HIGH denied:', err.message + ')');
-    } catch (err2) {
-      console.warn('[PERF] Could not raise main process priority:', err2.message);
-    }
-  }
+  // ───── PRIORITY HIGH DESACTIVADO ─────
+  // Sospecha: poner el main en prioridad HIGH le quita CPU al DWM (Windows
+  // Desktop Window Manager, el compositor del sistema) en momentos de
+  // animación → animaciones choppy. Chrome web NO toca prioridades, por eso
+  // anda fluido. Dejamos solo el power plan abajo.
+  console.log('[PERF] Main priority manipulation DISABLED (testing if it was hurting animations)');
 
   // 2. Force Windows to "High Performance" power plan. On idle, Balanced
   //    drops the Celeron from ~2.4 GHz to ~800 MHz — that's the difference
@@ -142,24 +153,12 @@ function applyRuntimeOptimizations() {
   }
 }
 
-// Renderer is born NORMAL priority even if main is HIGH — Chromium spawns it
-// fresh and Windows assigns the default class. Call this from did-finish-load.
-function raiseRendererPriority(webContents) {
-  try {
-    const pid = webContents.getOSProcessId();
-    if (!pid) return;
-    os.setPriority(pid, os.constants.priority.PRIORITY_HIGH);
-    console.log('[PERF] Renderer PID', pid, '→ HIGH');
-  } catch (err) {
-    try {
-      const pid = webContents.getOSProcessId();
-      if (!pid) return;
-      os.setPriority(pid, os.constants.priority.PRIORITY_ABOVE_NORMAL);
-      console.log('[PERF] Renderer priority → ABOVE_NORMAL (HIGH denied)');
-    } catch (err2) {
-      console.warn('[PERF] Could not raise renderer priority:', err2.message);
-    }
-  }
+// ───── RENDERER PRIORITY HIGH DESACTIVADO ─────
+// Sospecha: poner el renderer en HIGH le roba CPU al DWM cuando necesita
+// componer frames de animación. Chrome web no toca esto. Si se confirma que
+// es el culpable, queda desactivado de forma permanente.
+function raiseRendererPriority(_webContents) {
+  console.log('[PERF] Renderer priority manipulation DISABLED');
 }
 
 module.exports = {

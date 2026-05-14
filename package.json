@@ -6,6 +6,7 @@
   "scripts": {
     "start": "electron .",
     "prebuild": "node prebuild.js",
+    "rebuild-native": "electron-rebuild -w serialport,@serialport/bindings-cpp,usb,@3ksy/electron-pos-printer",
     "build": "npm run prebuild && electron-builder --win --publish never",
     "build:portable": "npm run prebuild && electron-builder --win portable --publish never",
     "release": "npm run prebuild && electron-builder --win --publish always",
@@ -26,8 +27,9 @@
     "serialport": "^13.0.0"
   },
   "devDependencies": {
-    "electron": "^28.0.0",
-    "electron-builder": "^24.9.1"
+    "electron": "^32.0.0",
+    "electron-builder": "^25.0.0",
+    "@electron/rebuild": "^3.6.0"
   },
   "build": {
     "appId": "com.titaniopos.desktop",

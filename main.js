@@ -18,13 +18,33 @@ if (process.platform === 'win32') {
   app.setAppUserModelId(APP_ID);
 }
 
+// ───── DEBUG: log env vars que controlan flags A/B test ─────
+// Pegado al arranque para verificar que el env var efectivamente llega al
+// proceso de Electron. Si decís "set FOO=1" en una shell y acá `FOO` sigue
+// undefined, es que el env var no se propagó al spawn de Electron.
+console.log('[A/B-TEST] Env vars al arranque:');
+console.log('  TITANIOPOS_SKIP_GPU_FLAGS =', process.env.TITANIOPOS_SKIP_GPU_FLAGS ?? '(not set)');
+console.log('  TITANIOPOS_SKIP_PRIORITY  =', process.env.TITANIOPOS_SKIP_PRIORITY ?? '(not set)');
+console.log('  TITANIOPOS_SKIP_FISCAL    =', process.env.TITANIOPOS_SKIP_FISCAL ?? '(not set)');
+
 // Apply low-end PC optimizations BEFORE anything else (must run before app.ready)
 const {
   applyElectronOptimizations,
   applyRuntimeOptimizations,
   raiseRendererPriority,
 } = require('./electron-optimization');
-applyElectronOptimizations();
+
+// (Diagnóstico de GPU removido — confirmado que GPU process arranca correctamente
+//  con gl=egl-angle, angle=d3d11, inProcessGpu=false, directComposition=true.)
+// ───── A/B TEST: set TITANIOPOS_SKIP_GPU_FLAGS=1 to skip ALL our custom flags
+// and use Chromium defaults. Si la GPU arranca bien sin nuestros flags,
+// alguno de los flags está rompiendo el GPU process init. Probar después con
+// TITANIOPOS_SKIP_GPU_FLAGS=1 desde un shell antes de lanzar Electron.
+if (process.env.TITANIOPOS_SKIP_GPU_FLAGS === '1') {
+  console.log('[PERF] *** SKIPPING all custom Chromium flags (A/B test mode) ***');
+} else {
+  applyElectronOptimizations();
+}
 
 const crypto = require('crypto');
 const { autoUpdater } = require('electron-updater');
@@ -572,6 +592,69 @@ ipcMain.handle('app-versions', () => ({
   chrome: process.versions.chrome,
   node: process.versions.node,
 }));
+
+// IPC: estado de GPU para diagnóstico de perf. Resultado equivalente a
+// chrome://gpu/ pero usable desde DevTools del renderer (donde chrome://gpu
+// está bloqueado por seguridad). Llamar como:
+//   await window.electronAPI.gpuStatus()  (si está expuesto en preload)
+//   o directamente via require('electron').ipcRenderer.invoke('gpu-status')
+ipcMain.handle('gpu-status', async () => {
+  try {
+    const features = app.getGPUFeatureStatus();
+    // `complete` da MUCHO más detalle que `basic`. Si `basic` siempre devolvía
+    // gl=none, puede ser que estuviéramos viendo un snapshot temprano. Con
+    // `complete` Chromium fuerza GPU init si no terminó de arrancar.
+    let info;
+    let infoError = null;
+    try {
+      info = await app.getGPUInfo('complete');
+    } catch (err) {
+      infoError = err.message;
+      info = await app.getGPUInfo('basic');
+    }
+    // Diagnóstico extra: switches en command-line y argv del proceso.
+    // Si hay un `--disable-gpu` o `--in-process-gpu` que no controlamos
+    // explícitamente, aparece acá.
+    const knownGpuSwitches = [
+      'disable-gpu', 'disable-gpu-compositing', 'disable-gpu-rasterization',
+      'disable-gpu-sandbox', 'disable-software-rasterizer', 'in-process-gpu',
+      'single-process', 'no-sandbox', 'use-gl', 'use-angle', 'use-cmd-decoder',
+      'enable-gpu-rasterization', 'enable-zero-copy', 'disable-gpu-driver-bug-workarounds',
+      'num-raster-threads', 'enable-features', 'disable-features',
+    ];
+    const cmdLineSwitches = {};
+    for (const sw of knownGpuSwitches) {
+      const has = app.commandLine.hasSwitch(sw);
+      if (has) {
+        cmdLineSwitches[sw] = app.commandLine.getSwitchValue(sw) || '(no-value)';
+      }
+    }
+    return {
+      success: true,
+      infoError,
+      versions: {
+        electron: process.versions.electron,
+        chrome: process.versions.chrome,
+        node: process.versions.node,
+      },
+      // process.argv contiene TODOS los args con los que arrancó Electron.
+      // Si hay un `--disable-gpu` u otro flag que no controlamos, aparece acá.
+      argv: process.argv,
+      cmdLineSwitches,
+      features,
+      gpu: info,
+      criticalFlags: {
+        '2d_canvas': features['2d_canvas'],
+        gpu_compositing: features.gpu_compositing,
+        opengl: features.opengl,
+        rasterization: features.rasterization,
+        skia_graphite: features.skia_graphite,
+      },
+    };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
 
 ipcMain.handle('reload-ignoring-cache', () => {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -2438,27 +2521,34 @@ app.whenReady().then(() => {
 
   console.log('⚙️ [APP CONFIG] UI config handlers registered');
 
-  // Start fiscal server automatically (async, non-blocking)
-  (async () => {
-    try {
-      const fiscalPort = process.env.FISCAL_SERVER_PORT ? Number(process.env.FISCAL_SERVER_PORT) : 3000;
-      const intfhkaPath = process.env.INTFHKA_PATH || null;
-      const pythonCheck = await checkPythonInstalled();
-      if (pythonCheck.installed) {
-        console.log('🐍 [FISCAL SERVER] Python found:', pythonCheck.command);
-        const result = await startFiscalServer({ port: fiscalPort, intfhkaPath });
-        if (result.success) {
-          console.log('✅ [FISCAL SERVER] Server started on port', result.port);
+  // Start fiscal server automatically (async, non-blocking).
+  // A/B test: con `TITANIOPOS_SKIP_FISCAL=1` no lo arrancamos. El proceso
+  // Python compite por CPU con Electron y puede afectar la fluidez de las
+  // animaciones aunque esté "idle".
+  if (process.env.TITANIOPOS_SKIP_FISCAL === '1') {
+    console.log('[PERF] *** SKIPPING fiscal server start (A/B test) — la impresión fiscal no funcionará ***');
+  } else {
+    (async () => {
+      try {
+        const fiscalPort = process.env.FISCAL_SERVER_PORT ? Number(process.env.FISCAL_SERVER_PORT) : 3000;
+        const intfhkaPath = process.env.INTFHKA_PATH || null;
+        const pythonCheck = await checkPythonInstalled();
+        if (pythonCheck.installed) {
+          console.log('🐍 [FISCAL SERVER] Python found:', pythonCheck.command);
+          const result = await startFiscalServer({ port: fiscalPort, intfhkaPath });
+          if (result.success) {
+            console.log('✅ [FISCAL SERVER] Server started on port', result.port);
+          } else {
+            console.warn('⚠️ [FISCAL SERVER] Failed to start:', result.error);
+          }
         } else {
-          console.warn('⚠️ [FISCAL SERVER] Failed to start:', result.error);
+          console.warn('⚠️ [FISCAL SERVER] Python not installed - fiscal server disabled');
         }
-      } else {
-        console.warn('⚠️ [FISCAL SERVER] Python not installed - fiscal server disabled');
+      } catch (error) {
+        console.error('❌ [FISCAL SERVER] Error starting:', error);
       }
-    } catch (error) {
-      console.error('❌ [FISCAL SERVER] Error starting:', error);
-    }
-  })();
+    })();
+  }
 });
 
 app.on('window-all-closed', () => {
