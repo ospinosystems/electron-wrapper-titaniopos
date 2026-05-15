@@ -19,9 +19,25 @@
  */
 
 const { app } = require('electron');
+const os = require('os');
 const { exec } = require('child_process');
 
 const HIGH_PERF_POWER_GUID = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TOGGLE de prioridad de proceso. Cambialo y reiniciá Electron para A/B test.
+//
+//   true  = subimos main + renderer a HIGH (forma "agresiva" original — puede
+//           ayudar en Celeron donde hay competencia real por 2 cores; puede
+//           lastimar en PC potente porque le quita CPU al DWM).
+//   false = no tocamos prioridades (defaults de Windows). En PC moderno suele
+//           dar mejores animaciones; en Celeron puede dejar al renderer corto
+//           de CPU cuando otra cosa demanda.
+//
+// Hardcoded acá para que toggling sea inmediato: cambiá esta línea, reiniciá
+// la app y comparás. Mucho más confiable que env vars que se nos perdieron.
+// ─────────────────────────────────────────────────────────────────────────────
+const RAISE_PROCESS_PRIORITY = false;
 
 function applyElectronOptimizations() {
   // 1. V8 heap — calibrated for Celeron 4 GB.
@@ -132,12 +148,22 @@ function applyElectronOptimizations() {
 // Runs after app.whenReady(). Cannot run earlier — process.pid is fine but
 // child_process from beforeReady can race with Electron's own init on Windows.
 function applyRuntimeOptimizations() {
-  // ───── PRIORITY HIGH DESACTIVADO ─────
-  // Sospecha: poner el main en prioridad HIGH le quita CPU al DWM (Windows
-  // Desktop Window Manager, el compositor del sistema) en momentos de
-  // animación → animaciones choppy. Chrome web NO toca prioridades, por eso
-  // anda fluido. Dejamos solo el power plan abajo.
-  console.log('[PERF] Main priority manipulation DISABLED (testing if it was hurting animations)');
+  // Prioridad del proceso main — ver constante RAISE_PROCESS_PRIORITY arriba.
+  if (RAISE_PROCESS_PRIORITY) {
+    try {
+      os.setPriority(process.pid, os.constants.priority.PRIORITY_HIGH);
+      console.log('[PERF] Main process priority → HIGH');
+    } catch (err) {
+      try {
+        os.setPriority(process.pid, os.constants.priority.PRIORITY_ABOVE_NORMAL);
+        console.log('[PERF] Main process priority → ABOVE_NORMAL (HIGH denied:', err.message + ')');
+      } catch (err2) {
+        console.warn('[PERF] Could not raise main process priority:', err2.message);
+      }
+    }
+  } else {
+    console.log('[PERF] Main priority manipulation OFF (RAISE_PROCESS_PRIORITY=false)');
+  }
 
   // 2. Force Windows to "High Performance" power plan. On idle, Balanced
   //    drops the Celeron from ~2.4 GHz to ~800 MHz — that's the difference
@@ -153,12 +179,29 @@ function applyRuntimeOptimizations() {
   }
 }
 
-// ───── RENDERER PRIORITY HIGH DESACTIVADO ─────
-// Sospecha: poner el renderer en HIGH le roba CPU al DWM cuando necesita
-// componer frames de animación. Chrome web no toca esto. Si se confirma que
-// es el culpable, queda desactivado de forma permanente.
-function raiseRendererPriority(_webContents) {
-  console.log('[PERF] Renderer priority manipulation DISABLED');
+// Renderer is born NORMAL priority even if main is HIGH — Chromium spawns it
+// fresh and Windows assigns the default class. Call this from did-finish-load.
+// Controlado por el toggle RAISE_PROCESS_PRIORITY arriba.
+function raiseRendererPriority(webContents) {
+  if (!RAISE_PROCESS_PRIORITY) {
+    console.log('[PERF] Renderer priority OFF (RAISE_PROCESS_PRIORITY=false)');
+    return;
+  }
+  try {
+    const pid = webContents.getOSProcessId();
+    if (!pid) return;
+    os.setPriority(pid, os.constants.priority.PRIORITY_HIGH);
+    console.log('[PERF] Renderer PID', pid, '→ HIGH');
+  } catch (err) {
+    try {
+      const pid = webContents.getOSProcessId();
+      if (!pid) return;
+      os.setPriority(pid, os.constants.priority.PRIORITY_ABOVE_NORMAL);
+      console.log('[PERF] Renderer priority → ABOVE_NORMAL (HIGH denied)');
+    } catch (err2) {
+      console.warn('[PERF] Could not raise renderer priority:', err2.message);
+    }
+  }
 }
 
 module.exports = {

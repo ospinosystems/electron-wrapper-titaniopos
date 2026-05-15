@@ -36,12 +36,18 @@ const {
 
 // (Diagnóstico de GPU removido — confirmado que GPU process arranca correctamente
 //  con gl=egl-angle, angle=d3d11, inProcessGpu=false, directComposition=true.)
-// ───── A/B TEST: set TITANIOPOS_SKIP_GPU_FLAGS=1 to skip ALL our custom flags
-// and use Chromium defaults. Si la GPU arranca bien sin nuestros flags,
-// alguno de los flags está rompiendo el GPU process init. Probar después con
-// TITANIOPOS_SKIP_GPU_FLAGS=1 desde un shell antes de lanzar Electron.
-if (process.env.TITANIOPOS_SKIP_GPU_FLAGS === '1') {
-  console.log('[PERF] *** SKIPPING all custom Chromium flags (A/B test mode) ***');
+// ───── TOGGLE HARDCODED: cambiá `APPLY_OPTIMIZATIONS` para A/B test ─────
+//
+//   true  = aplicamos nuestros flags custom (perfil Celeron 4GB)
+//   false = NADA, defaults puros de Chromium (lo más cerca posible al navegador)
+//
+// Ahora mismo en `false` para descartar definitivamente que alguno de nuestros
+// flags esté causando el lag de animación que el navegador no tiene. Si con
+// false va fluido = uno de nuestros flags es el culpable, lo bisectamos.
+// Si con false sigue igual = es algo intrínseco a Electron.
+const APPLY_OPTIMIZATIONS = false;
+if (!APPLY_OPTIMIZATIONS || process.env.TITANIOPOS_SKIP_GPU_FLAGS === '1') {
+  console.log('[PERF] *** SKIPPING all custom Chromium flags ***');
 } else {
   applyElectronOptimizations();
 }
@@ -572,11 +578,64 @@ function createWindow() {
         window.postMessage({ type: 'TITANIO_PRINT' }, '*');
       };
     `);
+
+    // ─── PERF DIAG: medir DPR + FPS real durante 5s ────────────────────────
+    // Browser-vs-Electron paridad: si el navegador en la MISMA máquina con
+    // el MISMO contenido va fluido y Electron lagguea, el culpable más
+    // probable es DPR > 1 (Windows DPI scaling) o un frame scheduler
+    // distinto. Medimos para tener evidencia dura.
+    //
+    // Salida vía console.log → Electron main process console (vemos los
+    // logs incluso sin DevTools). El prefijo [PERF-DIAG] hace fácil grep.
+    //
+    // Cómo comparar: abrí el mismo URL en Chrome/Edge en la misma máquina,
+    // abrí DevTools (F12), pegá el snippet de "browser side" más abajo en
+    // la consola del navegador, y comparás los números.
+    mainWindow.webContents.executeJavaScript(`
+      (function() {
+        const dpr = window.devicePixelRatio;
+        const sw = window.screen.width;
+        const sh = window.screen.height;
+        const iw = window.innerWidth;
+        const ih = window.innerHeight;
+        const ow = window.outerWidth;
+        const oh = window.outerHeight;
+        console.log('[PERF-DIAG] DPR=' + dpr + ' screen=' + sw + 'x' + sh +
+                    ' inner=' + iw + 'x' + ih + ' outer=' + ow + 'x' + oh);
+
+        // FPS counter via rAF — 5 segundos de muestreo idle (sin animación).
+        let frames = 0;
+        let lastTs = performance.now();
+        const buckets = [];
+        function tick(ts) {
+          frames++;
+          const dt = ts - lastTs;
+          if (dt >= 1000) {
+            buckets.push(frames);
+            console.log('[PERF-DIAG] FPS idle bucket #' + buckets.length + ' = ' + frames);
+            frames = 0;
+            lastTs = ts;
+            if (buckets.length >= 5) {
+              const avg = buckets.reduce((a,b)=>a+b,0) / buckets.length;
+              console.log('[PERF-DIAG] FPS idle avg over 5s = ' + avg.toFixed(1));
+              return;
+            }
+          }
+          requestAnimationFrame(tick);
+        }
+        requestAnimationFrame(tick);
+      })();
+    `).catch(() => {});
   });
 
   mainWindow.webContents.on('console-message', (event, level, message) => {
     if (message === 'TITANIO_SILENT_PRINT') {
       silentPrint();
+    }
+    // Forward diagnostic logs to main-process stdout so the user sees them
+    // in the `npm start` terminal without needing DevTools open.
+    if (typeof message === 'string' && message.startsWith('[PERF-DIAG]')) {
+      console.log(message);
     }
   });
 
@@ -2522,11 +2581,13 @@ app.whenReady().then(() => {
   console.log('⚙️ [APP CONFIG] UI config handlers registered');
 
   // Start fiscal server automatically (async, non-blocking).
-  // A/B test: con `TITANIOPOS_SKIP_FISCAL=1` no lo arrancamos. El proceso
-  // Python compite por CPU con Electron y puede afectar la fluidez de las
-  // animaciones aunque esté "idle".
-  if (process.env.TITANIOPOS_SKIP_FISCAL === '1') {
-    console.log('[PERF] *** SKIPPING fiscal server start (A/B test) — la impresión fiscal no funcionará ***');
+  // ───── TOGGLE: cambiá `START_FISCAL_SERVER` a `false` para no arrancarlo ─────
+  // Útil para descartar si el proceso Python afecta el rendimiento. La impresión
+  // fiscal NO funcionará mientras esté en false. Acordate de volverlo a `true`
+  // cuando termines de testear.
+  const START_FISCAL_SERVER = true;
+  if (!START_FISCAL_SERVER || process.env.TITANIOPOS_SKIP_FISCAL === '1') {
+    console.log('[PERF] *** SKIPPING fiscal server start — la impresión fiscal NO funcionará ***');
   } else {
     (async () => {
       try {
