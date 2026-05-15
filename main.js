@@ -52,6 +52,26 @@ if (!APPLY_OPTIMIZATIONS || process.env.TITANIOPOS_SKIP_GPU_FLAGS === '1') {
   applyElectronOptimizations();
 }
 
+// CRÍTICO — flags de background, fuera del condicional APPLY_OPTIMIZATIONS.
+// Estos NO tocan animaciones ni rendering, solo previenen que Chromium
+// ralentice/congele el renderer cuando la ventana se minimiza. Sin esto, el
+// sync inicial de Electric SQL se paraliza al minimizar y los live updates
+// de otras cajas tardan en aplicarse hasta que la ventana vuelve al frente.
+//
+// `webPreferences.backgroundThrottling: false` no es suficiente porque solo
+// cubre animations + timers a nivel de página, no el process backgrounding
+// completo. Estos 3 flags atacan los 3 mecanismos distintos:
+//   - background-timer-throttling: timers (setTimeout/setInterval) se ejecutan
+//     a velocidad normal en background en vez de cada ~1 min.
+//   - renderer-backgrounding: el renderer process mantiene prioridad normal
+//     de CPU/IO en lugar de bajar a "background".
+//   - backgrounding-occluded-windows: ventanas ocultas/minimizadas no entran
+//     en estado "occluded" que también throttea.
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+console.log('[PERF] Background throttling disabled (sync sigue corriendo minimized)');
+
 const crypto = require('crypto');
 const { autoUpdater } = require('electron-updater');
 const jwt = require('jsonwebtoken');
