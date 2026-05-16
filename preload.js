@@ -309,6 +309,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
    *   - 'error': { message }
    *   - 'cancelled': {}       // usuario eligió "Ahora no"
    */
+  /** Reinicia la app e instala la actualización descargada. */
+  updaterQuitAndInstall: () => ipcRenderer.invoke('updater:quit-and-install'),
+
+  /** Estado actual del updater (para reconstruir el banner tras un reload). */
+  updaterGetState: () => ipcRenderer.invoke('updater:get-state'),
+
   onUpdaterEvent: (callback) => {
     const handler = (_event, payload) => {
       try { callback(payload); } catch (err) { console.error('[updater event] handler threw:', err); }

@@ -886,6 +886,16 @@ function buildApplicationMenu() {
 let updaterOriginalTitle = null;
 let updaterDownloading = false;
 
+// Estado actual del updater — se actualiza en cada evento y se sirve al renderer
+// vía IPC para que el banner pueda reconstruirse después de un reload del frontend.
+// phase: 'idle' | 'checking' | 'downloading' | 'done' | 'error'
+let updaterState = { phase: 'idle' };
+
+// Intervalo de re-chequeo automático. POS abiertos 8+ horas no se enteraban de
+// updates publicadas durante el día porque solo había un check al arranque.
+const UPDATER_PERIODIC_CHECK_MS = 2 * 60 * 60 * 1000; // 2 horas
+let updaterPeriodicTimer = null;
+
 function getUpdaterWindow() {
   return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
 }
@@ -898,6 +908,15 @@ function sendUpdaterEvent(type, payload = {}) {
   } catch (err) {
     // Renderer puede no estar listo todavía durante el arranque — ok.
   }
+}
+
+/**
+ * Actualiza el estado central y notifica al renderer. La fase es la fuente de
+ * verdad — el banner del frontend lee este estado al montar (tras un reload F5)
+ * para reconstruirse, y también recibe el evento push para updates en vivo.
+ */
+function updateUpdaterState(patch) {
+  updaterState = { ...updaterState, ...patch };
 }
 
 function setUpdaterProgressUI(percent) {
@@ -952,6 +971,13 @@ function setupAutoUpdater() {
 
   autoUpdater.on('checking-for-update', () => {
     console.log('[UPDATER] Buscando actualizaciones...');
+    // Solo notificamos al banner si el check fue manual — los checks automáticos
+    // de fondo (arranque + cada 2h) no deben distraer al cajero con un banner
+    // si al final no hay nada nuevo.
+    if (updateCheckRequestedByUser) {
+      updateUpdaterState({ phase: 'checking' });
+      sendUpdaterEvent('checking');
+    }
   });
 
   autoUpdater.on('update-available', async (info) => {
@@ -974,28 +1000,44 @@ function setupAutoUpdater() {
       updaterDownloading = true;
       setUpdaterProgressUI('indeterminate');
       notifyUpdaterStart();
+      updateUpdaterState({
+        phase: 'downloading',
+        version: info.version,
+        percent: 0,
+        bytesPerSecond: 0,
+        transferred: 0,
+        total: 0,
+        error: undefined,
+      });
       sendUpdaterEvent('start', { version: info.version });
       try {
         await autoUpdater.downloadUpdate();
       } catch (err) {
         console.error('[UPDATER] Error descargando actualización:', err);
         clearUpdaterProgressUI();
-        sendUpdaterEvent('error', { message: formatUpdaterErrorForUser(err) });
+        const message = formatUpdaterErrorForUser(err);
+        updateUpdaterState({ phase: 'error', error: message });
+        sendUpdaterEvent('error', { message });
         dialog.showMessageBox(win, {
           type: 'error',
           title: 'Descarga fallida',
-          message: formatUpdaterErrorForUser(err),
+          message,
         });
       }
     } else {
+      updateUpdaterState({ phase: 'idle' });
       sendUpdaterEvent('cancelled');
     }
   });
 
   autoUpdater.on('update-not-available', () => {
     console.log('[UPDATER] No hay actualizaciones disponibles.');
-    if (updateCheckRequestedByUser) {
+    const wasManual = updateCheckRequestedByUser;
+    if (wasManual) {
       updateCheckRequestedByUser = false;
+      // Cierra el banner "Verificando…" que abrimos al iniciar el check manual.
+      updateUpdaterState({ phase: 'idle' });
+      sendUpdaterEvent('not-available');
       const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
       dialog.showMessageBox(win, {
         type: 'info',
@@ -1007,10 +1049,16 @@ function setupAutoUpdater() {
 
   autoUpdater.on('error', (err) => {
     console.error('[UPDATER] Error:', err);
+    const message = formatUpdaterErrorForUser(err);
     // Si estábamos descargando, limpiar el indicador de progreso del taskbar y título.
     if (updaterDownloading) {
       clearUpdaterProgressUI();
-      sendUpdaterEvent('error', { message: formatUpdaterErrorForUser(err) });
+      updateUpdaterState({ phase: 'error', error: message });
+      sendUpdaterEvent('error', { message });
+    } else if (updaterState.phase === 'checking') {
+      // Error durante un check manual — cerrar el banner "Verificando…".
+      updateUpdaterState({ phase: 'idle' });
+      sendUpdaterEvent('cancelled');
     }
     if (updateCheckRequestedByUser) {
       updateCheckRequestedByUser = false;
@@ -1028,17 +1076,24 @@ function setupAutoUpdater() {
     const kbps = Math.round((progressObj.bytesPerSecond || 0) / 1024);
     console.log(`[UPDATER] Descargando: ${Math.round(percent)}% (vel: ${kbps} KB/s)`);
     setUpdaterProgressUI(percent);
-    sendUpdaterEvent('progress', {
+    const payload = {
       percent,
       bytesPerSecond: progressObj.bytesPerSecond || 0,
       transferred: progressObj.transferred || 0,
       total: progressObj.total || 0,
-    });
+    };
+    updateUpdaterState({ phase: 'downloading', ...payload });
+    sendUpdaterEvent('progress', payload);
   });
 
   autoUpdater.on('update-downloaded', async (info) => {
     console.log('[UPDATER] Actualización descargada.');
     clearUpdaterProgressUI();
+    updateUpdaterState({
+      phase: 'done',
+      version: info?.version || updaterState.version,
+      percent: 100,
+    });
     sendUpdaterEvent('done', { version: info?.version });
     const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
     const { response } = await dialog.showMessageBox(win, {
@@ -1059,6 +1114,31 @@ function setupAutoUpdater() {
   autoUpdater.checkForUpdates().catch((err) => {
     console.warn('[UPDATER] No se pudo comprobar actualizaciones al iniciar:', err.message);
   });
+
+  // Re-chequeo cada 2 horas: POS abiertos toda la jornada no se enteraban de
+  // releases publicados durante el día. Salteamos si ya hay una descarga en curso.
+  if (updaterPeriodicTimer) clearInterval(updaterPeriodicTimer);
+  updaterPeriodicTimer = setInterval(() => {
+    if (updaterDownloading || updaterState.phase === 'done') return;
+    autoUpdater.checkForUpdates().catch((err) => {
+      console.warn('[UPDATER] Re-chequeo periódico falló:', err.message);
+    });
+  }, UPDATER_PERIODIC_CHECK_MS);
+
+  // Permite al renderer disparar el reinicio + instalación desde el banner UI.
+  ipcMain.handle('updater:quit-and-install', () => {
+    try {
+      autoUpdater.quitAndInstall(false, true);
+      return { success: true };
+    } catch (err) {
+      console.error('[UPDATER] quitAndInstall failed:', err);
+      return { success: false, error: String(err?.message || err) };
+    }
+  });
+
+  // Permite al banner reconstruirse después de un F5/reload del renderer.
+  // El main mantiene la sesión completa de descarga aunque el renderer reset.
+  ipcMain.handle('updater:get-state', () => updaterState);
 }
 
 // Impresión silenciosa
