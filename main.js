@@ -584,6 +584,21 @@ function createWindow() {
       return;
     }
 
+    // Ctrl+Shift+G → abrir chrome://gpu en ventana aparte para diagnóstico
+    // del pipeline GPU. Sólo accesible vía atajo (no toca menú ni UI).
+    if (input.control && input.shift && !input.alt && !input.meta && keyLower === 'g') {
+      event.preventDefault();
+      const gpuWin = new BrowserWindow({
+        width: 1100,
+        height: 800,
+        title: 'chrome://gpu',
+        webPreferences: { sandbox: true, contextIsolation: true },
+      });
+      gpuWin.setMenuBarVisibility(false);
+      gpuWin.loadURL('chrome://gpu');
+      return;
+    }
+
     // Ctrl+F5: handled in the renderer (toast) + ipcMain 'reload-ignoring-cache'
   });
 
