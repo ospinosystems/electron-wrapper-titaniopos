@@ -298,5 +298,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * Check if Python is installed
    * @returns {Promise<{success: boolean, installed: boolean, command?: string}>}
    */
-  fiscalCheckPython: () => ipcRenderer.invoke('fiscal-check-python')
+  fiscalCheckPython: () => ipcRenderer.invoke('fiscal-check-python'),
+
+  /**
+   * Suscripción a eventos del auto-updater. Devuelve una función para desuscribirse.
+   * Eventos:
+   *   - 'start': { version }
+   *   - 'progress': { percent, bytesPerSecond, transferred, total }
+   *   - 'done': { version }   // descarga terminada, listo para reiniciar
+   *   - 'error': { message }
+   *   - 'cancelled': {}       // usuario eligió "Ahora no"
+   */
+  onUpdaterEvent: (callback) => {
+    const handler = (_event, payload) => {
+      try { callback(payload); } catch (err) { console.error('[updater event] handler threw:', err); }
+    };
+    ipcRenderer.on('updater:event', handler);
+    return () => ipcRenderer.removeListener('updater:event', handler);
+  }
 });

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, dialog, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, dialog, nativeImage, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -882,6 +882,70 @@ function buildApplicationMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+// Estado del título original de la ventana para restaurarlo cuando termina la descarga.
+let updaterOriginalTitle = null;
+let updaterDownloading = false;
+
+function getUpdaterWindow() {
+  return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+}
+
+function sendUpdaterEvent(type, payload = {}) {
+  const win = getUpdaterWindow();
+  if (!win) return;
+  try {
+    win.webContents.send('updater:event', { type, ...payload });
+  } catch (err) {
+    // Renderer puede no estar listo todavía durante el arranque — ok.
+  }
+}
+
+function setUpdaterProgressUI(percent) {
+  const win = getUpdaterWindow();
+  if (!win) return;
+  if (updaterOriginalTitle === null) {
+    try { updaterOriginalTitle = win.getTitle(); } catch { updaterOriginalTitle = ''; }
+  }
+  // setProgressBar admite 0..1 (porcentaje), 2 (indeterminado), -1 (limpiar).
+  if (percent === 'indeterminate') {
+    try { win.setProgressBar(2); } catch { /* taskbar progress puede no estar soportado */ }
+    try { win.setTitle(`Descargando actualización… — ${updaterOriginalTitle || 'TitanioPOS'}`); } catch { /* ignore */ }
+  } else if (typeof percent === 'number') {
+    const clamped = Math.max(0, Math.min(1, percent / 100));
+    try { win.setProgressBar(clamped); } catch { /* ignore */ }
+    try { win.setTitle(`Descargando actualización ${Math.round(percent)}% — ${updaterOriginalTitle || 'TitanioPOS'}`); } catch { /* ignore */ }
+  }
+}
+
+function clearUpdaterProgressUI() {
+  const win = getUpdaterWindow();
+  if (!win) {
+    updaterOriginalTitle = null;
+    updaterDownloading = false;
+    return;
+  }
+  try { win.setProgressBar(-1); } catch { /* ignore */ }
+  if (updaterOriginalTitle !== null) {
+    try { win.setTitle(updaterOriginalTitle); } catch { /* ignore */ }
+    updaterOriginalTitle = null;
+  }
+  updaterDownloading = false;
+}
+
+function notifyUpdaterStart() {
+  try {
+    if (Notification.isSupported()) {
+      new Notification({
+        title: 'Actualizando TitanioPOS',
+        body: 'La nueva versión se está descargando en segundo plano. Te avisaremos cuando esté lista.',
+        silent: false,
+      }).show();
+    }
+  } catch (err) {
+    console.warn('[UPDATER] No se pudo mostrar notificación:', err.message);
+  }
+}
+
 function setupAutoUpdater() {
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
@@ -892,7 +956,7 @@ function setupAutoUpdater() {
 
   autoUpdater.on('update-available', async (info) => {
     console.log('[UPDATER] Actualización disponible:', info.version);
-    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+    const win = getUpdaterWindow();
     const { response } = await dialog.showMessageBox(win, {
       type: 'info',
       title: 'Actualización disponible',
@@ -904,16 +968,27 @@ function setupAutoUpdater() {
       cancelId: 1,
     });
     if (response === 0) {
+      // Feedback inmediato: el primer evento download-progress puede tardar varios
+      // segundos (handshake/redirect), así que arrancamos con barra indeterminada
+      // y notificación para que el cajero sepa que SÍ está pasando algo.
+      updaterDownloading = true;
+      setUpdaterProgressUI('indeterminate');
+      notifyUpdaterStart();
+      sendUpdaterEvent('start', { version: info.version });
       try {
         await autoUpdater.downloadUpdate();
       } catch (err) {
         console.error('[UPDATER] Error descargando actualización:', err);
+        clearUpdaterProgressUI();
+        sendUpdaterEvent('error', { message: formatUpdaterErrorForUser(err) });
         dialog.showMessageBox(win, {
           type: 'error',
           title: 'Descarga fallida',
           message: formatUpdaterErrorForUser(err),
         });
       }
+    } else {
+      sendUpdaterEvent('cancelled');
     }
   });
 
@@ -932,6 +1007,11 @@ function setupAutoUpdater() {
 
   autoUpdater.on('error', (err) => {
     console.error('[UPDATER] Error:', err);
+    // Si estábamos descargando, limpiar el indicador de progreso del taskbar y título.
+    if (updaterDownloading) {
+      clearUpdaterProgressUI();
+      sendUpdaterEvent('error', { message: formatUpdaterErrorForUser(err) });
+    }
     if (updateCheckRequestedByUser) {
       updateCheckRequestedByUser = false;
       const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
@@ -944,14 +1024,22 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on('download-progress', (progressObj) => {
-    console.log(
-      `[UPDATER] Descargando: ${Math.round(progressObj.percent)}% ` +
-      `(vel: ${Math.round(progressObj.bytesPerSecond / 1024)} KB/s)`
-    );
+    const percent = progressObj.percent || 0;
+    const kbps = Math.round((progressObj.bytesPerSecond || 0) / 1024);
+    console.log(`[UPDATER] Descargando: ${Math.round(percent)}% (vel: ${kbps} KB/s)`);
+    setUpdaterProgressUI(percent);
+    sendUpdaterEvent('progress', {
+      percent,
+      bytesPerSecond: progressObj.bytesPerSecond || 0,
+      transferred: progressObj.transferred || 0,
+      total: progressObj.total || 0,
+    });
   });
 
-  autoUpdater.on('update-downloaded', async () => {
+  autoUpdater.on('update-downloaded', async (info) => {
     console.log('[UPDATER] Actualización descargada.');
+    clearUpdaterProgressUI();
+    sendUpdaterEvent('done', { version: info?.version });
     const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
     const { response } = await dialog.showMessageBox(win, {
       type: 'info',
