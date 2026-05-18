@@ -48,6 +48,22 @@ const getFiscalScript = () => {
 };
 
 /**
+ * Devuelve la ruta al Python embebido empaquetado con la app.
+ * Si no existe (modo dev sin embed), devuelve null y caemos al Python del sistema.
+ */
+const getEmbeddedPython = () => {
+  const candidates = [];
+  if (process.resourcesPath) {
+    candidates.push(path.join(process.resourcesPath, 'python-embed', 'python.exe'));
+  }
+  candidates.push(path.join(__dirname, 'python-embed', 'python.exe'));
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return null;
+};
+
+/**
  * Verifica si Python está instalado
  */
 const checkPythonInstalled = async () => {
@@ -146,16 +162,27 @@ const startFiscalServer = async (options = {}) => {
     return { success: false, error: `Fiscal server script not found at: ${scriptPath}` };
   }
 
-  // Verificar Python
-  const pythonCheck = await checkPythonInstalled();
-  if (!pythonCheck.installed) {
-    logErr('[FISCAL SERVER] Python not installed');
-    return { success: false, error: 'Python is not installed on this system' };
+  // Resolver Python: preferimos el embebido empaquetado con la app
+  const embeddedPython = getEmbeddedPython();
+  let pythonExec;
+  let useShell;
+  if (embeddedPython) {
+    pythonExec = embeddedPython;
+    useShell = false;
+    log('[FISCAL SERVER] Using embedded Python:', embeddedPython);
+  } else {
+    const pythonCheck = await checkPythonInstalled();
+    if (!pythonCheck.installed) {
+      logErr('[FISCAL SERVER] Python not installed and no embedded Python found');
+      return { success: false, error: 'Python is not installed on this system' };
+    }
+    pythonExec = pythonCheck.command;
+    useShell = true;
+    log('[FISCAL SERVER] Using system Python:', pythonCheck.command);
   }
 
   log('[FISCAL SERVER] Starting fiscal server...');
-  log('[FACIAL SERVER] Script:', scriptPath);
-  log('[FISCAL SERVER] Python:', pythonCheck.command);
+  log('[FISCAL SERVER] Script:', scriptPath);
   log('[FISCAL SERVER] Port:', port);
 
   // Configurar variables de entorno
@@ -165,12 +192,23 @@ const startFiscalServer = async (options = {}) => {
     env.INTFHKA_PATH = intfhkaPath;
   }
 
+  // Directorio escribible para Factura.txt, Puerto.dat, data/, etc.
+  // En producción BASE_DIR vive en Program Files y NO es escribible.
+  const runtimeDir = path.join(
+    process.env.APPDATA || os.homedir(),
+    'TitanioPOS',
+    'fiscal'
+  );
+  try { fs.mkdirSync(runtimeDir, { recursive: true }); } catch (_) {}
+  env.FISCAL_RUNTIME_DIR = runtimeDir;
+  log('[FISCAL SERVER] FISCAL_RUNTIME_DIR:', runtimeDir);
+
   return new Promise((resolve) => {
     try {
-      fiscalServerProcess = spawn(pythonCheck.command, [scriptPath], {
+      fiscalServerProcess = spawn(pythonExec, [scriptPath], {
         cwd: getFiscalServerDir(),
         env: env,
-        shell: true,
+        shell: useShell,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 

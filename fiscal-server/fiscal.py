@@ -3,10 +3,18 @@ Servidor Fiscal HKA - Versión Portable para TitanioPOS
 Este servidor se integra con la aplicación Electron y maneja la comunicación con la impresora fiscal.
 """
 
-from flask import Flask, request, jsonify
-import subprocess
 import os
 import sys
+
+# Garantizar que el directorio del script esté en sys.path. Con Python embebido
+# en Windows el archivo ._pth reemplaza sys.path y omite el dir del script si
+# el CWD es otro; sin esto, `import hka_serial` puede fallar.
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+
+from flask import Flask, request, jsonify
+import subprocess
 import json
 import queue
 import threading
@@ -16,22 +24,51 @@ import re
 import hashlib
 from datetime import datetime, timedelta
 
-# Importar módulo de comunicación serial directa HKA
-try:
-    from hka_serial import HKAPrinter, check_printer, send_fiscal_file, send_command as hka_send_command
-    HKA_SERIAL_AVAILABLE = True
-    print("[FISCAL] Módulo hka_serial cargado - comunicación serial directa disponible")
-except ImportError:
+# Importar módulo de comunicación serial directa HKA.
+# Vía de escape: USE_HKA_SERIAL=0 fuerza IntTFHKA.exe (útil si un cliente
+# tiene un modelo cuyo framing no coincide con hka_serial).
+_use_hka_serial_flag = os.environ.get('USE_HKA_SERIAL', '1').strip().lower()
+if _use_hka_serial_flag in ('0', 'false', 'no', 'off'):
     HKA_SERIAL_AVAILABLE = False
-    print("[FISCAL] Módulo hka_serial no disponible - usando IntTFHKA.exe")
+    print("[FISCAL] hka_serial deshabilitado por USE_HKA_SERIAL=0 - usando IntTFHKA.exe")
+else:
+    try:
+        from hka_serial import HKAPrinter, check_printer, send_fiscal_file, send_command as hka_send_command
+        HKA_SERIAL_AVAILABLE = True
+        print("[FISCAL] Módulo hka_serial cargado - comunicación serial directa disponible")
+    except ImportError as _e:
+        HKA_SERIAL_AVAILABLE = False
+        print(f"[FISCAL] Módulo hka_serial no disponible ({_e}) - usando IntTFHKA.exe")
 
 app = Flask(__name__)
 
 # Obtener el directorio base del script
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# Directorio runtime escribible. En producción (Electron empaquetado) BASE_DIR vive
+# dentro de Program Files y no es escribible. El wrapper Electron debe pasarnos
+# FISCAL_RUNTIME_DIR (típicamente %APPDATA%/TitanioPOS/fiscal). En desarrollo
+# caemos al propio BASE_DIR para no cambiar el comportamiento.
+def _resolve_runtime_dir():
+    env_dir = os.environ.get('FISCAL_RUNTIME_DIR', '').strip()
+    if env_dir:
+        try:
+            os.makedirs(env_dir, exist_ok=True)
+            # Verificar escritura
+            test_path = os.path.join(env_dir, '.write_test')
+            with open(test_path, 'w') as f:
+                f.write('ok')
+            os.remove(test_path)
+            return env_dir
+        except Exception as e:
+            print(f"[FISCAL] FISCAL_RUNTIME_DIR no escribible ({env_dir}): {e}. Usando BASE_DIR.")
+    return BASE_DIR
+
+RUNTIME_DIR = _resolve_runtime_dir()
+print(f"[FISCAL] RUNTIME_DIR: {RUNTIME_DIR}")
+
 # Directorio de datos (para archivos temporales y de estado)
-DATA_DIR = os.path.join(BASE_DIR, 'data')
+DATA_DIR = os.path.join(RUNTIME_DIR, 'data')
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
@@ -57,13 +94,21 @@ def get_programa_dir():
     return os.path.dirname(get_programa_path())
 
 def get_puerto_dat_path():
-    """Obtiene la ruta del archivo Puerto.dat (en el mismo directorio que IntTFHKA.exe)"""
-    return os.path.join(get_programa_dir(), 'Puerto.dat')
+    """Obtiene la ruta del archivo Puerto.dat.
+    Prioriza RUNTIME_DIR (escribible). Si no existe ahí pero sí en programa_dir
+    (legado), usa el de programa_dir para retro-compatibilidad.
+    """
+    runtime_path = os.path.join(RUNTIME_DIR, 'Puerto.dat')
+    if os.path.exists(runtime_path):
+        return runtime_path
+    legacy_path = os.path.join(get_programa_dir(), 'Puerto.dat')
+    if os.path.exists(legacy_path) and RUNTIME_DIR != BASE_DIR:
+        return legacy_path
+    return runtime_path
 
 def get_factura_path():
-    """Obtiene la ruta del archivo Factura.txt (SIEMPRE en la carpeta fiscal-server)"""
-    # CRÍTICO: Usar BASE_DIR directamente para evitar confusión con ubicaciones de IntTFHKA.exe
-    return os.path.join(BASE_DIR, 'Factura.txt')
+    """Obtiene la ruta del archivo Factura.txt (en RUNTIME_DIR escribible)"""
+    return os.path.join(RUNTIME_DIR, 'Factura.txt')
 
 def get_retorno_path():
     """Obtiene la ruta del archivo Retorno.txt"""

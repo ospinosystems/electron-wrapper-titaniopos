@@ -40,6 +40,11 @@
       {
         "from": "fiscal-server",
         "to": "fiscal-server",
+        "filter": ["**/*", "!__pycache__/**", "!data/**"]
+      },
+      {
+        "from": "python-embed",
+        "to": "python-embed",
         "filter": ["**/*"]
       },
       {
