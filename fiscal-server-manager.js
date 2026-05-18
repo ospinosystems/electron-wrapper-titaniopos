@@ -203,6 +203,11 @@ const startFiscalServer = async (options = {}) => {
   env.FISCAL_RUNTIME_DIR = runtimeDir;
   log('[FISCAL SERVER] FISCAL_RUNTIME_DIR:', runtimeDir);
 
+  // Buffer circular para devolver al frontend si arranque falla
+  const recentStderr = [];
+  const recentStdout = [];
+  const pushBounded = (arr, line) => { arr.push(line); if (arr.length > 30) arr.shift(); };
+
   return new Promise((resolve) => {
     try {
       fiscalServerProcess = spawn(pythonExec, [scriptPath], {
@@ -213,11 +218,15 @@ const startFiscalServer = async (options = {}) => {
       });
 
       fiscalServerProcess.stdout.on('data', (data) => {
-        log('[FISCAL SERVER]', data.toString().trim());
+        const s = data.toString().trim();
+        pushBounded(recentStdout, s);
+        log('[FISCAL SERVER]', s);
       });
 
       fiscalServerProcess.stderr.on('data', (data) => {
-        logErr('[FISCAL SERVER ERROR]', data.toString().trim());
+        const s = data.toString().trim();
+        pushBounded(recentStderr, s);
+        logErr('[FISCAL SERVER ERROR]', s);
       });
 
       fiscalServerProcess.on('error', (error) => {
@@ -255,9 +264,19 @@ const startFiscalServer = async (options = {}) => {
           resolve({ success: true, message: 'Server started successfully', port: port });
         } else if (checkCount >= maxChecks) {
           clearInterval(checkReady);
-          logErr('[FISCAL SERVER] Server failed to start in time');
+          const stderrTail = recentStderr.slice(-10).join('\n');
+          const stdoutTail = recentStdout.slice(-10).join('\n');
+          const detail = stderrTail || stdoutTail || 'sin salida del proceso Python';
+          logErr('[FISCAL SERVER] Server failed to start in time. Output:\n' + detail);
           stopFiscalServer();
-          resolve({ success: false, error: 'Server failed to start in time' });
+          resolve({
+            success: false,
+            error: `Server failed to start in time. Salida reciente:\n${detail}`,
+            stderr: recentStderr,
+            stdout: recentStdout,
+            pythonExec,
+            scriptPath,
+          });
         }
       }, 500);
 
