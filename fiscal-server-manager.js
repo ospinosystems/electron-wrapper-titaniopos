@@ -333,5 +333,6 @@ module.exports = {
   restartFiscalServer,
   checkServerHealth,
   checkPythonInstalled,
+  getEmbeddedPython,
   getFiscalServerDir,
 };

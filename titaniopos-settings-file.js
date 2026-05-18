@@ -40,6 +40,9 @@ const DEFAULT_FISCAL = {
   storeCode: '',
   cashRegisterNumber: '',
   lastConfigUpdate: '',
+  // Controla si el server Python arranca con la app. OFF por defecto para
+  // no afectar rendimiento en PCs viejas que no usan facturación fiscal.
+  serverEnabled: false,
 };
 
 const DEFAULT_UI = {

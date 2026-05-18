@@ -10,7 +10,8 @@ const {
   stopFiscalServer, 
   getServerStatus, 
   restartFiscalServer,
-  checkPythonInstalled 
+  checkPythonInstalled,
+  getEmbeddedPython,
 } = require('./fiscal-server-manager');
 const {
   readSettings,
@@ -832,11 +833,15 @@ const registerFiscalHandlers = (app) => {
     }
   });
 
-  // Verificar si Python está instalado
+  // Verificar si Python está disponible (embebido empaquetado o del sistema)
   ipcMain.handle('fiscal-check-python', async () => {
     try {
+      const embedded = getEmbeddedPython();
+      if (embedded) {
+        return { success: true, installed: true, command: embedded, source: 'embedded' };
+      }
       const result = await checkPythonInstalled();
-      return { success: true, ...result };
+      return { success: true, ...result, source: result.installed ? 'system' : null };
     } catch (error) {
       return { success: false, error: error.message };
     }

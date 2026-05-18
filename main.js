@@ -2783,36 +2783,35 @@ app.whenReady().then(() => {
 
   console.log('⚙️ [APP CONFIG] UI config handlers registered');
 
-  // Start fiscal server automatically (async, non-blocking).
-  // ───── TOGGLE: cambiá `START_FISCAL_SERVER` a `false` para no arrancarlo ─────
-  // Útil para descartar si el proceso Python afecta el rendimiento. La impresión
-  // fiscal NO funcionará mientras esté en false. Acordate de volverlo a `true`
-  // cuando termines de testear.
-  const START_FISCAL_SERVER = true;
-  if (!START_FISCAL_SERVER || process.env.TITANIOPOS_SKIP_FISCAL === '1') {
-    console.log('[PERF] *** SKIPPING fiscal server start — la impresión fiscal NO funcionará ***');
-  } else {
-    (async () => {
-      try {
-        const fiscalPort = process.env.FISCAL_SERVER_PORT ? Number(process.env.FISCAL_SERVER_PORT) : 3000;
-        const intfhkaPath = process.env.INTFHKA_PATH || null;
-        const pythonCheck = await checkPythonInstalled();
-        if (pythonCheck.installed) {
-          console.log('🐍 [FISCAL SERVER] Python found:', pythonCheck.command);
-          const result = await startFiscalServer({ port: fiscalPort, intfhkaPath });
-          if (result.success) {
-            console.log('✅ [FISCAL SERVER] Server started on port', result.port);
-          } else {
-            console.warn('⚠️ [FISCAL SERVER] Failed to start:', result.error);
-          }
-        } else {
-          console.warn('⚠️ [FISCAL SERVER] Python not installed - fiscal server disabled');
-        }
-      } catch (error) {
-        console.error('❌ [FISCAL SERVER] Error starting:', error);
+  // Auto-arranque del server fiscal Python.
+  // Controlado por settings.fiscal.serverEnabled (OFF por defecto).
+  // El usuario lo prende desde la UI cuando necesita facturación fiscal.
+  // Override por env: TITANIOPOS_SKIP_FISCAL=1 fuerza OFF (debug).
+  (async () => {
+    try {
+      if (process.env.TITANIOPOS_SKIP_FISCAL === '1') {
+        console.log('[FISCAL SERVER] Skipped via TITANIOPOS_SKIP_FISCAL=1');
+        return;
       }
-    })();
-  }
+      const { readSettings, normalizeFiscal } = require('./titaniopos-settings-file');
+      const fiscalCfg = normalizeFiscal(readSettings(app).fiscal);
+      if (!fiscalCfg.serverEnabled) {
+        console.log('[FISCAL SERVER] serverEnabled=false en settings — no se arranca. El usuario puede prenderlo desde la UI.');
+        return;
+      }
+      const fiscalPort = process.env.FISCAL_SERVER_PORT ? Number(process.env.FISCAL_SERVER_PORT) : 3000;
+      const intfhkaPath = process.env.INTFHKA_PATH || null;
+      console.log('🐍 [FISCAL SERVER] serverEnabled=true — arrancando...');
+      const result = await startFiscalServer({ port: fiscalPort, intfhkaPath });
+      if (result.success) {
+        console.log('✅ [FISCAL SERVER] Server started on port', result.port);
+      } else {
+        console.warn('⚠️ [FISCAL SERVER] Failed to start:', result.error);
+      }
+    } catch (error) {
+      console.error('❌ [FISCAL SERVER] Error starting:', error);
+    }
+  })();
 });
 
 app.on('window-all-closed', () => {
