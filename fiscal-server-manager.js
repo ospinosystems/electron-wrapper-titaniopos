@@ -51,15 +51,40 @@ const getFiscalScript = () => {
  * Devuelve la ruta al Python embebido empaquetado con la app.
  * Si no existe (modo dev sin embed), devuelve null y caemos al Python del sistema.
  */
+// Diagnóstico del último intento de localización del Python embebido.
+// Se incluye en la respuesta IPC cuando algo falla para mostrarlo en la UI.
+let lastEmbeddedPythonDiagnostic = '';
+
 const getEmbeddedPython = () => {
   const candidates = [];
   if (process.resourcesPath) {
     candidates.push(path.join(process.resourcesPath, 'python-embed', 'python.exe'));
   }
   candidates.push(path.join(__dirname, 'python-embed', 'python.exe'));
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c;
+  if (__dirname.includes('app.asar')) {
+    const asarParent = __dirname.split('app.asar')[0];
+    candidates.push(path.join(asarParent, 'python-embed', 'python.exe'));
   }
+  const diag = [`[FISCAL SERVER] getEmbeddedPython probing candidates:`];
+  for (const c of candidates) {
+    const exists = fs.existsSync(c);
+    diag.push(`  - ${c} -> ${exists ? 'FOUND' : 'missing'}`);
+    if (exists) {
+      lastEmbeddedPythonDiagnostic = diag.join('\n');
+      log(lastEmbeddedPythonDiagnostic);
+      return c;
+    }
+  }
+  try {
+    if (process.resourcesPath && fs.existsSync(process.resourcesPath)) {
+      const entries = fs.readdirSync(process.resourcesPath);
+      diag.push(`resourcesPath (${process.resourcesPath}) contains: ${entries.join(', ')}`);
+    } else {
+      diag.push(`resourcesPath inexistente o vacío: ${process.resourcesPath}`);
+    }
+  } catch (e) { diag.push(`No se pudo listar resourcesPath: ${e.message}`); }
+  lastEmbeddedPythonDiagnostic = diag.join('\n');
+  log(lastEmbeddedPythonDiagnostic);
   return null;
 };
 
@@ -267,15 +292,21 @@ const startFiscalServer = async (options = {}) => {
           const stderrTail = recentStderr.slice(-10).join('\n');
           const stdoutTail = recentStdout.slice(-10).join('\n');
           const detail = stderrTail || stdoutTail || 'sin salida del proceso Python';
-          logErr('[FISCAL SERVER] Server failed to start in time. Output:\n' + detail);
+          const fullError =
+            `Server failed to start in time.\n` +
+            `Python usado: ${pythonExec}\n` +
+            `--- Localización Python embebido ---\n${lastEmbeddedPythonDiagnostic || '(no se intentó)'}\n` +
+            `--- Salida del proceso ---\n${detail}`;
+          logErr('[FISCAL SERVER] ' + fullError);
           stopFiscalServer();
           resolve({
             success: false,
-            error: `Server failed to start in time. Salida reciente:\n${detail}`,
+            error: fullError,
             stderr: recentStderr,
             stdout: recentStdout,
             pythonExec,
             scriptPath,
+            embeddedPythonDiagnostic: lastEmbeddedPythonDiagnostic,
           });
         }
       }, 500);
