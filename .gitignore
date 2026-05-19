@@ -36,6 +36,10 @@ temp/
 *.blockmap
 *.zip
 
+# Excepciones: binarios que SI van al repo porque son parte del bundle
+!python-embed/**/*.exe
+!bin/*.exe
+
 # Logs
 npm-debug.log*
 yarn-debug.log*
