@@ -13,7 +13,28 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
-from flask import Flask, request, jsonify
+# Garantizar que el site-packages del Python embebido esté en sys.path.
+# El archivo ._pth debería cargarlo pero a veces falla en producción
+# (e.g. si NSIS no preservó el archivo o si Python no aplica `import site`
+# correctamente en algunos clientes). Lo agregamos defensivamente.
+_PY_DIR = os.path.dirname(os.path.abspath(sys.executable))
+_SITE_PACKAGES = os.path.join(_PY_DIR, 'Lib', 'site-packages')
+if os.path.isdir(_SITE_PACKAGES) and _SITE_PACKAGES not in sys.path:
+    sys.path.insert(0, _SITE_PACKAGES)
+
+# Log de diagnóstico inmediato para detectar problemas de empaquetado
+print(f"[FISCAL] Python exec: {sys.executable}")
+print(f"[FISCAL] Python prefix: {sys.prefix}")
+print(f"[FISCAL] site-packages probe: {_SITE_PACKAGES} (exists={os.path.isdir(_SITE_PACKAGES)})")
+print(f"[FISCAL] sys.path: {sys.path}")
+
+try:
+    from flask import Flask, request, jsonify
+except ModuleNotFoundError as e:
+    print(f"[FISCAL] FATAL: Flask no se encuentra. {e}")
+    print(f"[FISCAL] Verifica que existan: {_SITE_PACKAGES}\\flask\\__init__.py")
+    sys.exit(2)
+
 import subprocess
 import json
 import queue
