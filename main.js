@@ -2783,35 +2783,9 @@ app.whenReady().then(() => {
 
   console.log('⚙️ [APP CONFIG] UI config handlers registered');
 
-  // Auto-arranque del server fiscal Python.
-  // Controlado por settings.fiscal.serverEnabled (OFF por defecto).
-  // El usuario lo prende desde la UI cuando necesita facturación fiscal.
-  // Override por env: TITANIOPOS_SKIP_FISCAL=1 fuerza OFF (debug).
-  (async () => {
-    try {
-      if (process.env.TITANIOPOS_SKIP_FISCAL === '1') {
-        console.log('[FISCAL SERVER] Skipped via TITANIOPOS_SKIP_FISCAL=1');
-        return;
-      }
-      const { readSettings, normalizeFiscal } = require('./titaniopos-settings-file');
-      const fiscalCfg = normalizeFiscal(readSettings(app).fiscal);
-      if (!fiscalCfg.serverEnabled) {
-        console.log('[FISCAL SERVER] serverEnabled=false en settings — no se arranca. El usuario puede prenderlo desde la UI.');
-        return;
-      }
-      const fiscalPort = process.env.FISCAL_SERVER_PORT ? Number(process.env.FISCAL_SERVER_PORT) : 3000;
-      const intfhkaPath = process.env.INTFHKA_PATH || null;
-      console.log('🐍 [FISCAL SERVER] serverEnabled=true — arrancando...');
-      const result = await startFiscalServer({ port: fiscalPort, intfhkaPath });
-      if (result.success) {
-        console.log('✅ [FISCAL SERVER] Server started on port', result.port);
-      } else {
-        console.warn('⚠️ [FISCAL SERVER] Failed to start:', result.error);
-      }
-    } catch (error) {
-      console.error('❌ [FISCAL SERVER] Error starting:', error);
-    }
-  })();
+  // NOTA: Desde v1.0.42 el servidor fiscal NO se arranca desde Electron.
+  // Se distribuye como ZIP standalone aparte (titaniopos-fiscal-server-vX.Y.Z.zip).
+  // Esta app solo se conecta a la URL configurada en settings.fiscal.serverUrl.
 });
 
 app.on('window-all-closed', () => {

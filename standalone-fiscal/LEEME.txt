@@ -1,0 +1,51 @@
+TitanioPOS - Servidor Fiscal HKA (Standalone)
+===============================================
+
+QUE ES ESTO
+-----------
+Este paquete contiene el servidor fiscal Python que se comunica con la
+impresora HKA, junto con su propio Python embebido. No requiere instalar
+nada mas.
+
+COMO USAR
+---------
+1. Descomprimi este ZIP en cualquier carpeta. Por ejemplo:
+   C:\TitanioPOS-Fiscal\
+
+2. Hace doble-click en "Iniciar Servidor Fiscal.bat"
+   Se abre una ventana negra que dice "Running on http://127.0.0.1:3000".
+   Dejala abierta - cerrarla apaga el servidor.
+
+3. En la app TitanioPOS (POS Electron):
+   Settings > Caja > Maquina Fiscal
+   - URL del Servidor Fiscal: http://localhost:3000
+   - Habilitar Maquina Fiscal: ON
+   - Configura el puerto COM de tu impresora
+   - Probar conexion
+
+ARRANCAR AUTOMATICAMENTE CON WINDOWS
+------------------------------------
+Para que el servidor arranque solo cada vez que prendes la PC:
+
+1. Presiona Win + R
+2. Escribi: shell:startup
+3. Se abre una carpeta. Copia ahi un acceso directo al .bat:
+   - Click derecho sobre "Iniciar Servidor Fiscal.bat"
+   - "Crear acceso directo"
+   - Arrastra el acceso directo a la carpeta que se abrio en el paso 2
+
+ARCHIVOS DE DATOS
+-----------------
+El servidor escribe en: %APPDATA%\TitanioPOS\fiscal\
+  - Factura.txt       (factura actual)
+  - Puerto.dat        (puerto COM configurado)
+  - data\             (estado interno)
+
+LOG
+---
+Si algo falla, revisa la ventana negra del servidor para ver los mensajes
+de error. La salida tipica al arrancar bien es:
+
+  [FISCAL] Modulo hka_serial cargado
+  [FISCAL] RUNTIME_DIR: C:\Users\<vos>\AppData\Roaming\TitanioPOS\fiscal
+   * Running on http://127.0.0.1:3000

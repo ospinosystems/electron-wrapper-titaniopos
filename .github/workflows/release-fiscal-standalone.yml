@@ -1,0 +1,51 @@
+# Empaqueta el servidor fiscal standalone (Python embebido + fiscal.py) en un
+# ZIP y lo adjunta al release correspondiente al tag.
+#
+# Trigger: igual que release-windows.yml — push de tag v*
+# Output:  titaniopos-fiscal-server-vX.Y.Z.zip subido al release.
+
+name: Release Fiscal Server Standalone
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  package:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Align package.json version with git tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          TAG_VER="${GITHUB_REF_NAME#v}"
+          node -e "
+            const fs = require('fs');
+            const f = 'package.json';
+            const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+            j.version = process.argv[1];
+            fs.writeFileSync(f, JSON.stringify(j, null, 2) + '\n');
+          " "$TAG_VER"
+
+      - name: Build standalone fiscal server zip
+        run: node standalone-fiscal/package-standalone.js
+
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-standalone/titaniopos-fiscal-server-*.zip
+          fail_on_unmatched_files: true
+          token: ${{ secrets.GITHUB_TOKEN }}
