@@ -122,6 +122,42 @@ const checkPythonInstalled = async () => {
 };
 
 /**
+ * Ejecuta `<python> --version` y devuelve la cadena de versión (ej. "Python 3.11.9").
+ */
+const getPythonVersion = (exec, useShell) => {
+  return new Promise((resolve) => {
+    try {
+      const proc = spawn(exec, ['--version'], { shell: useShell });
+      let out = '';
+      proc.stdout.on('data', (d) => { out += d.toString(); });
+      proc.stderr.on('data', (d) => { out += d.toString(); }); // Python <3.4 imprime en stderr
+      proc.on('close', () => resolve(out.trim() || null));
+      proc.on('error', () => resolve(null));
+    } catch (_) {
+      resolve(null);
+    }
+  });
+};
+
+/**
+ * Resuelve qué Python se usará y su versión.
+ * Prioriza el embebido empaquetado; cae al del sistema solo si no hay embebido.
+ */
+const getPythonInfo = async () => {
+  const embedded = getEmbeddedPython();
+  if (embedded) {
+    const version = await getPythonVersion(embedded, false);
+    return { installed: true, source: 'embedded', command: embedded, version };
+  }
+  const check = await checkPythonInstalled();
+  if (check.installed) {
+    const version = await getPythonVersion(check.command, true);
+    return { installed: true, source: 'system', command: check.command, version };
+  }
+  return { installed: false, source: null, command: null, version: null };
+};
+
+/**
  * Verifica si el servidor fiscal está respondiendo
  */
 const checkServerHealth = async (port = 3000) => {
@@ -384,5 +420,6 @@ module.exports = {
   checkServerHealth,
   checkPythonInstalled,
   getEmbeddedPython,
+  getPythonInfo,
   getFiscalServerDir,
 };
