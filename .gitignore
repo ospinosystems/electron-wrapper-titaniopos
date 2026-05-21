@@ -42,6 +42,9 @@ temp/
 # python311.zip = biblioteca estándar de Python embebido. SIN esto el
 # Python no arranca en producción (ModuleNotFoundError: 'encodings').
 !python-embed/python311.zip
+# IntTFHKA.exe = driver oficial HKA. SIN esto el servidor fiscal no
+# encuentra el programa en producción ("Programa no encontrado").
+!fiscal-server/IntTFHKA.exe
 
 # Logs
 npm-debug.log*
