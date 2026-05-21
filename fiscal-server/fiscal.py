@@ -937,16 +937,27 @@ def test_print():
             shutil.copy2(archivo_factura, exe_factura)
 
         # Paso 1: Cancelar documento abierto previo (por intentos fallidos anteriores)
+        # Si hay documento abierto, el cancel lo imprime como "anulada" y la
+        # impresora necesita tiempo para terminar de imprimir antes de aceptar
+        # un nuevo documento.
         print(f"[FISCAL] Test print: cancelando documento previo con IntTFHKA...", flush=True)
+        did_cancel = False
         try:
             cancel_proc = subprocess.Popen("IntTFHKA.exe SendCmd(7)", shell=True,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=programa_dir)
             cancel_out, _ = cancel_proc.communicate(timeout=15)
             cancel_str = cancel_out.decode('latin-1', errors='ignore').strip()
             print(f"[FISCAL] Cancel result: {cancel_str}", flush=True)
+            did_cancel = 'TRUE' in cancel_str.upper()
         except Exception as ce:
             print(f"[FISCAL] Cancel error (no crítico): {ce}", flush=True)
-        time.sleep(0.5)
+
+        if did_cancel:
+            # La impresora está imprimiendo la factura anulada, esperar a que termine
+            print(f"[FISCAL] Cancel exitoso, esperando 4s para que la impresora termine...", flush=True)
+            time.sleep(4)
+        else:
+            time.sleep(0.5)
 
         # Paso 2: Enviar factura con IntTFHKA.exe
         print(f"[FISCAL] Test print: enviando Factura.txt con IntTFHKA.exe en {programa_dir}", flush=True)
