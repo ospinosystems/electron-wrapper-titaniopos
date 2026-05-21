@@ -947,52 +947,57 @@ def test_print():
         import re as _re
 
         def _run_inttfhka(comando, timeout=60):
-            """Ejecuta IntTFHKA.exe; devuelve (retorno_str, stdout_str).
-            El returncode del proceso siempre es -1; el resultado real está
-            en stdout: 'Retorno: X  Status: Y  Error: Z'.
-            Retorno 3/4/5/TRUE = OK; 0/2/FALSE = error."""
+            """Ejecuta IntTFHKA.exe; devuelve (retorno_str, error_int, stdout_str).
+            stdout: 'Retorno: X  Status: Y  Error: Z'.
+            El exito real se mide por Error == 0 (Error 128 = falla en cierre)."""
             p = subprocess.Popen(f"IntTFHKA.exe {comando}", shell=True,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=programa_dir)
             out, _err = p.communicate(timeout=timeout)
             out_s = out.decode('latin-1', errors='ignore').strip()
-            m = _re.search(r'Retorno:\s*(\S+)', out_s)
-            retorno = m.group(1).upper() if m else ""
-            return retorno, out_s
-
-        def _es_ok(retorno):
-            # IntTFHKA: 3/4/5 = comando ejecutado; TRUE = ok
-            return retorno in ('3', '4', '5', 'TRUE')
+            m_ret = _re.search(r'Retorno:\s*(\S+)', out_s)
+            m_err = _re.search(r'Error:\s*(\d+)', out_s)
+            retorno = m_ret.group(1).upper() if m_ret else ""
+            error = int(m_err.group(1)) if m_err else -1
+            return retorno, error, out_s
 
         diagnostico = {}
         with _INTTFHKA_LOCK:
-            retorno, out_str = _run_inttfhka("SendFileCmd(Factura.txt)")
-            print(f"[FISCAL] SendFileCmd -> Retorno={retorno} stdout={out_str!r}", flush=True)
-            success = _es_ok(retorno)
+            retorno, error, out_str = _run_inttfhka("SendFileCmd(Factura.txt)")
+            print(f"[FISCAL] SendFileCmd -> Retorno={retorno} Error={error} stdout={out_str!r}", flush=True)
+            success = error == 0 and retorno not in ("", "FALSE")
 
-            # Si falló, casi siempre es porque hay un documento fiscal abierto
-            # de un intento previo bloqueando. Cancelarlo UNA sola vez (imprime
-            # una anulada de limpieza) y reintentar. NO se vuelve a cancelar.
+            # Recuperacion si falló: cancelar documento abierto + cierre Z
+            # (cierra el día fiscal, que tras muchos intentos puede estar
+            # bloqueando documentos nuevos) + reintentar.
             if not success:
-                print(f"[FISCAL] Retorno={retorno}: hay un documento abierto. Cancelando una vez...", flush=True)
+                print(f"[FISCAL] Falló (Error={error}). Recuperando: cancel + reporte Z...", flush=True)
                 try:
-                    cret, cout = _run_inttfhka("SendCmd(7)", timeout=20)
-                    print(f"[FISCAL] Cancel -> Retorno={cret} stdout={cout!r}", flush=True)
+                    _cr, _ce_, cout = _run_inttfhka("SendCmd(7)", timeout=20)
+                    print(f"[FISCAL] Cancel(7) -> {cout!r}", flush=True)
                 except Exception as ce:
                     print(f"[FISCAL] Cancel error: {ce}", flush=True)
-                time.sleep(6)  # esperar a que la impresora termine la anulada
+                time.sleep(6)
 
-                retorno, out_str = _run_inttfhka("SendFileCmd(Factura.txt)")
-                print(f"[FISCAL] SendFileCmd retry -> Retorno={retorno} stdout={out_str!r}", flush=True)
-                success = _es_ok(retorno)
+                try:
+                    _zr, _ze, zout = _run_inttfhka("SendCmd(I0Z)", timeout=90)
+                    print(f"[FISCAL] Reporte Z (I0Z) -> {zout!r}", flush=True)
+                except Exception as ze:
+                    print(f"[FISCAL] Reporte Z error: {ze}", flush=True)
+                time.sleep(8)
+
+                retorno, error, out_str = _run_inttfhka("SendFileCmd(Factura.txt)")
+                print(f"[FISCAL] SendFileCmd retry -> Retorno={retorno} Error={error} stdout={out_str!r}", flush=True)
+                success = error == 0 and retorno not in ("", "FALSE")
 
         return jsonify({
             "status": "ok" if success else "error",
             "message": (f"Factura de prueba impresa (UUID: {short_id})" if success
-                        else f"Error al imprimir. IntTFHKA Retorno={retorno}. Salida: {out_str}"),
+                        else f"Error al imprimir. IntTFHKA Error={error}. Salida: {out_str}"),
             "method": "IntTFHKA.exe",
             "diagnostico": diagnostico,
             "uuid": test_uuid,
             "retorno": retorno,
+            "error": error,
         })
 
     except subprocess.TimeoutExpired:
