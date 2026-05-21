@@ -985,6 +985,14 @@ def test_print():
                 print(f"[FISCAL] SendFileCmd retry -> Retorno={retorno} stdout={out_str!r}", flush=True)
                 success = _es_ok(retorno)
 
+                # Si aún falló, cancelar para no dejar el documento abierto
+                if not success:
+                    try:
+                        _run_inttfhka("SendCmd(7)", timeout=20)
+                        print(f"[FISCAL] Limpieza final: documento abierto cancelado.", flush=True)
+                    except Exception:
+                        pass
+
         return jsonify({
             "status": "ok" if success else "error",
             "message": (f"Factura de prueba impresa (UUID: {short_id})" if success
