@@ -899,15 +899,16 @@ def test_print():
             return jsonify({"status": "error", "message": "Puerto COM no configurado."}), 400
 
         # Factura minima: 1 producto exento, 1.00 Bs, qty 1, efectivo
-        # Formato TFHKA: [TaxCode 1][Price 12 centavos][Qty 8 milesimas][Desc 20 EXACTOS]
-        # La descripcion DEBE ser exactamente 20 caracteres (rellenar con espacios).
+        # Formato TFHKA: [TaxCode 1][Price 12 centavos][Qty 8 milesimas][Desc <=20]
+        # La descripcion NO se rellena: longitud natural, max 20 caracteres
+        # (igual que el README y generateFiscalContent de produccion).
         test_uuid = str(uuid.uuid4())
         short_id  = test_uuid.split('-')[-1]  # ultimos 12 chars del UUID
 
         tax   = " "                          # espacio = exento (0% IVA)
         price = "000000000100"               # 100 centavos = 1.00 Bs
         qty   = "00001000"                   # 1000 milesimas = 1.000 unidades
-        desc  = f"PRUEBA {short_id}"[:20].ljust(20)  # exactamente 20 chars
+        desc  = f"PRUEBA {short_id}"[:20]     # max 20 chars, sin relleno
         product_line = f"{tax}{price}{qty}{desc}"
         print(f"[FISCAL] Test print product line: {product_line!r} (len={len(product_line)})", flush=True)
         print(f"[FISCAL] Test print UUID: {test_uuid} -> short: {short_id}", flush=True)
