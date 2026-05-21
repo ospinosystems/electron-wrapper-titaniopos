@@ -967,19 +967,6 @@ def test_print():
 
         diagnostico = {}
         with _INTTFHKA_LOCK:
-            # DIAGNÓSTICO: leer estado interno de la impresora ANTES de imprimir.
-            # Los comandos S1-S8 devuelven distintos campos de estado fiscal.
-            print(f"[FISCAL] ===== DIAGNÓSTICO DE ESTADO DE IMPRESORA =====", flush=True)
-            for scmd in ("S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8"):
-                try:
-                    _sr, _so = _run_inttfhka(f"SendCmd({scmd})", timeout=15)
-                    diagnostico[scmd] = _so
-                    print(f"[FISCAL] Estado {scmd}: {_so!r}", flush=True)
-                except Exception as _se:
-                    diagnostico[scmd] = f"ERROR: {_se}"
-                    print(f"[FISCAL] Estado {scmd} error: {_se}", flush=True)
-            print(f"[FISCAL] ===== FIN DIAGNÓSTICO =====", flush=True)
-
             retorno, out_str = _run_inttfhka("SendFileCmd(Factura.txt)")
             print(f"[FISCAL] SendFileCmd -> Retorno={retorno} stdout={out_str!r}", flush=True)
 
