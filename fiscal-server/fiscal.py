@@ -901,10 +901,16 @@ def test_print():
         print(f"[FISCAL] Test print product line: {product_line!r} (len={len(product_line)})", flush=True)
         print(f"[FISCAL] Test print UUID: {test_uuid} -> short: {short_id}", flush=True)
 
+        # Pago en efectivo: formato serial TFHKA = [TipoPago 3][Monto 12 centavos]
+        # 101 = efectivo, 000000000100 = 100 centavos = 1.00 Bs
+        # NOTA: IntTFHKA.exe acepta solo "101" (auto-calcula monto restante),
+        # pero el protocolo serial directo requiere el monto explícito.
+        payment_line = "101000000000100"
+
         lineas = [
             f"i05Caja: TEST-{short_id[:8]}",
             product_line,
-            "101",
+            payment_line,
         ]
 
         archivo_factura = get_factura_path()

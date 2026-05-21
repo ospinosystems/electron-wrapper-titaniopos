@@ -36,8 +36,6 @@ class HKAPrinter:
         self.timeout = timeout
         self.serial = None
         self.last_error = ""
-        # Byte de secuencia TFHKA: alterna entre 0x20 y 0x3F con cada comando
-        self._seq = 0x20
 
     def open(self):
         """Abre conexión con la impresora"""
@@ -99,21 +97,15 @@ class HKAPrinter:
             lrc ^= byte
         return lrc
 
-    def _next_seq(self):
-        """Devuelve el SEQ actual y alterna para el siguiente comando."""
-        seq = self._seq
-        self._seq = 0x3F if seq == 0x20 else 0x20
-        return seq
-
     def _build_packet(self, command):
-        """Construye trama TFHKA estándar: STX + SEQ + CMD + ETX + LRC.
+        """Construye trama STX + CMD + ETX + LRC.
 
-        SEQ alterna entre 0x20 y 0x3F con cada comando enviado.
-        LRC se calcula sobre SEQ + CMD + ETX.
+        NOTA: Este modelo de impresora HKA NO usa byte de secuencia (SEQ).
+        Validado con hardware real: el framing sin SEQ funciona para
+        comentarios, productos y pagos (con monto).
         """
         cmd_bytes = command.encode('latin-1') if isinstance(command, str) else command
-        seq = self._next_seq()
-        body = bytes([seq]) + cmd_bytes + bytes([ETX])
+        body = cmd_bytes + bytes([ETX])
         lrc = self.calculate_lrc(body)
         return bytes([STX]) + body + bytes([lrc])
 
@@ -143,7 +135,6 @@ class HKAPrinter:
                 if not self.open():
                     return None
 
-                self._seq = 0x20  # Reset secuencia al inicio de comunicación
                 packet = self._build_packet(command)
 
                 for attempt in range(1, MAX_RETRIES + 1):
@@ -184,7 +175,6 @@ class HKAPrinter:
 
                 self.serial.reset_input_buffer()
                 self.serial.reset_output_buffer()
-                self._seq = 0x20  # Reset secuencia al inicio de factura
                 time.sleep(0.2)
 
                 responses = []
