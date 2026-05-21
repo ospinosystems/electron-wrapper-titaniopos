@@ -912,16 +912,13 @@ def test_print():
         print(f"[FISCAL] Test print product line: {product_line!r} (len={len(product_line)})", flush=True)
         print(f"[FISCAL] Test print UUID: {test_uuid} -> short: {short_id}", flush=True)
 
-        # Formato TFHKA factura (según README, formato canónico):
-        # iS* = nombre cliente, iR* = RIF cliente (REQUERIDOS para cerrar factura)
-        # i05 = comentario, producto(s), 101 = pago efectivo
+        # Formato mínimo (el que imprimía al principio): comentario + producto + pago.
+        # Sin datos de cliente (un RIF falso puede hacer que la factura no cierre),
+        # sin subtotal explícito.
         lineas = [
-            "iS*CLIENTE DE PRUEBA",
-            "iR*V12345678",
             f"i05Caja: TEST-{short_id[:8]}",
             product_line,
-            "3",      # subtotal
-            "101",    # pago efectivo / cierre
+            "101",
         ]
 
         archivo_factura = get_factura_path()
