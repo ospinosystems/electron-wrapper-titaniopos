@@ -961,33 +961,12 @@ def test_print():
             return retorno, error, out_s
 
         diagnostico = {}
+        # Un solo SendFileCmd, simple y directo. Sin cancelaciones ni reportes
+        # automáticos: si falla, devuelve el error tal cual.
         with _INTTFHKA_LOCK:
             retorno, error, out_str = _run_inttfhka("SendFileCmd(Factura.txt)")
             print(f"[FISCAL] SendFileCmd -> Retorno={retorno} Error={error} stdout={out_str!r}", flush=True)
             success = error == 0 and retorno not in ("", "FALSE")
-
-            # Recuperacion si falló: cancelar documento abierto + cierre Z
-            # (cierra el día fiscal, que tras muchos intentos puede estar
-            # bloqueando documentos nuevos) + reintentar.
-            if not success:
-                print(f"[FISCAL] Falló (Error={error}). Recuperando: cancel + reporte Z...", flush=True)
-                try:
-                    _cr, _ce_, cout = _run_inttfhka("SendCmd(7)", timeout=20)
-                    print(f"[FISCAL] Cancel(7) -> {cout!r}", flush=True)
-                except Exception as ce:
-                    print(f"[FISCAL] Cancel error: {ce}", flush=True)
-                time.sleep(6)
-
-                try:
-                    _zr, _ze, zout = _run_inttfhka("SendCmd(I0Z)", timeout=90)
-                    print(f"[FISCAL] Reporte Z (I0Z) -> {zout!r}", flush=True)
-                except Exception as ze:
-                    print(f"[FISCAL] Reporte Z error: {ze}", flush=True)
-                time.sleep(8)
-
-                retorno, error, out_str = _run_inttfhka("SendFileCmd(Factura.txt)")
-                print(f"[FISCAL] SendFileCmd retry -> Retorno={retorno} Error={error} stdout={out_str!r}", flush=True)
-                success = error == 0 and retorno not in ("", "FALSE")
 
         return jsonify({
             "status": "ok" if success else "error",
