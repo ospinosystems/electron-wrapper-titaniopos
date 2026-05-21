@@ -920,7 +920,8 @@ def test_print():
             "iR*V12345678",
             f"i05Caja: TEST-{short_id[:8]}",
             product_line,
-            "101",
+            "3",      # subtotal
+            "101",    # pago efectivo / cierre
         ]
 
         archivo_factura = get_factura_path()
