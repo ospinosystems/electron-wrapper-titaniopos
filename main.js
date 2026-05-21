@@ -2748,6 +2748,21 @@ app.whenReady().then(() => {
   registerFiscalHandlers(app);
   console.log('🧾 [FISCAL] Fiscal machine system initialized');
 
+  // Auto-start fiscal server if it was left running in config
+  try {
+    const { readSettings, normalizeFiscal } = require('./titaniopos-settings-file');
+    const fiscalCfg = normalizeFiscal(readSettings(app).fiscal);
+    if (fiscalCfg.enabled && fiscalCfg.serverEnabled) {
+      console.log('🧾 [FISCAL] Auto-starting fiscal server (was left running)...');
+      const port = parseInt(new URL(fiscalCfg.serverUrl || 'http://127.0.0.1:3005').port, 10) || 3005;
+      startFiscalServer({ port })
+        .then(r => console.log('🧾 [FISCAL] Auto-start result:', r.success ? 'OK' : r.error))
+        .catch(e => console.error('🧾 [FISCAL] Auto-start failed:', e.message));
+    }
+  } catch (e) {
+    console.warn('[FISCAL] Could not auto-start fiscal server:', e.message);
+  }
+
   // Register pinpad handlers for local LAN proxy
   registerPinpadHandlers();
   console.log('💳 [PINPAD] Local proxy initialized');

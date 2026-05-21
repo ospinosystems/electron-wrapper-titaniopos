@@ -36,6 +36,8 @@ class HKAPrinter:
         self.timeout = timeout
         self.serial = None
         self.last_error = ""
+        # Byte de secuencia TFHKA: alterna entre 0x20 y 0x3F con cada comando
+        self._seq = 0x20
 
     def open(self):
         """Abre conexión con la impresora"""
@@ -97,15 +99,21 @@ class HKAPrinter:
             lrc ^= byte
         return lrc
 
-    def _build_packet(self, command):
-        """Construye trama STX + CMD + ETX + LRC.
+    def _next_seq(self):
+        """Devuelve el SEQ actual y alterna para el siguiente comando."""
+        seq = self._seq
+        self._seq = 0x3F if seq == 0x20 else 0x20
+        return seq
 
-        OJO: el protocolo HKA/TFHKA real incluye un byte SEQ entre STX y CMD.
-        Mantenemos el framing actual por compatibilidad con lo que ya estaba
-        en producción; rewrite pendiente de validación con hardware.
+    def _build_packet(self, command):
+        """Construye trama TFHKA estándar: STX + SEQ + CMD + ETX + LRC.
+
+        SEQ alterna entre 0x20 y 0x3F con cada comando enviado.
+        LRC se calcula sobre SEQ + CMD + ETX.
         """
         cmd_bytes = command.encode('latin-1') if isinstance(command, str) else command
-        body = cmd_bytes + bytes([ETX])
+        seq = self._next_seq()
+        body = bytes([seq]) + cmd_bytes + bytes([ETX])
         lrc = self.calculate_lrc(body)
         return bytes([STX]) + body + bytes([lrc])
 
@@ -135,6 +143,7 @@ class HKAPrinter:
                 if not self.open():
                     return None
 
+                self._seq = 0x20  # Reset secuencia al inicio de comunicación
                 packet = self._build_packet(command)
 
                 for attempt in range(1, MAX_RETRIES + 1):
@@ -175,16 +184,18 @@ class HKAPrinter:
 
                 self.serial.reset_input_buffer()
                 self.serial.reset_output_buffer()
+                self._seq = 0x20  # Reset secuencia al inicio de factura
                 time.sleep(0.2)
 
                 responses = []
-                for line in lines:
+                for idx, line in enumerate(lines):
                     # rstrip() de CR/LF, preserva espacio inicial (código de tasa IVA)
                     line = line.rstrip('\r\n')
                     if not line.strip():
                         continue
 
                     packet = self._build_packet(line)
+                    print(f"[HKA] Sending line {idx}: {line!r} (packet {len(packet)} bytes: {packet.hex()})")
 
                     sent_ok = False
                     last_resp = b''
@@ -192,12 +203,14 @@ class HKAPrinter:
                         # NO reset_input_buffer aquí: podría descartar ACK retrasados.
                         # Drenamos solo si quedó basura previa al write.
                         if self.serial.in_waiting > 0:
-                            self.serial.read(self.serial.in_waiting)
+                            drained = self.serial.read(self.serial.in_waiting)
+                            print(f"[HKA]   Drained {len(drained)} bytes: {drained.hex()}")
 
                         self.serial.write(packet)
                         self.serial.flush()
 
                         last_resp = self._read_response(max_wait=3)
+                        print(f"[HKA]   Response (attempt {attempt}): {last_resp.hex()} | ACK={'yes' if ACK in last_resp else 'no'} NAK={'yes' if NAK in last_resp else 'no'}")
 
                         if NAK in last_resp:
                             if attempt < MAX_RETRIES:

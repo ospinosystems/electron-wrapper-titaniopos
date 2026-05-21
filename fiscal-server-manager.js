@@ -249,6 +249,7 @@ const startFiscalServer = async (options = {}) => {
   // Configurar variables de entorno
   const env = { ...process.env };
   env.FISCAL_SERVER_PORT = port.toString();
+  env.PYTHONUNBUFFERED = '1'; // Forzar flush inmediato de stdout/stderr
   if (intfhkaPath) {
     env.INTFHKA_PATH = intfhkaPath;
   }

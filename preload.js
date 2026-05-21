@@ -259,7 +259,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @returns {Promise<{success: boolean, printer_connected: boolean, retorno_txt?: string, error?: string}>}
    */
   fiscalTestPrinter: () => ipcRenderer.invoke('fiscal-test-printer'),
-  
+
+  /**
+   * Imprime factura de prueba: 1 producto exento, 1 Bs, efectivo.
+   * GENERA DOCUMENTO FISCAL REAL con numero consecutivo.
+   */
+  fiscalTestPrint: () => ipcRenderer.invoke('fiscal-test-print'),
+
   /**
    * Get server fiscal configuration (from Python server)
    * @returns {Promise<{success: boolean, puerto_com?: string, ruta_programa?: string, error?: string}>}

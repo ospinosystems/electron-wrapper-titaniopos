@@ -771,6 +771,33 @@ const registerFiscalHandlers = (app) => {
     }
   });
 
+  // Imprime una factura de prueba (1 producto exento, 1 Bs, efectivo)
+  // GENERA UN DOCUMENTO FISCAL REAL con número consecutivo.
+  ipcMain.handle('fiscal-test-print', async () => {
+    try {
+      const config = loadFiscalConfig(app);
+
+      if (!config.enabled) {
+        return { success: false, error: 'Máquina fiscal no habilitada' };
+      }
+
+      if (!config.fiscalMode) {
+        return { success: false, error: 'Activa el modo fiscal para imprimir una prueba real' };
+      }
+
+      console.log('[FISCAL] Sending test print to', `${config.serverUrl}/fiscal/test-print`);
+      const result = await makeFiscalRequest(`${config.serverUrl}/fiscal/test-print`, 'POST');
+      console.log('[FISCAL] Test print response:', JSON.stringify(result.data, null, 2));
+      return {
+        success: result.data?.status === 'ok',
+        ...result.data,
+      };
+    } catch (error) {
+      console.error('[FISCAL] Test print error:', error.message);
+      return { success: false, error: error.message };
+    }
+  });
+
   // Obtener configuración completa del servidor fiscal
   ipcMain.handle('fiscal-get-server-config', async () => {
     try {
@@ -806,6 +833,9 @@ const registerFiscalHandlers = (app) => {
   ipcMain.handle('fiscal-server-start', async (event, options = {}) => {
     try {
       const result = await startFiscalServer(options);
+      if (result.success) {
+        saveFiscalConfig(app, { serverEnabled: true });
+      }
       return result;
     } catch (error) {
       return { success: false, error: error.message };
@@ -816,6 +846,7 @@ const registerFiscalHandlers = (app) => {
   ipcMain.handle('fiscal-server-stop', async () => {
     try {
       stopFiscalServer();
+      saveFiscalConfig(app, { serverEnabled: false });
       return { success: true, message: 'Server stopped' };
     } catch (error) {
       return { success: false, error: error.message };
