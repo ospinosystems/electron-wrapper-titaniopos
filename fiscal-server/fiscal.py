@@ -964,34 +964,13 @@ def test_print():
 
         diagnostico = {}
         with _INTTFHKA_LOCK:
+            # UN solo intento. NO cancelamos en caso de fallo: el comando de
+            # cancelación (SendCmd 7) imprime una "factura anulada" cada vez,
+            # y eso es lo que estaba ensuciando con anuladas. Si SendFileCmd
+            # falla, devolvemos el error tal cual sin tocar la impresora.
             retorno, out_str = _run_inttfhka("SendFileCmd(Factura.txt)")
             print(f"[FISCAL] SendFileCmd -> Retorno={retorno} stdout={out_str!r}", flush=True)
-
             success = _es_ok(retorno)
-
-            # Si falló, puede haber un documento fiscal abierto de un intento
-            # previo. Cancelarlo UNA vez (sale una "anulada" de limpieza) y
-            # reintentar.
-            if not success:
-                print(f"[FISCAL] Falló (Retorno={retorno}). Cancelando documento abierto y reintentando...", flush=True)
-                try:
-                    cret, cout = _run_inttfhka("SendCmd(7)", timeout=20)
-                    print(f"[FISCAL] Cancel -> Retorno={cret} stdout={cout!r}", flush=True)
-                except Exception as ce:
-                    print(f"[FISCAL] Cancel error: {ce}", flush=True)
-                time.sleep(6)  # esperar a que termine de imprimir la anulada
-
-                retorno, out_str = _run_inttfhka("SendFileCmd(Factura.txt)")
-                print(f"[FISCAL] SendFileCmd retry -> Retorno={retorno} stdout={out_str!r}", flush=True)
-                success = _es_ok(retorno)
-
-                # Si aún falló, cancelar para no dejar el documento abierto
-                if not success:
-                    try:
-                        _run_inttfhka("SendCmd(7)", timeout=20)
-                        print(f"[FISCAL] Limpieza final: documento abierto cancelado.", flush=True)
-                    except Exception:
-                        pass
 
         return jsonify({
             "status": "ok" if success else "error",
