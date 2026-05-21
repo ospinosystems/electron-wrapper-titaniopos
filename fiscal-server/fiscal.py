@@ -850,29 +850,35 @@ def test_printer():
         if not os.path.exists(ruta_programa):
             return jsonify({"status": "error", "message": f"Programa no encontrado: {ruta_programa}"}), 400
         
-        comando = "IntTFHKA.exe CheckFprinter()"
-        print(f"[FISCAL] Test: {comando} en {programa_dir}")
-        
-        proceso = subprocess.Popen(
-            comando,
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=programa_dir
-        )
-        stdout, stderr = proceso.communicate(timeout=30)
-        
-        retorno = leer_retorno()
-        status_error = leer_status_error()
-        printer_connected = retorno and retorno.startswith("T")
-        
+        # CheckFprinter SIN paréntesis (con paréntesis IntTFHKA.exe devuelve -1).
+        # El resultado va a stdout: "Retorno: TRUE  Status: 0  Error: 0"
+        comando = "IntTFHKA.exe CheckFprinter"
+        print(f"[FISCAL] Test: {comando} en {programa_dir}", flush=True)
+
+        with _INTTFHKA_LOCK:
+            proceso = subprocess.Popen(
+                comando,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=programa_dir
+            )
+            stdout, stderr = proceso.communicate(timeout=30)
+
+        out_str = stdout.decode('latin-1', errors='ignore').strip() if stdout else ""
+        print(f"[FISCAL] CheckFprinter stdout: {out_str!r} returncode={proceso.returncode}", flush=True)
+
+        import re as _re
+        m_ret = _re.search(r'Retorno:\s*(\S+)', out_str)
+        retorno_val = m_ret.group(1).upper() if m_ret else ""
+        printer_connected = retorno_val in ('TRUE', '1', 'T')
+
         return jsonify({
             "status": "ok" if printer_connected else "error",
             "message": "Impresora conectada" if printer_connected else "Impresora no detectada",
             "printer_connected": printer_connected,
             "return_code": proceso.returncode,
-            "retorno_txt": retorno,
-            "status_error_txt": status_error,
+            "stdout": out_str,
             "puerto_com": puerto,
             "method": "IntTFHKA.exe"
         })
