@@ -250,6 +250,10 @@ const startFiscalServer = async (options = {}) => {
   const env = { ...process.env };
   env.FISCAL_SERVER_PORT = port.toString();
   env.PYTHONUNBUFFERED = '1'; // Forzar flush inmediato de stdout/stderr
+  // Desactivar hka_serial: solo IntTFHKA.exe maneja la impresora fiscal.
+  // hka_serial no puede cerrar documentos (NAK en pago) y compite por el
+  // puerto COM con IntTFHKA.exe causando Error 128.
+  env.USE_HKA_SERIAL = '0';
   if (intfhkaPath) {
     env.INTFHKA_PATH = intfhkaPath;
   }
