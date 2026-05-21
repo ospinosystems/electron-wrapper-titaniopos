@@ -961,12 +961,20 @@ def test_print():
             return retorno, error, out_s
 
         diagnostico = {}
-        # Un solo SendFileCmd, simple y directo. Sin cancelaciones ni reportes
-        # automáticos: si falla, devuelve el error tal cual.
         with _INTTFHKA_LOCK:
             retorno, error, out_str = _run_inttfhka("SendFileCmd(Factura.txt)")
             print(f"[FISCAL] SendFileCmd -> Retorno={retorno} Error={error} stdout={out_str!r}", flush=True)
             success = error == 0 and retorno not in ("", "FALSE")
+
+            # Higiene: si falló, SendFileCmd pudo dejar un documento fiscal
+            # abierto que bloquearía los próximos (Error 128). Cancelarlo UNA
+            # vez deja la impresora limpia. Solo se hace si hubo fallo.
+            if not success:
+                try:
+                    _cr, _ce, cout = _run_inttfhka("SendCmd(7)", timeout=20)
+                    print(f"[FISCAL] Limpieza post-fallo (cancel) -> {cout!r}", flush=True)
+                except Exception as ce:
+                    print(f"[FISCAL] Limpieza post-fallo error: {ce}", flush=True)
 
         return jsonify({
             "status": "ok" if success else "error",
