@@ -913,13 +913,13 @@ def test_print():
         print(f"[FISCAL] Test print product line: {product_line!r} (len={len(product_line)})", flush=True)
         print(f"[FISCAL] Test print UUID: {test_uuid} -> short: {short_id}", flush=True)
 
-        # Formato mínimo (el que imprimía al principio): comentario + producto + pago.
-        # Sin datos de cliente (un RIF falso puede hacer que la factura no cierre),
-        # sin subtotal explícito.
+        # Pago efectivo CON monto explícito: 101 + 12 dígitos en centavos.
+        # 1.00 Bs = 000000000100  ->  línea de pago = 101000000000100
+        # (el cierre con "101" pelado falla con Error 128 en esta HKA80).
         lineas = [
             f"i05Caja: TEST-{short_id[:8]}",
             product_line,
-            "101",
+            "101000000000100",
         ]
 
         archivo_factura = get_factura_path()
