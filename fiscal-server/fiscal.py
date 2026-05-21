@@ -912,10 +912,12 @@ def test_print():
         print(f"[FISCAL] Test print product line: {product_line!r} (len={len(product_line)})", flush=True)
         print(f"[FISCAL] Test print UUID: {test_uuid} -> short: {short_id}", flush=True)
 
-        # Formato TFHKA (igual que facturas reales de producción):
-        # 1. Comentario  2. Producto(s)  3. Pago (101 = efectivo)
-        # IntTFHKA.exe traduce estos códigos al protocolo crudo de la impresora.
+        # Formato TFHKA factura (según README, formato canónico):
+        # iS* = nombre cliente, iR* = RIF cliente (REQUERIDOS para cerrar factura)
+        # i05 = comentario, producto(s), 101 = pago efectivo
         lineas = [
+            "iS*CLIENTE DE PRUEBA",
+            "iR*V12345678",
             f"i05Caja: TEST-{short_id[:8]}",
             product_line,
             "101",
