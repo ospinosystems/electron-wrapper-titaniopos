@@ -269,20 +269,22 @@ const generateFiscalContent = (invoiceData) => {
         }
       }
       
-      // Precio en centavos (sin decimales), 12 dígitos
+      // Precio en centavos (sin decimales), 10 dígitos
       // IMPORTANTE: Es el precio UNITARIO, no el total
+      // OJO HKA80: el precio es de 10 dígitos. Con 12 la impresora lee mal
+      // los campos y sale 0.01 x 0.01. Verificado con hardware real.
       const priceNum = parseFloat(product.price) || 0;
       const priceInCents = Math.round(priceNum * 100);
-      const priceStr = priceInCents.toString().padStart(12, '0');
-      
+      const priceStr = priceInCents.toString().padStart(10, '0');
+
       // Cantidad en milésimas, 8 dígitos (ej: 1.000 = 00001000)
       const qtyInThousandths = Math.round((product.quantity || 1) * 1000);
       const qtyStr = qtyInThousandths.toString().padStart(8, '0');
-      
+
       // Descripción: máximo 20 caracteres, sin caracteres especiales
       const description = sanitizeText(product.description || 'PRODUCTO', 20);
-      
-      // Formato final: [TasaIVA][Precio12][Cantidad8][Descripción]
+
+      // Formato final: [TasaIVA][Precio10][Cantidad8][Descripción]
       const productLine = `${taxCode}${priceStr}${qtyStr}${description}`;
       console.log(`[FISCAL] VALIDATION: taxCode="${taxCode}" (len=${taxCode.length}) | priceStr="${priceStr}" (len=${priceStr.length}) | qtyStr="${qtyStr}" (len=${qtyStr.length}) | description="${description}" (len=${description.length})`);
       console.log(`[FISCAL] Product line: price=${product.price} -> cents=${priceInCents} -> "${priceStr}" | qty=${product.quantity} -> thousandths=${qtyInThousandths} -> "${qtyStr}" | LINE="${productLine}"`);
@@ -392,9 +394,9 @@ const generateCreditNoteContent = (creditNoteData) => {
         }
       }
       
-      // Precio en centavos, 12 dígitos
+      // Precio en centavos, 10 dígitos (formato HKA80, ver generateFiscalContent)
       const priceInCents = Math.round((product.price || 0) * 100);
-      const priceStr = priceInCents.toString().padStart(12, '0');
+      const priceStr = priceInCents.toString().padStart(10, '0');
       
       // Cantidad en milésimas, 8 dígitos
       const qtyInThousandths = Math.round((product.quantity || 1) * 1000);
