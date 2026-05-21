@@ -537,7 +537,16 @@ def ejecutar_programa_fiscal(parametros, type_param, file_param):
                             print(f"[{fecha_hora_ejecucion}] Línea {i}: {linea_str}")
                 else:
                     fp.write(str(parametros))
-            
+
+            # CRÍTICO: IntTFHKA.exe lee Factura.txt de SU directorio (CWD),
+            # no del RUNTIME_DIR donde lo escribimos. Copiarlo o imprimiría
+            # un archivo viejo (p.ej. el de la prueba).
+            import shutil as _shutil
+            exe_factura = os.path.join(programa_dir, 'Factura.txt')
+            if os.path.abspath(archivo_factura) != os.path.abspath(exe_factura):
+                _shutil.copy2(archivo_factura, exe_factura)
+                print(f"[{fecha_hora_ejecucion}] Factura.txt copiado a: {exe_factura}")
+
             parametros = "SendFileCmd(Factura.txt)"
             
         elif type_param == "reportefiscal":
