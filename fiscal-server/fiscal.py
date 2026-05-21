@@ -901,16 +901,11 @@ def test_print():
         print(f"[FISCAL] Test print product line: {product_line!r} (len={len(product_line)})", flush=True)
         print(f"[FISCAL] Test print UUID: {test_uuid} -> short: {short_id}", flush=True)
 
-        # Pago en efectivo: formato serial TFHKA = [TipoPago 3][Monto 12 centavos]
-        # 101 = efectivo, 000000000100 = 100 centavos = 1.00 Bs
-        # NOTA: IntTFHKA.exe acepta solo "101" (auto-calcula monto restante),
-        # pero el protocolo serial directo requiere el monto explícito.
-        payment_line = "101000000000100"
-
+        # Pago en efectivo: "101" = pagar todo en efectivo (formato IntTFHKA.exe)
         lineas = [
             f"i05Caja: TEST-{short_id[:8]}",
             product_line,
-            payment_line,
+            "101",
         ]
 
         archivo_factura = get_factura_path()
@@ -930,89 +925,53 @@ def test_print():
         ruta_programa = get_programa_path()
         programa_dir = get_programa_dir()
 
-        # Paso 1: Cancelar documento abierto previo (por intentos fallidos)
-        if HKA_SERIAL_AVAILABLE:
-            from hka_serial import HKAPrinter
-            print(f"[FISCAL] Cancelling any open document (hka_serial)...", flush=True)
-            printer = HKAPrinter(port=puerto)
-            cancel_resp = printer.cancel_document()
-            print(f"[FISCAL] Cancel result: {cancel_resp}", flush=True)
-            time.sleep(1)
-        elif os.path.exists(ruta_programa):
-            print(f"[FISCAL] Cancelling any open document (IntTFHKA)...", flush=True)
+        # Test-print usa SOLO IntTFHKA.exe.
+        # hka_serial no puede enviar el comando de pago/cierre (NAK persistente),
+        # lo que deja documentos fiscales abiertos que se imprimen como "anulada".
+        if not os.path.exists(ruta_programa):
+            return jsonify({"status": "error", "message": f"IntTFHKA.exe no encontrado en {programa_dir}"}), 400
+
+        import shutil
+        exe_factura = os.path.join(programa_dir, 'Factura.txt')
+        if archivo_factura != exe_factura:
+            shutil.copy2(archivo_factura, exe_factura)
+
+        # Paso 1: Cancelar documento abierto previo (por intentos fallidos anteriores)
+        print(f"[FISCAL] Test print: cancelando documento previo con IntTFHKA...", flush=True)
+        try:
             cancel_proc = subprocess.Popen("IntTFHKA.exe SendCmd(7)", shell=True,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=programa_dir)
             cancel_out, _ = cancel_proc.communicate(timeout=15)
-            print(f"[FISCAL] Cancel result: {cancel_out.decode('latin-1', errors='ignore').strip()}", flush=True)
-            time.sleep(1)
+            cancel_str = cancel_out.decode('latin-1', errors='ignore').strip()
+            print(f"[FISCAL] Cancel result: {cancel_str}", flush=True)
+        except Exception as ce:
+            print(f"[FISCAL] Cancel error (no crítico): {ce}", flush=True)
+        time.sleep(0.5)
 
-        # Paso 2: Imprimir factura con hka_serial (protocolo directo)
-        if HKA_SERIAL_AVAILABLE:
-            print(f"[FISCAL] Test print: usando hka_serial en {puerto}", flush=True)
-            result = send_fiscal_file(puerto, archivo_factura)
-            print(f"[FISCAL] Test print hka_serial result: {result}", flush=True)
+        # Paso 2: Enviar factura con IntTFHKA.exe
+        print(f"[FISCAL] Test print: enviando Factura.txt con IntTFHKA.exe en {programa_dir}", flush=True)
+        proceso = subprocess.Popen("IntTFHKA.exe SendFileCmd(Factura.txt)", shell=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=programa_dir)
+        stdout_data, stderr_data = proceso.communicate(timeout=60)
 
-            if result.get("success"):
-                return jsonify({
-                    "status": "ok",
-                    "message": f"Factura de prueba impresa (UUID: {short_id})",
-                    "method": "hka_serial",
-                    "uuid": test_uuid,
-                    "result": result,
-                })
+        out_str = stdout_data.decode('latin-1', errors='ignore').strip()
+        print(f"[FISCAL] IntTFHKA stdout: {out_str}", flush=True)
 
-            # Si hka_serial falla, cancelar documento abierto antes del fallback
-            print(f"[FISCAL] hka_serial failed, cancelling open doc before IntTFHKA fallback...", flush=True)
-            try:
-                cancel2 = HKAPrinter(port=puerto)
-                cancel2.cancel_document()
-                time.sleep(1)
-            except Exception as ce:
-                print(f"[FISCAL] Cancel before fallback error: {ce}", flush=True)
+        import re as _re
+        m_ret = _re.search(r'Retorno:\s*(\S+)', out_str)
+        m_err = _re.search(r'Error:\s*(\d+)', out_str)
+        stdout_retorno = m_ret.group(1) if m_ret else None
+        stdout_error = int(m_err.group(1)) if m_err else None
 
-            # También intentar cancelar con IntTFHKA.exe por si acaso
-            if os.path.exists(ruta_programa):
-                try:
-                    cancel_proc2 = subprocess.Popen("IntTFHKA.exe SendCmd(7)", shell=True,
-                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=programa_dir)
-                    cancel_out2, _ = cancel_proc2.communicate(timeout=15)
-                    print(f"[FISCAL] IntTFHKA cancel result: {cancel_out2.decode('latin-1', errors='ignore').strip()}", flush=True)
-                    time.sleep(1)
-                except Exception as ce:
-                    print(f"[FISCAL] IntTFHKA cancel error: {ce}", flush=True)
-
-        # Paso 3: Fallback IntTFHKA.exe
-        if os.path.exists(ruta_programa):
-            import shutil
-            exe_factura = os.path.join(programa_dir, 'Factura.txt')
-            if archivo_factura != exe_factura:
-                shutil.copy2(archivo_factura, exe_factura)
-
-            print(f"[FISCAL] Test print: usando IntTFHKA.exe en {programa_dir}", flush=True)
-            proceso = subprocess.Popen("IntTFHKA.exe SendFileCmd(Factura.txt)", shell=True,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=programa_dir)
-            stdout_data, stderr_data = proceso.communicate(timeout=60)
-
-            out_str = stdout_data.decode('latin-1', errors='ignore').strip()
-            print(f"[FISCAL] IntTFHKA stdout: {out_str}", flush=True)
-
-            import re as _re
-            m_ret = _re.search(r'Retorno:\s*(\S+)', out_str)
-            m_err = _re.search(r'Error:\s*(\d+)', out_str)
-            stdout_retorno = m_ret.group(1) if m_ret else None
-            stdout_error = int(m_err.group(1)) if m_err else None
-
-            success = stdout_retorno in ['0', '1', 'TRUE']
-            return jsonify({
-                "status": "ok" if success else "error",
-                "message": f"Factura de prueba impresa (UUID: {short_id})" if success else f"Error al imprimir (Retorno={stdout_retorno}, Error={stdout_error})",
-                "method": "IntTFHKA.exe",
-                "uuid": test_uuid,
-                "stdout_retorno": stdout_retorno,
-                "stdout_error": stdout_error,
-            })
-
-        return jsonify({"status": "error", "message": "No hay método de impresión disponible (ni IntTFHKA.exe ni hka_serial)"}), 400
+        success = stdout_retorno in ['0', '1', 'TRUE']
+        return jsonify({
+            "status": "ok" if success else "error",
+            "message": f"Factura de prueba impresa (UUID: {short_id})" if success else f"Error al imprimir (Retorno={stdout_retorno}, Error={stdout_error})",
+            "method": "IntTFHKA.exe",
+            "uuid": test_uuid,
+            "stdout_retorno": stdout_retorno,
+            "stdout_error": stdout_error,
+        })
 
     except subprocess.TimeoutExpired:
         return jsonify({"status": "error", "message": "Timeout esperando respuesta de la impresora"}), 500
