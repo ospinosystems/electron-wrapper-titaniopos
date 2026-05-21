@@ -945,44 +945,54 @@ def test_print():
         if archivo_factura != exe_factura:
             shutil.copy2(archivo_factura, exe_factura)
 
+        import re as _re
+
         def _run_inttfhka(comando, timeout=60):
-            """Ejecuta IntTFHKA.exe; devuelve (returncode, stdout_str)."""
+            """Ejecuta IntTFHKA.exe; devuelve (retorno_str, stdout_str).
+            El returncode del proceso siempre es -1; el resultado real está
+            en stdout: 'Retorno: X  Status: Y  Error: Z'.
+            Retorno 3/4/5/TRUE = OK; 0/2/FALSE = error."""
             p = subprocess.Popen(f"IntTFHKA.exe {comando}", shell=True,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=programa_dir)
             out, _err = p.communicate(timeout=timeout)
             out_s = out.decode('latin-1', errors='ignore').strip()
-            return p.returncode, out_s
+            m = _re.search(r'Retorno:\s*(\S+)', out_s)
+            retorno = m.group(1).upper() if m else ""
+            return retorno, out_s
 
-        # IntTFHKA.exe: returncode 3/4/5 = factura impresa OK; otro = error.
+        def _es_ok(retorno):
+            # IntTFHKA: 3/4/5 = comando ejecutado; TRUE = ok
+            return retorno in ('3', '4', '5', 'TRUE')
+
         with _INTTFHKA_LOCK:
-            rc, out_str = _run_inttfhka("SendFileCmd(Factura.txt)")
-            print(f"[FISCAL] SendFileCmd -> returncode={rc} stdout={out_str!r}", flush=True)
+            retorno, out_str = _run_inttfhka("SendFileCmd(Factura.txt)")
+            print(f"[FISCAL] SendFileCmd -> Retorno={retorno} stdout={out_str!r}", flush=True)
 
-            success = rc in (3, 4, 5)
+            success = _es_ok(retorno)
 
-            # Si falló, puede haber un documento fiscal abierto de intentos
-            # previos. Cancelarlo UNA vez (sale una "anulada" de limpieza) y
-            # reintentar. Sin hka_serial ya no se crean documentos basura.
+            # Si falló, puede haber un documento fiscal abierto de un intento
+            # previo. Cancelarlo UNA vez (sale una "anulada" de limpieza) y
+            # reintentar.
             if not success:
-                print(f"[FISCAL] Falló (rc={rc}). Cancelando documento abierto y reintentando...", flush=True)
+                print(f"[FISCAL] Falló (Retorno={retorno}). Cancelando documento abierto y reintentando...", flush=True)
                 try:
-                    crc, cout = _run_inttfhka("SendCmd(7)", timeout=20)
-                    print(f"[FISCAL] Cancel -> returncode={crc} stdout={cout!r}", flush=True)
+                    cret, cout = _run_inttfhka("SendCmd(7)", timeout=20)
+                    print(f"[FISCAL] Cancel -> Retorno={cret} stdout={cout!r}", flush=True)
                 except Exception as ce:
                     print(f"[FISCAL] Cancel error: {ce}", flush=True)
                 time.sleep(6)  # esperar a que termine de imprimir la anulada
 
-                rc, out_str = _run_inttfhka("SendFileCmd(Factura.txt)")
-                print(f"[FISCAL] SendFileCmd retry -> returncode={rc} stdout={out_str!r}", flush=True)
-                success = rc in (3, 4, 5)
+                retorno, out_str = _run_inttfhka("SendFileCmd(Factura.txt)")
+                print(f"[FISCAL] SendFileCmd retry -> Retorno={retorno} stdout={out_str!r}", flush=True)
+                success = _es_ok(retorno)
 
         return jsonify({
             "status": "ok" if success else "error",
             "message": (f"Factura de prueba impresa (UUID: {short_id})" if success
-                        else f"Error al imprimir. IntTFHKA returncode={rc}. Salida: {out_str}"),
+                        else f"Error al imprimir. IntTFHKA Retorno={retorno}. Salida: {out_str}"),
             "method": "IntTFHKA.exe",
             "uuid": test_uuid,
-            "returncode": rc,
+            "retorno": retorno,
         })
 
     except subprocess.TimeoutExpired:
