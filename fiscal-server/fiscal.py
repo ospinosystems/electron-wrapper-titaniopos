@@ -936,28 +936,28 @@ def test_print():
         if archivo_factura != exe_factura:
             shutil.copy2(archivo_factura, exe_factura)
 
-        # Paso 1: Cancelar documento abierto previo (por intentos fallidos anteriores)
-        # Si hay documento abierto, el cancel lo imprime como "anulada" y la
-        # impresora necesita tiempo para terminar de imprimir antes de aceptar
-        # un nuevo documento.
-        print(f"[FISCAL] Test print: cancelando documento previo con IntTFHKA...", flush=True)
-        did_cancel = False
+        # Paso 1: Consultar estado de la impresora antes de enviar
+        print(f"[FISCAL] Test print: consultando estado de impresora...", flush=True)
         try:
-            cancel_proc = subprocess.Popen("IntTFHKA.exe SendCmd(7)", shell=True,
+            status_proc = subprocess.Popen("IntTFHKA.exe CheckFprinter", shell=True,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=programa_dir)
-            cancel_out, _ = cancel_proc.communicate(timeout=15)
-            cancel_str = cancel_out.decode('latin-1', errors='ignore').strip()
-            print(f"[FISCAL] Cancel result: {cancel_str}", flush=True)
-            did_cancel = 'TRUE' in cancel_str.upper()
-        except Exception as ce:
-            print(f"[FISCAL] Cancel error (no crítico): {ce}", flush=True)
+            status_out, _ = status_proc.communicate(timeout=10)
+            status_str = status_out.decode('latin-1', errors='ignore').strip()
+            print(f"[FISCAL] CheckFprinter result: {status_str}", flush=True)
+        except Exception as se:
+            print(f"[FISCAL] CheckFprinter error: {se}", flush=True)
+        time.sleep(0.3)
 
-        if did_cancel:
-            # La impresora está imprimiendo la factura anulada, esperar a que termine
-            print(f"[FISCAL] Cancel exitoso, esperando 4s para que la impresora termine...", flush=True)
-            time.sleep(4)
-        else:
-            time.sleep(0.5)
+        # Verificar contenido del archivo
+        try:
+            with open(exe_factura, 'r', encoding='latin-1') as f:
+                content = f.read()
+            print(f"[FISCAL] Factura.txt content ({len(content)} bytes):", flush=True)
+            for i, line in enumerate(content.split('\n')):
+                if line:
+                    print(f"[FISCAL]   line {i}: {line!r} (len={len(line)})", flush=True)
+        except Exception as fe:
+            print(f"[FISCAL] Error leyendo Factura.txt: {fe}", flush=True)
 
         # Paso 2: Enviar factura con IntTFHKA.exe
         print(f"[FISCAL] Test print: enviando Factura.txt con IntTFHKA.exe en {programa_dir}", flush=True)
@@ -975,6 +975,33 @@ def test_print():
         stdout_error = int(m_err.group(1)) if m_err else None
 
         success = stdout_retorno in ['0', '1', 'TRUE']
+
+        # Si Error 128 (documento fiscal abierto), cancelar y reintentar UNA vez
+        if not success and stdout_error == 128:
+            print(f"[FISCAL] Error 128: documento abierto. Cancelando y reintentando...", flush=True)
+            try:
+                cancel_proc = subprocess.Popen("IntTFHKA.exe SendCmd(7)", shell=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=programa_dir)
+                cancel_out, _ = cancel_proc.communicate(timeout=15)
+                print(f"[FISCAL] Cancel: {cancel_out.decode('latin-1', errors='ignore').strip()}", flush=True)
+            except Exception:
+                pass
+            time.sleep(5)
+
+            # Reintentar
+            print(f"[FISCAL] Reintentando SendFileCmd...", flush=True)
+            proceso2 = subprocess.Popen("IntTFHKA.exe SendFileCmd(Factura.txt)", shell=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=programa_dir)
+            stdout_data2, _ = proceso2.communicate(timeout=60)
+            out_str2 = stdout_data2.decode('latin-1', errors='ignore').strip()
+            print(f"[FISCAL] IntTFHKA retry stdout: {out_str2}", flush=True)
+
+            m_ret2 = _re.search(r'Retorno:\s*(\S+)', out_str2)
+            m_err2 = _re.search(r'Error:\s*(\d+)', out_str2)
+            stdout_retorno = m_ret2.group(1) if m_ret2 else stdout_retorno
+            stdout_error = int(m_err2.group(1)) if m_err2 else stdout_error
+            success = stdout_retorno in ['0', '1', 'TRUE']
+
         return jsonify({
             "status": "ok" if success else "error",
             "message": f"Factura de prueba impresa (UUID: {short_id})" if success else f"Error al imprimir (Retorno={stdout_retorno}, Error={stdout_error})",
