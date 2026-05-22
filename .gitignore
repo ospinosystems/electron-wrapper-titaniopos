@@ -34,7 +34,7 @@ temp/
 *.flatpak
 *.asar
 *.blockmap
-*.zip
+
 
 # Excepciones: binarios que SI van al repo porque son parte del bundle
 !python-embed/**/*.exe
