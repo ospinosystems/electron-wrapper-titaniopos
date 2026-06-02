@@ -153,16 +153,17 @@ const checkFiscalConnection = async (serverUrl) => {
 };
 
 // Enviar factura o nota de crédito al servidor fiscal
-const sendFiscalInvoice = async (serverUrl, invoiceData, fiscalMode = true) => {
+// barcodeOpts: { enabled, type, format } — código de barras en la factura (autopago).
+const sendFiscalInvoice = async (serverUrl, invoiceData, fiscalMode = true, barcodeOpts = null) => {
   try {
     const docType = invoiceData.type || 'factura';
-    
+
     // Generar contenido según el tipo de documento
     let fiscalLines;
     if (docType === 'notacredito' || docType === 'creditnote') {
       fiscalLines = generateCreditNoteContent(invoiceData);
     } else {
-      fiscalLines = generateFiscalContent(invoiceData);
+      fiscalLines = generateFiscalContent(invoiceData, barcodeOpts);
     }
     
     // Si NO es modo fiscal, agregar indicador "NO FISCAL" al inicio
@@ -215,7 +216,21 @@ const checkFiscalJobStatus = async (serverUrl, jobId) => {
 // - Códigos de tasa: ' '=Exento, '!'=General(16%), '"'=Reducida(8%), '#'=Adicional(31%)
 // - Productos: [TasaIVA][Precio12dig][Cantidad8dig][Descripción]
 // - Cierre: 101=Efectivo, 102=Débito, 103=Crédito, etc.
-const generateFiscalContent = (invoiceData) => {
+// Construye la línea de código de barras HKA80.
+// Comando 'Y' = barra en el cuerpo del documento fiscal. El contenido se limpia
+// a alfanumérico (la HKA rechaza otros caracteres → NAK → aborta la factura).
+//   format 'typed' => `Y<tipo><code>`  (tipo: 0 EAN13,1 ITF,2 CODE128,3 CODE39…)
+//   format 'plain' => `Y<code>`
+// Devuelve null si está deshabilitado o no hay código válido.
+const buildBarcodeLine = (code, opts) => {
+  if (!opts || !opts.enabled) return null;
+  const clean = String(code || '').replace(/[^0-9A-Za-z]/g, '');
+  if (!clean) return null;
+  if (opts.format === 'plain') return `Y${clean}`;
+  return `Y${opts.type || '2'}${clean}`;
+};
+
+const generateFiscalContent = (invoiceData, barcodeOpts = null) => {
   const lines = [];
   
   // Datos del cliente (opcional)
@@ -248,7 +263,15 @@ const generateFiscalContent = (invoiceData) => {
   // Línea de comentario con caja y número de orden (i05 = línea adicional)
   const comment = `Caja: ${invoiceData.cashRegisterNumber || 'N/A'} - ${invoiceData.orderNumber || 'N/A'}`;
   lines.push(`i05${comment}`);
-  
+
+  // Código de barras (autopago, opt-in). Codifica el número de orden
+  // (segmento final del UUID). Se coloca en el cuerpo, antes de los productos.
+  const barcodeLine = buildBarcodeLine(invoiceData.orderNumber, barcodeOpts);
+  if (barcodeLine) {
+    console.log('[FISCAL] Barcode line:', barcodeLine);
+    lines.push(barcodeLine);
+  }
+
   // Productos
   if (invoiceData.products && Array.isArray(invoiceData.products)) {
     for (const product of invoiceData.products) {
@@ -479,11 +502,18 @@ const registerFiscalHandlers = (app) => {
         console.log('[FISCAL] Non-fiscal mode - printing with NO FISCAL indicator');
       }
 
+      // Opciones de código de barras desde la config (opt-in, default OFF).
+      const barcodeOpts = {
+        enabled: config.printBarcode === true,
+        type: config.barcodeType || '2',
+        format: config.barcodeFormat || 'typed',
+      };
+
       // Enviar factura (pasando fiscalMode para agregar indicador si es prueba)
       const result = await sendFiscalInvoice(config.serverUrl, {
         ...invoiceData,
         cashRegisterNumber: invoiceData.cashRegisterNumber || config.cashRegisterNumber,
-      }, isFiscalMode);
+      }, isFiscalMode, barcodeOpts);
 
       if (result.success) {
         // Guardar respuesta con los datos del resultado del servidor fiscal
@@ -796,6 +826,49 @@ const registerFiscalHandlers = (app) => {
       };
     } catch (error) {
       console.error('[FISCAL] Test print error:', error.message);
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Imprime una factura de prueba CON código de barras, para validar el formato
+  // del comando 'Y' contra el HKA80 real antes de activarlo en producción.
+  // Recibe { type, format } para poder probar 'typed' vs 'plain' sin guardar config.
+  // GENERA UN DOCUMENTO FISCAL REAL con número consecutivo.
+  ipcMain.handle('fiscal-test-barcode', async (event, opts = {}) => {
+    try {
+      const config = loadFiscalConfig(app);
+
+      if (!config.enabled) {
+        return { success: false, error: 'Máquina fiscal no habilitada' };
+      }
+      if (!config.fiscalMode) {
+        return { success: false, error: 'Activa el modo fiscal para imprimir una prueba real' };
+      }
+
+      // Código de ejemplo alfanumérico (simula el segmento final de un UUID).
+      const sampleCode = 'TEST12AB34CD';
+      const invoiceData = {
+        type: 'factura',
+        orderUuid: `barcode-test-${Date.now()}`,
+        orderNumber: sampleCode,
+        cashRegisterNumber: config.cashRegisterNumber || '',
+        products: [
+          { description: 'PRUEBA CODIGO BARRA', price: 1, quantity: 1, taxType: 'exento' },
+        ],
+        paymentType: '101',
+      };
+
+      const barcodeOpts = {
+        enabled: true,
+        type: opts.type || config.barcodeType || '2',
+        format: opts.format || config.barcodeFormat || 'typed',
+      };
+
+      console.log('[FISCAL] Test barcode with opts:', barcodeOpts);
+      const result = await sendFiscalInvoice(config.serverUrl, invoiceData, true, barcodeOpts);
+      return { success: result.success === true || result.status === 'ok', ...result };
+    } catch (error) {
+      console.error('[FISCAL] Test barcode error:', error.message);
       return { success: false, error: error.message };
     }
   });

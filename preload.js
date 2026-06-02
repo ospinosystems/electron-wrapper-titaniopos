@@ -267,6 +267,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fiscalTestPrint: () => ipcRenderer.invoke('fiscal-test-print'),
 
   /**
+   * Imprime una factura de prueba CON codigo de barras para validar el formato
+   * del comando 'Y' contra el HKA80 real. opts: { type, format }.
+   * GENERA DOCUMENTO FISCAL REAL con numero consecutivo.
+   */
+  fiscalTestBarcode: (opts) => ipcRenderer.invoke('fiscal-test-barcode', opts),
+
+  /**
    * Get server fiscal configuration (from Python server)
    * @returns {Promise<{success: boolean, puerto_com?: string, ruta_programa?: string, error?: string}>}
    */

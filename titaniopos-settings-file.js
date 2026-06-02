@@ -43,6 +43,18 @@ const DEFAULT_FISCAL = {
   // Controla si el server Python arranca con la app. OFF por defecto para
   // no afectar rendimiento en PCs viejas que no usan facturación fiscal.
   serverEnabled: false,
+  // Código de barras en la factura fiscal HKA80 (autopago). OFF por defecto:
+  // el comando 'Y' escribe una línea en Factura.txt y, si el formato no es el
+  // exacto del firmware, la HKA responde NAK y ABORTA toda la factura. Activar
+  // SOLO tras validar contra el hardware real. Ver fiscal-handlers.js.
+  printBarcode: false,
+  // Tipo de barra: 0=EAN13, 1=ITF, 2=CODE128, 3=CODE39, 4=PDF417, 5=QR.
+  // CODE128 (2) soporta alfanumérico (el segmento de UUID tiene a-f).
+  barcodeType: '2',
+  // Formato del comando. 'typed' => `Y<tipo><code>` ; 'plain' => `Y<code>`.
+  // Los manuales del HKA80 difieren; se deja configurable para ajustar sin
+  // recompilar. Validar cuál acepta tu impresora.
+  barcodeFormat: 'typed',
 };
 
 const DEFAULT_UI = {
