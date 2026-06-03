@@ -55,6 +55,10 @@ const DEFAULT_FISCAL = {
   // Los manuales del HKA80 difieren; se deja configurable para ajustar sin
   // recompilar. Validar cuál acepta tu impresora.
   barcodeFormat: 'typed',
+  // Comando crudo del código de barras (gana sobre type/format si está seteado).
+  // Ej: 'PJ43{code}'. {code} se reemplaza por el número de orden. Se descubre
+  // probando contra el HKA80 real en modo no fiscal.
+  barcodeRaw: '',
 };
 
 const DEFAULT_UI = {

@@ -224,6 +224,14 @@ const checkFiscalJobStatus = async (serverUrl, jobId) => {
 // Devuelve null si está deshabilitado o no hay código válido.
 const buildBarcodeLine = (code, opts) => {
   if (!opts || !opts.enabled) return null;
+  // Modo iteración: línea exacta provista por la UI (para probar PJ43, etc.).
+  // Se reemplaza {code} por el código si aparece en la plantilla.
+  if (opts.raw) {
+    const clean = String(code || '').replace(/[^0-9A-Za-z]/g, '');
+    return String(opts.raw).includes('{code}')
+      ? String(opts.raw).replace('{code}', clean)
+      : String(opts.raw);
+  }
   const clean = String(code || '').replace(/[^0-9A-Za-z]/g, '');
   if (!clean) return null;
   if (opts.format === 'plain') return `Y${clean}`;
@@ -507,6 +515,7 @@ const registerFiscalHandlers = (app) => {
         enabled: config.printBarcode === true,
         type: config.barcodeType || '2',
         format: config.barcodeFormat || 'typed',
+        raw: config.barcodeRaw || null,
       };
 
       // Enviar factura (pasando fiscalMode para agregar indicador si es prueba)
@@ -841,9 +850,11 @@ const registerFiscalHandlers = (app) => {
       if (!config.enabled) {
         return { success: false, error: 'Máquina fiscal no habilitada' };
       }
-      if (!config.fiscalMode) {
-        return { success: false, error: 'Activa el modo fiscal para imprimir una prueba real' };
-      }
+
+      // Permitimos probar en modo NO fiscal: esos documentos salen marcados
+      // "NO FISCAL" y NO consumen correlativo fiscal, así iteramos el comando
+      // de barra sin gastar números. isFiscalMode controla ese indicador.
+      const isFiscalMode = config.fiscalMode === true;
 
       // Código de ejemplo alfanumérico (simula el segmento final de un UUID).
       const sampleCode = 'TEST12AB34CD';
@@ -862,10 +873,12 @@ const registerFiscalHandlers = (app) => {
         enabled: true,
         type: opts.type || config.barcodeType || '2',
         format: opts.format || config.barcodeFormat || 'typed',
+        // Línea cruda para iteración (ej. 'PJ43{code}'); {code} se reemplaza.
+        raw: opts.rawLine || null,
       };
 
-      console.log('[FISCAL] Test barcode with opts:', barcodeOpts);
-      const result = await sendFiscalInvoice(config.serverUrl, invoiceData, true, barcodeOpts);
+      console.log('[FISCAL] Test barcode | fiscalMode:', isFiscalMode, '| opts:', barcodeOpts);
+      const result = await sendFiscalInvoice(config.serverUrl, invoiceData, isFiscalMode, barcodeOpts);
       return { success: result.success === true || result.status === 'ok', ...result };
     } catch (error) {
       console.error('[FISCAL] Test barcode error:', error.message);

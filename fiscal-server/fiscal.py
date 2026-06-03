@@ -654,17 +654,6 @@ def agregar_a_cola():
         
         es_duplicada, info_duplicada = verificar_peticion_duplicada(hash_peticion)
 
-        # Un intento previo que terminó en 'error' NO debe bloquear un reintento.
-        # El cliente (autopago) verifica el estado real de la HKA y reenvía la
-        # MISMA factura si no se confirmó la impresión. La protección contra doble
-        # impresión real la da el dedup por id_caja (solo se guarda tras éxito),
-        # así que aquí liberamos la entrada para permitir re-encolar.
-        if es_duplicada and info_duplicada and info_duplicada.get('estado') == 'error':
-            with lock_duplicados:
-                peticiones_procesadas.pop(hash_peticion, None)
-            print(f"[FISCAL] Reintento permitido: petición previa en estado 'error' liberada (hash {hash_peticion})")
-            es_duplicada, info_duplicada = False, None
-
         if es_duplicada:
             return jsonify({
                 "status": "duplicada", 
