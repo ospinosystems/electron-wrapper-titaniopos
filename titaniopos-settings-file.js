@@ -47,8 +47,9 @@ const DEFAULT_FISCAL = {
   printBarcode: false,
   // Comando exacto del código de barras. Formato HKA80 validado:
   // 'j<tipo><posición><texto>{code}' (tipo 2=CODE128, posición 0=cuerpo 1=pie,
-  // texto 0=sin número 1=con número). {code} = número de orden. Ej: 'j21{code}'.
-  barcodeRaw: '',
+  // texto 0=sin número 1=con número). {code} = número de orden.
+  // Default: barra al pie con el número debajo.
+  barcodeRaw: 'j211{code}',
 };
 
 const DEFAULT_UI = {
