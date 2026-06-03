@@ -216,26 +216,17 @@ const checkFiscalJobStatus = async (serverUrl, jobId) => {
 // - Códigos de tasa: ' '=Exento, '!'=General(16%), '"'=Reducida(8%), '#'=Adicional(31%)
 // - Productos: [TasaIVA][Precio12dig][Cantidad8dig][Descripción]
 // - Cierre: 101=Efectivo, 102=Débito, 103=Crédito, etc.
-// Construye la línea de código de barras HKA80.
-// Comando 'Y' = barra en el cuerpo del documento fiscal. El contenido se limpia
-// a alfanumérico (la HKA rechaza otros caracteres → NAK → aborta la factura).
-//   format 'typed' => `Y<tipo><code>`  (tipo: 0 EAN13,1 ITF,2 CODE128,3 CODE39…)
-//   format 'plain' => `Y<code>`
-// Devuelve null si está deshabilitado o no hay código válido.
+// Construye la línea de código de barras del HKA80.
+// Comando validado contra hardware: 'j<tipo><posición><texto>{code}'
+//   tipo 2=CODE128 · posición 0=cuerpo 1=pie · texto 0=sin número 1=con número
+// La plantilla exacta vive en config (`barcodeRaw`, ej. 'j21{code}'); {code} se
+// reemplaza por el código (alfanumérico). Devuelve null si está apagado o vacío.
 const buildBarcodeLine = (code, opts) => {
-  if (!opts || !opts.enabled) return null;
-  // Modo iteración: línea exacta provista por la UI (para probar PJ43, etc.).
-  // Se reemplaza {code} por el código si aparece en la plantilla.
-  if (opts.raw) {
-    const clean = String(code || '').replace(/[^0-9A-Za-z]/g, '');
-    return String(opts.raw).includes('{code}')
-      ? String(opts.raw).replace('{code}', clean)
-      : String(opts.raw);
-  }
+  if (!opts || !opts.enabled || !opts.raw) return null;
   const clean = String(code || '').replace(/[^0-9A-Za-z]/g, '');
-  if (!clean) return null;
-  if (opts.format === 'plain') return `Y${clean}`;
-  return `Y${opts.type || '2'}${clean}`;
+  return String(opts.raw).includes('{code}')
+    ? String(opts.raw).replace('{code}', clean)
+    : String(opts.raw);
 };
 
 const generateFiscalContent = (invoiceData, barcodeOpts = null) => {
@@ -271,14 +262,6 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null) => {
   // Línea de comentario con caja y número de orden (i05 = línea adicional)
   const comment = `Caja: ${invoiceData.cashRegisterNumber || 'N/A'} - ${invoiceData.orderNumber || 'N/A'}`;
   lines.push(`i05${comment}`);
-
-  // Código de barras (autopago, opt-in). Codifica el número de orden
-  // (segmento final del UUID). Se coloca en el cuerpo, antes de los productos.
-  const barcodeLine = buildBarcodeLine(invoiceData.orderNumber, barcodeOpts);
-  if (barcodeLine) {
-    console.log('[FISCAL] Barcode line:', barcodeLine);
-    lines.push(barcodeLine);
-  }
 
   // Productos
   if (invoiceData.products && Array.isArray(invoiceData.products)) {
@@ -322,7 +305,16 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null) => {
       lines.push(productLine);
     }
   }
-  
+
+  // Código de barras (autopago, opt-in). Codifica el número de orden (segmento
+  // final del UUID). Va DESPUÉS de los productos y ANTES del cierre, así sale
+  // al pie del documento. El comando 'j' debe enviarse con el documento abierto.
+  const barcodeLine = buildBarcodeLine(invoiceData.orderNumber, barcodeOpts);
+  if (barcodeLine) {
+    console.log('[FISCAL] Barcode line:', barcodeLine);
+    lines.push(barcodeLine);
+  }
+
   // Cierre de factura - tipo de pago
   // 101 = Efectivo
   // 102 = Débito
@@ -331,7 +323,7 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null) => {
   // 199 = Sin pago (solo para cierres sin monto)
   const paymentType = invoiceData.paymentType || '101';
   lines.push(paymentType);
-  
+
   return lines;
 };
 
@@ -513,8 +505,6 @@ const registerFiscalHandlers = (app) => {
       // Opciones de código de barras desde la config (opt-in, default OFF).
       const barcodeOpts = {
         enabled: config.printBarcode === true,
-        type: config.barcodeType || '2',
-        format: config.barcodeFormat || 'typed',
         raw: config.barcodeRaw || null,
       };
 
@@ -871,10 +861,8 @@ const registerFiscalHandlers = (app) => {
 
       const barcodeOpts = {
         enabled: true,
-        type: opts.type || config.barcodeType || '2',
-        format: opts.format || config.barcodeFormat || 'typed',
-        // Línea cruda para iteración (ej. 'PJ43{code}'); {code} se reemplaza.
-        raw: opts.rawLine || null,
+        // Línea a probar (ej. 'j21{code}'); {code} se reemplaza por el código.
+        raw: opts.rawLine || config.barcodeRaw || null,
       };
 
       console.log('[FISCAL] Test barcode | fiscalMode:', isFiscalMode, '| opts:', barcodeOpts);
