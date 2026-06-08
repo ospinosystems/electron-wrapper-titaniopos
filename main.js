@@ -79,6 +79,7 @@ const { registerPrinterHandlers } = require('./printer-handlers');
 const { registerFiscalHandlers } = require('./fiscal-handlers');
 const { registerPinpadHandlers } = require('./pinpad-handlers');
 const { registerCajaConfigHandlers } = require('./caja-config-handlers');
+const { registerRemoteSupportHandlers, startRemoteSupportIfEnabled } = require('./remote-support-handlers');
 const {
   migrateToUnifiedSettings,
   splitFiscalResponsesFromUnifiedIfPresent,
@@ -2769,6 +2770,11 @@ app.whenReady().then(() => {
 
   registerCajaConfigHandlers(app);
   console.log('🏪 [CAJA] Caja config (JSON) initialized');
+
+  // Soporte remoto (RustDesk desatendido). Si quedó habilitado, dejarlo corriendo.
+  registerRemoteSupportHandlers(app);
+  startRemoteSupportIfEnabled(app);
+  console.log('🆘 [REMOTE] Soporte remoto initialized');
 
   // App config handlers (UI settings like reduceAnimations, debugPdf)
   ipcMain.handle('app-config-get', async () => {

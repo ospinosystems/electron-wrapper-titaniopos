@@ -334,5 +334,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     };
     ipcRenderer.on('updater:event', handler);
     return () => ipcRenderer.removeListener('updater:event', handler);
-  }
+  },
+
+  // ==================== SOPORTE REMOTO (RustDesk desatendido) ====================
+  /** Estado: { available, enabled, hasPassword, running, id }. */
+  remoteSupportStatus: () => ipcRenderer.invoke('remote-support:status'),
+  /** Devuelve el ID de RustDesk de esta máquina. */
+  remoteSupportGetId: () => ipcRenderer.invoke('remote-support:get-id'),
+  /** Activa el acceso desatendido con contraseña fija. Devuelve { id }. */
+  remoteSupportEnable: (password) => ipcRenderer.invoke('remote-support:enable', password),
+  /** Desactiva el acceso desatendido y cierra RustDesk. */
+  remoteSupportDisable: () => ipcRenderer.invoke('remote-support:disable'),
+  /** Abre la ventana de RustDesk manualmente. */
+  remoteSupportOpen: () => ipcRenderer.invoke('remote-support:open')
 });
