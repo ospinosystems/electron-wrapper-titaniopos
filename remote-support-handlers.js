@@ -74,13 +74,18 @@ function elevatedInstallAndSetPassword(app, exe, pw) {
     const tmpDir = (app || electronApp).getPath('temp');
     const ps1 = path.join(tmpDir, `rd-setup-${Date.now()}.ps1`);
     const installedExe = INSTALLED_PATHS[0];
-    // Si ya está instalado, no reinstalar; solo (re)setear la clave.
+    // Usar Start-Process (no bloqueante) + esperas acotadas: así el script
+    // termina en ~18s aunque el instalador no devuelva el control, evitando
+    // que la activación quede "cargando" indefinidamente.
     const script = [
       `$ErrorActionPreference = 'SilentlyContinue'`,
-      `if (-not (Test-Path "${installedExe}")) { & "${exe}" --silent-install; Start-Sleep -Seconds 8 }`,
+      `if (-not (Test-Path "${installedExe}")) {`,
+      `  Start-Process -FilePath "${exe}" -ArgumentList '--silent-install'`,
+      `  Start-Sleep -Seconds 15`,
+      `}`,
       `$rd = if (Test-Path "${installedExe}") { "${installedExe}" } else { "${exe}" }`,
-      `& $rd --password "${pw}"`,
-      `Start-Sleep -Seconds 1`,
+      `Start-Process -FilePath $rd -ArgumentList '--password',"${pw}"`,
+      `Start-Sleep -Seconds 3`,
     ].join('\r\n');
     try {
       fs.writeFileSync(ps1, script, 'utf8');
@@ -88,7 +93,7 @@ function elevatedInstallAndSetPassword(app, exe, pw) {
       return resolve({ ok: false, error: 'No se pudo preparar el instalador: ' + e.message });
     }
     const outer = `Start-Process -Verb RunAs -Wait -WindowStyle Hidden powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','${ps1}'`;
-    execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', outer], { timeout: 120000, windowsHide: true }, (error) => {
+    execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', outer], { timeout: 60000, windowsHide: true }, (error) => {
       try { fs.unlinkSync(ps1); } catch (_) { /* ignore */ }
       if (error) {
         // El usuario pudo cancelar el UAC.
@@ -192,18 +197,6 @@ function runRustdesk(exe, args, timeoutMs = 10000) {
   });
 }
 
-/** Lanza rustdesk.exe residente (queda escuchando conexiones entrantes). */
-function ensureRunning(exe) {
-  if (rustdeskProc && !rustdeskProc.killed) return;
-  try {
-    rustdeskProc = spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: true });
-    rustdeskProc.unref();
-    console.log('[REMOTE] RustDesk lanzado');
-  } catch (e) {
-    console.error('[REMOTE] No se pudo lanzar RustDesk:', e.message);
-  }
-}
-
 async function getId(exe) {
   const res = await runRustdesk(exe, ['--get-id'], 8000);
   // El ID es numérico; limpiamos cualquier ruido del stdout.
@@ -219,16 +212,20 @@ function elevatedUninstall(app) {
   return new Promise((resolve) => {
     const tmpDir = (app || electronApp).getPath('temp');
     const ps1 = path.join(tmpDir, `rd-uninstall-${Date.now()}.ps1`);
-    const uninst = 'C:\\Program Files\\RustDesk\\uninstall.exe';
+    // Estrategia de cinturón y tirantes: matar proceso, parar/borrar el
+    // servicio (varios nombres posibles), e intentar el/los desinstaladores.
     const script = [
       `$ErrorActionPreference='SilentlyContinue'`,
-      `if (Test-Path "${uninst}") {`,
-      `  Start-Process -FilePath "${uninst}" -ArgumentList '/S' -Wait`,
-      `} else {`,
-      `  sc.exe stop RustDesk`,
-      `  Start-Sleep -Seconds 2`,
-      `  sc.exe delete RustDesk`,
-      `}`,
+      `taskkill /IM rustdesk.exe /F`,
+      `foreach ($svc in 'RustDesk','rustdesk') { sc.exe stop $svc; sc.exe delete $svc }`,
+      `& "${getInstalledPath() || 'C:\\Program Files\\RustDesk\\rustdesk.exe'}" --uninstall`,
+      `$uns = @(`,
+      `  'C:\\Program Files\\RustDesk\\uninstall.exe',`,
+      `  'C:\\Program Files\\RustDesk\\Uninstall RustDesk.exe',`,
+      `  'C:\\Program Files (x86)\\RustDesk\\uninstall.exe'`,
+      `)`,
+      `foreach ($u in $uns) { if (Test-Path $u) { Start-Process -FilePath $u -ArgumentList '/S' -Wait } }`,
+      `Start-Sleep -Seconds 2`,
       `taskkill /IM rustdesk.exe /F`,
     ].join('\r\n');
     try {
@@ -342,20 +339,12 @@ function registerRemoteSupportHandlers(app) {
 }
 
 /**
- * Al iniciar la app: si está habilitado y RustDesk está instalado como
- * servicio, no hay nada que hacer (el servicio ya corre solo). Si por algún
- * motivo no está instalado, levantamos el portable como fallback.
+ * Al iniciar la app NO se lanza nada: el acceso desatendido lo provee el
+ * SERVICIO de RustDesk (instalado al activar), que corre solo en segundo plano.
+ * No spawneamos el portable para no abrir una ventana de RustDesk al arrancar.
  */
-function startRemoteSupportIfEnabled(app) {
-  try {
-    const cfg = readConfig(app);
-    if (!cfg.enabled) return;
-    if (getInstalledPath()) return; // servicio instalado: corre desatendido
-    const exe = getRustdeskPath(app);
-    if (exe) ensureRunning(exe);
-  } catch (e) {
-    console.error('[REMOTE] startIfEnabled error:', e.message);
-  }
+function startRemoteSupportIfEnabled() {
+  // intencionalmente vacío — el servicio maneja el acceso desatendido.
 }
 
 module.exports = {
