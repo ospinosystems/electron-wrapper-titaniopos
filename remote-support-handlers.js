@@ -211,6 +211,42 @@ async function getId(exe) {
   return m ? m[0] : (res.stdout || '');
 }
 
+/**
+ * Desinstala RustDesk (servicio incluido) en un paso elevado. Usa el
+ * desinstalador oficial silencioso si existe; si no, borra el servicio con sc.
+ */
+function elevatedUninstall(app) {
+  return new Promise((resolve) => {
+    const tmpDir = (app || electronApp).getPath('temp');
+    const ps1 = path.join(tmpDir, `rd-uninstall-${Date.now()}.ps1`);
+    const uninst = 'C:\\Program Files\\RustDesk\\uninstall.exe';
+    const script = [
+      `$ErrorActionPreference='SilentlyContinue'`,
+      `if (Test-Path "${uninst}") {`,
+      `  Start-Process -FilePath "${uninst}" -ArgumentList '/S' -Wait`,
+      `} else {`,
+      `  sc.exe stop RustDesk`,
+      `  Start-Sleep -Seconds 2`,
+      `  sc.exe delete RustDesk`,
+      `}`,
+      `taskkill /IM rustdesk.exe /F`,
+    ].join('\r\n');
+    try {
+      fs.writeFileSync(ps1, script, 'utf8');
+    } catch (e) {
+      return resolve({ ok: false, error: 'No se pudo preparar la desinstalación: ' + e.message });
+    }
+    const outer = `Start-Process -Verb RunAs -Wait -WindowStyle Hidden powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','${ps1}'`;
+    execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', outer], { timeout: 120000, windowsHide: true }, (error) => {
+      try { fs.unlinkSync(ps1); } catch (_) { /* ignore */ }
+      if (error) {
+        return resolve({ ok: false, error: 'No se pudo desinstalar (¿se canceló el permiso de administrador?).' });
+      }
+      resolve({ ok: true });
+    });
+  });
+}
+
 function registerRemoteSupportHandlers(app) {
   ipcMain.handle('remote-support:status', async () => {
     const exe = getRustdeskPath(app);
@@ -275,8 +311,11 @@ function registerRemoteSupportHandlers(app) {
     return { success: true, id, installed: !!getInstalledPath() };
   });
 
+  // Desactiva el soporte: desinstala el servicio de RustDesk (un UAC) y apaga
+  // el flag. Tras esto la caja deja de ser accesible de forma desatendida.
   ipcMain.handle('remote-support:disable', async () => {
     const cfg = readConfig(app);
+    const res = await elevatedUninstall(app);
     writeConfig(app, { ...cfg, enabled: false });
     try {
       if (rustdeskProc && !rustdeskProc.killed) {
@@ -284,7 +323,7 @@ function registerRemoteSupportHandlers(app) {
         rustdeskProc = null;
       }
     } catch (_) { /* ignore */ }
-    return { success: true };
+    return { success: res.ok, error: res.ok ? undefined : res.error };
   });
 
   // Abre la ventana de RustDesk (por si se quiere ver ID/estado manualmente).
