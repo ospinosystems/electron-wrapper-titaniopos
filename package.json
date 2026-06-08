@@ -51,6 +51,11 @@
         "from": "bin",
         "to": "bin",
         "filter": ["*.exe"]
+      },
+      {
+        "from": "drivers",
+        "to": "drivers",
+        "filter": ["*.exe"]
       }
     ],
     "directories": {

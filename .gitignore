@@ -39,6 +39,9 @@ temp/
 # Excepciones: binarios que SI van al repo porque son parte del bundle
 !python-embed/**/*.exe
 !bin/*.exe
+# drivers/*.exe = instaladores de drivers de impresora (térmica, etiquetas, remover)
+# que se bundlean para correrlos desde la configuración.
+!drivers/*.exe
 # python311.zip = biblioteca estándar de Python embebido. SIN esto el
 # Python no arranca en producción (ModuleNotFoundError: 'encodings').
 !python-embed/python311.zip

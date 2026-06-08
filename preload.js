@@ -348,5 +348,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Desactiva el acceso desatendido y cierra RustDesk. */
   remoteSupportDisable: () => ipcRenderer.invoke('remote-support:disable'),
   /** Abre la ventana de RustDesk manualmente. */
-  remoteSupportOpen: () => ipcRenderer.invoke('remote-support:open')
+  remoteSupportOpen: () => ipcRenderer.invoke('remote-support:open'),
+
+  // ==================== DRIVERS DE IMPRESORA ====================
+  /** Estado: { available: { thermal, label, remove } }. */
+  printerDriverStatus: () => ipcRenderer.invoke('printer-driver:status'),
+  /** Lanza un instalador elevado. key: 'thermal' | 'label' | 'remove'. */
+  printerDriverLaunch: (key) => ipcRenderer.invoke('printer-driver:launch', key)
 });
