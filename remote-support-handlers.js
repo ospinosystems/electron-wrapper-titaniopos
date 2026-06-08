@@ -14,15 +14,24 @@
  * usuario); si se quiere endurecer, cifrar con safeStorage de Electron.
  */
 
-const { ipcMain } = require('electron');
+const { ipcMain, app: electronApp } = require('electron');
 const { spawn, execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const https = require('https');
 
 let rustdeskProc = null;
 
-/** Resuelve la ruta de rustdesk.exe en dev y empaquetado (bin/). */
-function getRustdeskPath() {
+/** Ruta donde guardamos rustdesk.exe si lo descargamos (userData). */
+function downloadedBinPath(app) {
+  return path.join((app || electronApp).getPath('userData'), 'rustdesk.exe');
+}
+
+/**
+ * Resuelve la ruta de rustdesk.exe. Prioridad: bundleado en bin/ (dev y
+ * empaquetado) → descargado en userData. Devuelve null si no está en ningún lado.
+ */
+function getRustdeskPath(app) {
   const candidates = [];
   if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, 'bin', 'rustdesk.exe'));
   candidates.push(path.join(__dirname, 'bin', 'rustdesk.exe'));
@@ -30,10 +39,68 @@ function getRustdeskPath() {
     const asarParent = __dirname.split('app.asar')[0];
     candidates.push(path.join(asarParent, 'bin', 'rustdesk.exe'));
   }
+  candidates.push(downloadedBinPath(app));
   for (const c of candidates) {
     try { if (fs.existsSync(c)) return c; } catch (_) { /* ignore */ }
   }
   return null;
+}
+
+/** GET con seguimiento de redirects, devuelve el body como string. */
+function httpsGetText(url, headers = {}) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'TitanioPOS', ...headers } }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        return resolve(httpsGetText(res.headers.location, headers));
+      }
+      if (res.statusCode !== 200) { res.resume(); return reject(new Error(`HTTP ${res.statusCode}`)); }
+      let data = '';
+      res.on('data', (c) => { data += c; });
+      res.on('end', () => resolve(data));
+    }).on('error', reject);
+  });
+}
+
+/** Descarga binaria a `dest` siguiendo redirects. */
+function httpsDownload(url, dest, headers = {}) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'TitanioPOS', ...headers } }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        return resolve(httpsDownload(res.headers.location, dest, headers));
+      }
+      if (res.statusCode !== 200) { res.resume(); return reject(new Error(`HTTP ${res.statusCode}`)); }
+      const tmp = dest + '.part';
+      const file = fs.createWriteStream(tmp);
+      res.pipe(file);
+      file.on('finish', () => file.close(() => {
+        try { fs.renameSync(tmp, dest); resolve(dest); }
+        catch (e) { reject(e); }
+      }));
+      file.on('error', (e) => { try { fs.unlinkSync(tmp); } catch (_) {} reject(e); });
+    }).on('error', reject);
+  });
+}
+
+/**
+ * Descarga rustdesk.exe (Windows x86_64) del último release oficial a userData.
+ * Resuelve el asset por la API de GitHub para no depender de una versión fija.
+ */
+async function downloadRustdesk(app) {
+  const dest = downloadedBinPath(app);
+  const meta = await httpsGetText('https://api.github.com/repos/rustdesk/rustdesk/releases/latest', {
+    'Accept': 'application/vnd.github+json',
+  });
+  const release = JSON.parse(meta);
+  const assets = Array.isArray(release.assets) ? release.assets : [];
+  const asset = assets.find((a) => /x86_64\.exe$/i.test(a.name) && !/aarch64|arm/i.test(a.name));
+  if (!asset || !asset.browser_download_url) {
+    throw new Error('No se encontró el instalador de Windows en el último release de RustDesk.');
+  }
+  console.log('[REMOTE] Descargando RustDesk:', asset.name);
+  await httpsDownload(asset.browser_download_url, dest);
+  return dest;
 }
 
 function configPath(app) {
@@ -93,7 +160,7 @@ async function getId(exe) {
 
 function registerRemoteSupportHandlers(app) {
   ipcMain.handle('remote-support:status', async () => {
-    const exe = getRustdeskPath();
+    const exe = getRustdeskPath(app);
     const cfg = readConfig(app);
     let id = '';
     if (exe) {
@@ -110,16 +177,28 @@ function registerRemoteSupportHandlers(app) {
   });
 
   ipcMain.handle('remote-support:get-id', async () => {
-    const exe = getRustdeskPath();
+    const exe = getRustdeskPath(app);
     if (!exe) return { success: false, error: 'rustdesk.exe no está instalado en la app.' };
     const id = await getId(exe);
     return { success: !!id, id };
   });
 
+  // Descarga rustdesk.exe del release oficial (cuando no viene bundleado).
+  ipcMain.handle('remote-support:download', async () => {
+    try {
+      if (getRustdeskPath(app)) return { success: true, alreadyPresent: true };
+      const dest = await downloadRustdesk(app);
+      return { success: !!dest, path: dest };
+    } catch (e) {
+      console.error('[REMOTE] Descarga falló:', e.message);
+      return { success: false, error: e.message };
+    }
+  });
+
   // Activa el soporte desatendido: fija la contraseña, deja RustDesk corriendo
   // y devuelve el ID para que soporte se conecte.
   ipcMain.handle('remote-support:enable', async (_event, password) => {
-    const exe = getRustdeskPath();
+    const exe = getRustdeskPath(app);
     if (!exe) return { success: false, error: 'rustdesk.exe no está instalado en la app.' };
     const pw = (password || '').toString().trim();
     if (pw.length < 6) return { success: false, error: 'La contraseña debe tener al menos 6 caracteres.' };
@@ -154,7 +233,7 @@ function registerRemoteSupportHandlers(app) {
 
   // Abre la ventana de RustDesk (por si se quiere ver ID/estado manualmente).
   ipcMain.handle('remote-support:open', async () => {
-    const exe = getRustdeskPath();
+    const exe = getRustdeskPath(app);
     if (!exe) return { success: false, error: 'rustdesk.exe no está instalado en la app.' };
     try {
       spawn(exe, [], { detached: true, stdio: 'ignore' }).unref();
@@ -172,7 +251,7 @@ function startRemoteSupportIfEnabled(app) {
   try {
     const cfg = readConfig(app);
     if (!cfg.enabled) return;
-    const exe = getRustdeskPath();
+    const exe = getRustdeskPath(app);
     if (!exe) return;
     ensureRunning(exe);
     // Reaplicar la contraseña por si el config de RustDesk se reseteó.
