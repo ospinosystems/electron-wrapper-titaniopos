@@ -52,12 +52,33 @@ async function printWithNativeAPI(app, printerName, htmlContent, paperWidth = '8
   console.log('🖨️ [NATIVE] Starting print job');
   const debugPdf = options.debugPdf === true;
 
+  // MODO ETIQUETA — sólo se activa si el frontend pasa dimensiones explícitas
+  // (widthMm/heightMm). La impresión normal de recibos NO las pasa, así que su
+  // ruta queda EXACTAMENTE igual que antes (página 80mm × 200mm, Courier, padding
+  // 5mm). No tocar esa rama para no afectar la facturación.
+  const labelW = Number(options.widthMm);
+  const labelH = Number(options.heightMm);
+  const labelMode = labelW > 0 && labelH > 0;
+  if (labelMode) console.log(`🏷️ [NATIVE] Label mode ${labelW}mm × ${labelH}mm`);
+
+  // CSS parametrizado: en modo etiqueta usamos el tamaño exacto del sticker y
+  // sin padding/fuente forzada (la plantilla de etiqueta trae lo suyo).
+  const pageCss = labelMode
+    ? `size: ${labelW}mm ${labelH}mm; margin: 0;`
+    : `size: ${paperWidth} 200mm; margin: 0mm;`;
+  const bodyCss = labelMode
+    ? `width: ${labelW}mm; height: ${labelH}mm; margin: 0; padding: 0; background: white !important; color: #000000 !important;`
+    : `font-family: 'Courier New', monospace; font-size: 14px; width: ${paperWidth}; margin: 0; padding: 5mm; background: white !important; color: #000000 !important;`;
+  const bodyPrintCss = labelMode
+    ? `width: ${labelW}mm; margin: 0; padding: 0; color: #000000 !important;`
+    : `width: ${paperWidth}; margin: 0; padding: 5mm; color: #000000 !important;`;
+
   try {
     // Create hidden window for rendering
     const printWindow = new BrowserWindow({
       show: false,
-      width: paperWidth === '58mm' ? 220 : 302,
-      height: 800,
+      width: labelMode ? Math.max(120, Math.round((labelW / 25.4) * 96)) : (paperWidth === '58mm' ? 220 : 302),
+      height: labelMode ? Math.max(80, Math.round((labelH / 25.4) * 96)) : 800,
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true
@@ -72,18 +93,11 @@ async function printWithNativeAPI(app, printerName, htmlContent, paperWidth = '8
         <meta charset="UTF-8">
         <style>
           @page {
-            size: ${paperWidth} 200mm;
-            margin: 0mm;
+            ${pageCss}
           }
           * { margin: 0; padding: 0; box-sizing: border-box; }
           body {
-            font-family: 'Courier New', monospace;
-            font-size: 14px;
-            width: ${paperWidth};
-            margin: 0;
-            padding: 5mm;
-            background: white !important;
-            color: #000000 !important;
+            ${bodyCss}
           }
           @media print {
             * {
@@ -92,10 +106,7 @@ async function printWithNativeAPI(app, printerName, htmlContent, paperWidth = '8
               color: #000000 !important;
             }
             body {
-              width: ${paperWidth};
-              margin: 0;
-              padding: 5mm;
-              color: #000000 !important;
+              ${bodyPrintCss}
             }
           }
         </style>
@@ -125,10 +136,12 @@ async function printWithNativeAPI(app, printerName, htmlContent, paperWidth = '8
       printBackground: true,
       color: false,
       margins: { marginType: 'none' },
-      pageSize: {
-        width: paperWidth === '58mm' ? 58000 : 80000,
-        height: 200000
-      }
+      pageSize: labelMode
+        ? { width: Math.round(labelW * 1000), height: Math.round(labelH * 1000) }
+        : {
+            width: paperWidth === '58mm' ? 58000 : 80000,
+            height: 200000
+          }
     };
 
     console.log('📄 [NATIVE] Print options:', JSON.stringify(printOptions, null, 2));
@@ -139,10 +152,12 @@ async function printWithNativeAPI(app, printerName, htmlContent, paperWidth = '8
       try {
         const pdfBuffer = await printWindow.webContents.printToPDF({
           marginsType: 1,
-          pageSize: {
-            width: paperWidth === '58mm' ? 58000 : 80000,
-            height: 200000
-          },
+          pageSize: labelMode
+            ? { width: Math.round(labelW * 1000), height: Math.round(labelH * 1000) }
+            : {
+                width: paperWidth === '58mm' ? 58000 : 80000,
+                height: 200000
+              },
           printBackground: true
         });
         pdfPath = path.join(backupDir, `print_native_${Date.now()}.pdf`);

@@ -165,7 +165,9 @@ function registerPrinterHandlers(app, mainWindow) {
           printerName,
           content,
           options.paperWidth || '80mm',
-          { debugPdf: options.debugPdf === true }
+          // widthMm/heightMm activan el modo etiqueta (tamaño de página exacto).
+          // Sólo los pasa la impresión de etiquetas; los recibos no, y quedan igual.
+          { debugPdf: options.debugPdf === true, widthMm: options.widthMm, heightMm: options.heightMm }
         );
       } else if (method === 'escpos') {
         result = await printerMethods.printWithESCPOS(
