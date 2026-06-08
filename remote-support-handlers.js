@@ -22,16 +22,32 @@ const https = require('https');
 
 let rustdeskProc = null;
 
+// Rutas típicas del RustDesk YA INSTALADO como servicio (acceso desatendido real).
+const INSTALLED_PATHS = [
+  'C:\\Program Files\\RustDesk\\rustdesk.exe',
+  'C:\\Program Files (x86)\\RustDesk\\rustdesk.exe',
+];
+
+function getInstalledPath() {
+  for (const p of INSTALLED_PATHS) {
+    try { if (fs.existsSync(p)) return p; } catch (_) { /* ignore */ }
+  }
+  return null;
+}
+
 /** Ruta donde guardamos rustdesk.exe si lo descargamos (userData). */
 function downloadedBinPath(app) {
   return path.join((app || electronApp).getPath('userData'), 'rustdesk.exe');
 }
 
 /**
- * Resuelve la ruta de rustdesk.exe. Prioridad: bundleado en bin/ (dev y
- * empaquetado) → descargado en userData. Devuelve null si no está en ningún lado.
+ * Resuelve un rustdesk.exe utilizable. Prioridad: INSTALADO (servicio) →
+ * bundleado en bin/ → descargado en userData. El instalado es el que da
+ * acceso desatendido real (corre como servicio, sin la app abierta).
  */
 function getRustdeskPath(app) {
+  const installed = getInstalledPath();
+  if (installed) return installed;
   const candidates = [];
   if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, 'bin', 'rustdesk.exe'));
   candidates.push(path.join(__dirname, 'bin', 'rustdesk.exe'));
@@ -44,6 +60,43 @@ function getRustdeskPath(app) {
     try { if (fs.existsSync(c)) return c; } catch (_) { /* ignore */ }
   }
   return null;
+}
+
+/**
+ * Instala RustDesk como servicio y fija la contraseña permanente, en UN solo
+ * paso elevado (un único UAC). Tras esto, RustDesk corre como servicio: se
+ * conecta aunque la app POS esté cerrada y la clave persiste.
+ *
+ * Usa un .ps1 temporal lanzado con Start-Process -Verb RunAs (UAC).
+ */
+function elevatedInstallAndSetPassword(app, exe, pw) {
+  return new Promise((resolve) => {
+    const tmpDir = (app || electronApp).getPath('temp');
+    const ps1 = path.join(tmpDir, `rd-setup-${Date.now()}.ps1`);
+    const installedExe = INSTALLED_PATHS[0];
+    // Si ya está instalado, no reinstalar; solo (re)setear la clave.
+    const script = [
+      `$ErrorActionPreference = 'SilentlyContinue'`,
+      `if (-not (Test-Path "${installedExe}")) { & "${exe}" --silent-install; Start-Sleep -Seconds 8 }`,
+      `$rd = if (Test-Path "${installedExe}") { "${installedExe}" } else { "${exe}" }`,
+      `& $rd --password "${pw}"`,
+      `Start-Sleep -Seconds 1`,
+    ].join('\r\n');
+    try {
+      fs.writeFileSync(ps1, script, 'utf8');
+    } catch (e) {
+      return resolve({ ok: false, error: 'No se pudo preparar el instalador: ' + e.message });
+    }
+    const outer = `Start-Process -Verb RunAs -Wait -WindowStyle Hidden powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','${ps1}'`;
+    execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', outer], { timeout: 120000, windowsHide: true }, (error) => {
+      try { fs.unlinkSync(ps1); } catch (_) { /* ignore */ }
+      if (error) {
+        // El usuario pudo cancelar el UAC.
+        return resolve({ ok: false, error: 'No se pudo completar la instalación (¿se canceló el permiso de administrador?).' });
+      }
+      resolve({ ok: true });
+    });
+  });
 }
 
 /** GET con seguimiento de redirects, devuelve el body como string. */
@@ -169,9 +222,10 @@ function registerRemoteSupportHandlers(app) {
     return {
       success: true,
       available: !!exe,
+      installed: !!getInstalledPath(),
       enabled: cfg.enabled === true,
       hasPassword: !!(cfg.password && cfg.password.length),
-      running: !!(rustdeskProc && !rustdeskProc.killed),
+      running: !!getInstalledPath() || !!(rustdeskProc && !rustdeskProc.killed),
       id,
     };
   });
@@ -199,24 +253,26 @@ function registerRemoteSupportHandlers(app) {
   // y devuelve el ID para que soporte se conecte.
   ipcMain.handle('remote-support:enable', async (_event, password) => {
     const exe = getRustdeskPath(app);
-    if (!exe) return { success: false, error: 'rustdesk.exe no está instalado en la app.' };
+    if (!exe) return { success: false, error: 'RustDesk no está instalado. Descargá el componente primero.' };
     const pw = (password || '').toString().trim();
     if (pw.length < 6) return { success: false, error: 'La contraseña debe tener al menos 6 caracteres.' };
 
-    // 1) Arrancar RustDesk (genera config + ID la primera vez).
-    ensureRunning(exe);
-    await new Promise((r) => setTimeout(r, 1500));
+    // Instalar como servicio + fijar contraseña permanente, en un solo paso
+    // elevado (un UAC). Tras esto RustDesk corre como servicio: desatendido
+    // aunque la app POS esté cerrada, y la clave persiste.
+    const setup = await elevatedInstallAndSetPassword(app, exe, pw);
+    if (!setup.ok) return { success: false, error: setup.error };
 
-    // 2) Fijar la contraseña permanente de acceso desatendido.
-    const setPw = await runRustdesk(exe, ['--password', pw], 8000);
-    if (!setPw.ok) {
-      console.warn('[REMOTE] --password devolvió error:', setPw.error || setPw.stderr);
-    }
-
-    // 3) Persistir e informar el ID.
     writeConfig(app, { enabled: true, password: pw });
-    const id = await getId(exe);
-    return { success: true, id, passwordApplied: setPw.ok };
+
+    // Esperar a que el servicio levante y reporte ID.
+    const installed = getInstalledPath() || exe;
+    let id = '';
+    for (let i = 0; i < 5 && !id; i += 1) {
+      await new Promise((r) => setTimeout(r, 1500));
+      id = await getId(installed);
+    }
+    return { success: true, id, installed: !!getInstalledPath() };
   });
 
   ipcMain.handle('remote-support:disable', async () => {
@@ -246,18 +302,18 @@ function registerRemoteSupportHandlers(app) {
   console.log('✅ [REMOTE] Handlers de soporte remoto registrados');
 }
 
-/** Al iniciar la app, si el soporte está habilitado, deja RustDesk corriendo. */
+/**
+ * Al iniciar la app: si está habilitado y RustDesk está instalado como
+ * servicio, no hay nada que hacer (el servicio ya corre solo). Si por algún
+ * motivo no está instalado, levantamos el portable como fallback.
+ */
 function startRemoteSupportIfEnabled(app) {
   try {
     const cfg = readConfig(app);
     if (!cfg.enabled) return;
+    if (getInstalledPath()) return; // servicio instalado: corre desatendido
     const exe = getRustdeskPath(app);
-    if (!exe) return;
-    ensureRunning(exe);
-    // Reaplicar la contraseña por si el config de RustDesk se reseteó.
-    if (cfg.password) {
-      setTimeout(() => { runRustdesk(exe, ['--password', cfg.password], 8000); }, 2000);
-    }
+    if (exe) ensureRunning(exe);
   } catch (e) {
     console.error('[REMOTE] startIfEnabled error:', e.message);
   }
