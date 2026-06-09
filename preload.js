@@ -5,6 +5,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Versiones de la app y runtimes
   getVersions: () => ipcRenderer.invoke('app-versions'),
 
+  /** (Re)crea el acceso directo de la app en el Escritorio. */
+  createDesktopShortcut: () => ipcRenderer.invoke('app:create-desktop-shortcut'),
+
   /** Diagnóstico de GPU. Equivalente a chrome://gpu/ pero usable desde DevTools. */
   gpuStatus: () => ipcRenderer.invoke('gpu-status'),
 

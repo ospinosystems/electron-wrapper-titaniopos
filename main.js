@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, dialog, nativeImage, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, dialog, nativeImage, Notification, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -688,6 +688,27 @@ ipcMain.handle('app-versions', () => ({
   chrome: process.versions.chrome,
   node: process.versions.node,
 }));
+
+// IPC: (re)crear el acceso directo de la app en el Escritorio. Útil si el
+// usuario lo borró por error. Usa el exe real de la app (no electron.exe en dev).
+ipcMain.handle('app:create-desktop-shortcut', () => {
+  try {
+    const desktop = app.getPath('desktop');
+    const exePath = process.execPath;
+    const shortcutPath = path.join(desktop, 'TitanioPOS.lnk');
+    const ok = shell.writeShortcutLink(shortcutPath, 'replace', {
+      target: exePath,
+      icon: exePath,
+      iconIndex: 0,
+      description: 'TitanioPOS',
+      appUserModelId: 'com.titaniopos.desktop',
+    });
+    return { success: ok, path: shortcutPath };
+  } catch (error) {
+    console.error('[SHORTCUT] No se pudo crear el acceso directo:', error.message);
+    return { success: false, error: error.message };
+  }
+});
 
 // IPC: estado de GPU para diagnóstico de perf. Resultado equivalente a
 // chrome://gpu/ pero usable desde DevTools del renderer (donde chrome://gpu
