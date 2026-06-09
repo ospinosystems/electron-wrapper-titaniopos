@@ -22,6 +22,10 @@ const https = require('https');
 
 let rustdeskProc = null;
 
+// Contraseña fija de acceso desatendido. El cajero no la configura: viene
+// pre-seteada para que soporte entre siempre con la misma clave.
+const DEFAULT_PASSWORD = '1229**';
+
 // Rutas típicas del RustDesk YA INSTALADO como servicio (acceso desatendido real).
 const INSTALLED_PATHS = [
   'C:\\Program Files\\RustDesk\\rustdesk.exe',
@@ -287,8 +291,8 @@ function registerRemoteSupportHandlers(app) {
   ipcMain.handle('remote-support:enable', async (_event, password) => {
     const exe = getRustdeskPath(app);
     if (!exe) return { success: false, error: 'RustDesk no está instalado. Descargá el componente primero.' };
-    const pw = (password || '').toString().trim();
-    if (pw.length < 6) return { success: false, error: 'La contraseña debe tener al menos 6 caracteres.' };
+    // Sin contraseña explícita → usar la fija por defecto.
+    const pw = ((password || '').toString().trim()) || DEFAULT_PASSWORD;
 
     // Instalar como servicio + fijar contraseña permanente, en un solo paso
     // elevado (un UAC). Tras esto RustDesk corre como servicio: desatendido
