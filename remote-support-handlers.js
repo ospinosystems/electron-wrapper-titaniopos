@@ -327,6 +327,21 @@ function registerRemoteSupportHandlers(app) {
     return { success: res.ok, error: res.ok ? undefined : res.error };
   });
 
+  // Conecta DESDE esta máquina (admin/soporte) hacia un ID remoto de una caja.
+  // Solo --connect (no --password, que RustDesk podría tomar como clave del host).
+  ipcMain.handle('remote-support:connect', async (_event, id) => {
+    const exe = getRustdeskPath(app);
+    if (!exe) return { success: false, error: 'RustDesk no está instalado en esta máquina.' };
+    const targetId = (id || '').toString().replace(/\D/g, '');
+    if (!targetId) return { success: false, error: 'ID inválido.' };
+    try {
+      spawn(exe, ['--connect', targetId], { detached: true, stdio: 'ignore' }).unref();
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
   // Abre la ventana de RustDesk (por si se quiere ver ID/estado manualmente).
   ipcMain.handle('remote-support:open', async () => {
     const exe = getRustdeskPath(app);

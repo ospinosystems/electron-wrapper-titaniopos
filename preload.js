@@ -349,6 +349,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   remoteSupportDisable: () => ipcRenderer.invoke('remote-support:disable'),
   /** Abre la ventana de RustDesk manualmente. */
   remoteSupportOpen: () => ipcRenderer.invoke('remote-support:open'),
+  /** Conecta desde esta máquina a un ID remoto (soporte). */
+  remoteSupportConnect: (id) => ipcRenderer.invoke('remote-support:connect', id),
 
   // ==================== DRIVERS DE IMPRESORA ====================
   /** Estado: { available: { thermal, label, remove } }. */
