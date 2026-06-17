@@ -278,12 +278,15 @@ function registerSmartPosHandlers() {
   // Detecta puertos COM presentes y marca si hay un Verifone (prueba de conexión).
   ipcMain.handle('smart-pos-detect-pinpad', async () => {
     return new Promise((resolve) => {
-      const ps = "Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -match '\\(COM\\d+\\)' } | ForEach-Object { $_.Name } | ConvertTo-Json -Compress";
+      // El P200 (ENGAGE) trabaja por USB directo, no siempre aparece como (COMx).
+      // Listamos tanto puertos COM como cualquier dispositivo Verifone/Engage por USB.
+      const ps = "Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -match '\\(COM\\d+\\)' -or $_.Name -match 'verifone|engage|vx |p200|mx9' -or $_.Manufacturer -match 'verifone' } | ForEach-Object { $_.Name } | Sort-Object -Unique | ConvertTo-Json -Compress";
       execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps], { windowsHide: true }, (error, stdout) => {
-        if (error) return resolve({ success: false, error: 'No se pudieron listar los puertos COM.' });
+        if (error) return resolve({ success: false, error: 'No se pudieron listar los dispositivos.' });
         let names = [];
         try { const j = JSON.parse(stdout.trim() || '[]'); names = Array.isArray(j) ? j : [j]; } catch { names = []; }
-        const verifone = names.filter((n) => /verifone|vx|p200|mx|engage/i.test(n));
+        names = names.filter(Boolean);
+        const verifone = names.filter((n) => /verifone|vx |p200|mx9|engage/i.test(n));
         resolve({ success: true, ports: names, verifone, connected: verifone.length > 0 });
       });
     });

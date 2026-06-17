@@ -195,6 +195,54 @@ const applyVposUniversalActivation = (runtimeDir) => {
   }
 };
 
+/**
+ * Asegura la sección [pinpad-verifone] en vposconf.ini con la config del P200
+ * (ENGAGE por USB) que exige el ambiente de certificación de Megasoft.
+ * Claves verificadas contra el jar del VPOS. Idempotente: actualiza las claves
+ * si la sección existe, o la agrega completa si falta.
+ */
+const PINPAD_VERIFONE = {
+  modelo: 'ENGAGE',
+  puerto: 'USB',
+  comandosNuevos: '1',
+  tipoPinblock: 'DUKPT',
+  dataSensibleEncriptada: '1',
+};
+const applyPinpadVerifone = (runtimeDir) => {
+  const iniPath = path.join(runtimeDir, 'conf', 'vposconf.ini');
+  if (!fs.existsSync(iniPath)) return;
+  try {
+    const lines = fs.readFileSync(iniPath, 'utf8').split(/\r?\n/);
+    // Localizar [pinpad-verifone] y el final de su bloque.
+    let start = -1, end = lines.length;
+    for (let i = 0; i < lines.length; i++) {
+      if (/^\s*\[pinpad-verifone\]\s*$/i.test(lines[i])) { start = i;
+        for (let j = i + 1; j < lines.length; j++) { if (/^\s*\[[^\]]+\]\s*$/.test(lines[j])) { end = j; break; } }
+        break;
+      }
+    }
+    if (start === -1) {
+      // No existe: la agregamos al final.
+      const block = ['', '[pinpad-verifone]', ...Object.entries(PINPAD_VERIFONE).map(([k, v]) => `${k}=${v}`)];
+      fs.writeFileSync(iniPath, lines.concat(block).join('\n'), 'utf8');
+      log('[SMART_POS] vposconf.ini: agregada sección [pinpad-verifone] (P200 ENGAGE/USB)');
+      return;
+    }
+    // Existe: actualizar/insertar cada clave dentro del bloque [start+1, end).
+    const pending = { ...PINPAD_VERIFONE };
+    for (let i = start + 1; i < end; i++) {
+      const kv = lines[i].match(/^(\s*)([A-Za-z0-9_]+)\s*=.*$/);
+      if (kv && kv[2] in pending) { lines[i] = `${kv[1]}${kv[2]}=${pending[kv[2]]}`; delete pending[kv[2]]; }
+    }
+    const insert = Object.entries(pending).map(([k, v]) => `${k}=${v}`);
+    if (insert.length) lines.splice(end, 0, ...insert);
+    fs.writeFileSync(iniPath, lines.join('\n'), 'utf8');
+    log('[SMART_POS] vposconf.ini: [pinpad-verifone] actualizado (P200 ENGAGE/USB)');
+  } catch (e) {
+    logErr('[SMART_POS] No se pudo aplicar [pinpad-verifone]:', e.message);
+  }
+};
+
 const pingVpos = () =>
   new Promise((resolve) => {
     const req = http.request(
@@ -227,6 +275,7 @@ const startSmartPosServer = async (app) => {
     const cfg = normalizeSmartPos(readSettings(app).smartPos);
     applyConfigToIni(runtimeDir, cfg);
     applyVposUniversalActivation(runtimeDir);
+    applyPinpadVerifone(runtimeDir);
   } catch (e) {
     logErr('[SMART_POS] Preparación falló:', e.message);
     return { success: false, error: e.message };
