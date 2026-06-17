@@ -56,6 +56,11 @@
         "from": "drivers",
         "to": "drivers",
         "filter": ["*.exe"]
+      },
+      {
+        "from": "vpos-rest",
+        "to": "vpos-rest",
+        "filter": ["**/*"]
       }
     ],
     "directories": {

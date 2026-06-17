@@ -78,6 +78,8 @@ const jwt = require('jsonwebtoken');
 const { registerPrinterHandlers } = require('./printer-handlers');
 const { registerFiscalHandlers } = require('./fiscal-handlers');
 const { registerPinpadHandlers } = require('./pinpad-handlers');
+const { registerSmartPosHandlers } = require('./smart-pos-handlers');
+const { startSmartPosServer, stopSmartPosServer } = require('./smart-pos-manager');
 const { registerCajaConfigHandlers } = require('./caja-config-handlers');
 const { registerRemoteSupportHandlers, startRemoteSupportIfEnabled } = require('./remote-support-handlers');
 const { registerPrinterDriverHandlers } = require('./printer-driver-handlers');
@@ -2790,6 +2792,13 @@ app.whenReady().then(() => {
   registerPinpadHandlers();
   console.log('💳 [PINPAD] Local proxy initialized');
 
+  // Smart POS (Megasoft VPOS RESTService) — proxy local + arranque del servicio.
+  registerSmartPosHandlers();
+  startSmartPosServer()
+    .then((r) => console.log('🟣 [SMART_POS] VPOS:', r && r.message ? r.message : r))
+    .catch((e) => console.warn('[SMART_POS] No se pudo arrancar VPOS:', e && e.message));
+  console.log('🟣 [SMART_POS] Local proxy initialized');
+
   registerCajaConfigHandlers(app);
   console.log('🏪 [CAJA] Caja config (JSON) initialized');
 
@@ -2838,6 +2847,7 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   // Stop fiscal server before quitting
   stopFiscalServer();
+  stopSmartPosServer();
 
   if (process.platform !== 'darwin') {
     app.quit();
@@ -2847,6 +2857,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   // Ensure fiscal server is stopped
   stopFiscalServer();
+  stopSmartPosServer();
 });
 
 app.on('activate', () => {

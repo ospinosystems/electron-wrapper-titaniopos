@@ -49,6 +49,11 @@ temp/
 # encuentra el programa en producción ("Programa no encontrado").
 !fiscal-server/IntTFHKA.exe
 
+# vpos-rest/ = distribución completa de Megasoft VPOS RESTService (~279MB con
+# JRE embebido). NO se versiona por tamaño; debe colocarse en el repo antes de
+# `electron-builder` (extraResources la copia al bundle). Ver README/smart-pos-manager.js.
+vpos-rest/
+
 # Logs
 npm-debug.log*
 yarn-debug.log*

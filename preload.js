@@ -168,6 +168,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
    */
   pinpadTransaction: (payload) => ipcRenderer.invoke('pinpad-transaction', payload),
 
+  /**
+   * Smart POS (Megasoft VPOS RESTService) — compra/anulación de punto de venta
+   * contra el servicio local en http://localhost:8085/vpos/...
+   * @param {object} payload - { operation, amount(céntimos), document, numSeq, terminalVirtual, vposUrl }
+   * @returns {Promise<{success: boolean, status?: number, data?: object, error?: string}>}
+   */
+  smartPosTransaction: (payload) => ipcRenderer.invoke('smart-pos-transaction', payload),
+
+  /** Verifica que el VPOS RESTService está vivo. */
+  smartPosPing: (payload = {}) => ipcRenderer.invoke('smart-pos-ping', payload),
+
   // ==================== FISCAL MACHINE (HKA) ====================
   
   /**
