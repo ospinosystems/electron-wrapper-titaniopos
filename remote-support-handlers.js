@@ -2,12 +2,10 @@
  * Soporte remoto desatendido vía RustDesk (alternativa gratis a AnyDesk).
  *
  * Idea: se empaqueta `rustdesk.exe` en `bin/` (ya incluido por extraResources)
- * y la app lo lanza con una CONTRASEÑA FIJA, usando el relay público gratuito
- * de RustDesk. El técnico se conecta por ID + esa contraseña, sin que el cajero
- * toque nada (desatendido) — igual que se usa AnyDesk hoy.
- *
- * No requiere servidor propio. Si algún día se quiere relay propio, se agrega
- * `--config <base64>` acá sin tocar el frontend.
+ * y la app lo lanza con una CONTRASEÑA FIJA, apuntando a NUESTRO servidor
+ * self-host (RUSTDESK_HOST + key) vía `--config`. El técnico se conecta por
+ * ID + esa contraseña, sin que el cajero toque nada (desatendido) — igual que
+ * se usa AnyDesk hoy.
  *
  * Config persistida en userData/remote-support.json: { enabled, password }.
  * La contraseña se guarda en claro (es la de soporte, no credenciales de
@@ -24,7 +22,23 @@ let rustdeskProc = null;
 
 // Contraseña fija de acceso desatendido. El cajero no la configura: viene
 // pre-seteada para que soporte entre siempre con la misma clave.
-const DEFAULT_PASSWORD = '1229**';
+const DEFAULT_PASSWORD = 'Jaja2712$$';
+
+// Servidor RustDesk PROPIO (self-host en AWS). Apuntamos los clientes acá en
+// vez del relay público gratis. `key` es la llave pública del hbbs; solo los
+// clientes con esta llave pueden registrarse. El relay (hbbr) lo resuelve el
+// propio hbbs, así que NO hace falta setear relay-server en el cliente.
+const RUSTDESK_HOST = 'rustdesk.titanio-pos.com';
+const RUSTDESK_KEY = 'UCWAMrY7Jiv2g22egpRNVv4QlaglnNkYY5L59CoCW4Y=';
+// Formato que acepta `rustdesk --config`: "host=<id-server>,key=<pubkey>".
+const RUSTDESK_CONFIG = `host=${RUSTDESK_HOST},key=${RUSTDESK_KEY}`;
+
+// Escapa un string para meterlo como literal en PowerShell entre comillas
+// SIMPLES. Imprescindible para la clave: con comillas dobles PowerShell trata
+// `$$`/`$x` como variables y rompía la contraseña (p.ej. "Jaja2712$$").
+function psSingleQuote(s) {
+  return `'${String(s).replace(/'/g, "''")}'`;
+}
 
 // Rutas típicas del RustDesk YA INSTALADO como servicio (acceso desatendido real).
 const INSTALLED_PATHS = [
@@ -88,7 +102,12 @@ function elevatedInstallAndSetPassword(app, exe, pw) {
       `  Start-Sleep -Seconds 15`,
       `}`,
       `$rd = if (Test-Path "${installedExe}") { "${installedExe}" } else { "${exe}" }`,
-      `Start-Process -FilePath $rd -ArgumentList '--password',"${pw}"`,
+      // Apuntar al servidor self-host (id-server + key) ANTES de fijar la clave.
+      `Start-Process -FilePath $rd -ArgumentList '--config',${psSingleQuote(RUSTDESK_CONFIG)}`,
+      `Start-Sleep -Seconds 2`,
+      // Clave en comillas SIMPLES: si lleva `$` (p.ej. "Jaja2712$$") las dobles
+      // la mangaban y la contraseña no se aplicaba.
+      `Start-Process -FilePath $rd -ArgumentList '--password',${psSingleQuote(pw)}`,
       `Start-Sleep -Seconds 3`,
     ].join('\r\n');
     try {
@@ -335,6 +354,10 @@ function registerRemoteSupportHandlers(app) {
     const targetId = (id || '').toString().replace(/\D/g, '');
     if (!targetId) return { success: false, error: 'ID inválido.' };
     try {
+      // Apuntar ESTA máquina (soporte) al mismo servidor self-host antes de
+      // conectar; si no, RustDesk buscaría el ID en el relay público y no lo
+      // encontraría. Best-effort, no requiere elevación (config de usuario).
+      await runRustdesk(exe, ['--config', RUSTDESK_CONFIG], 8000);
       spawn(exe, ['--connect', targetId], { detached: true, stdio: 'ignore' }).unref();
       return { success: true };
     } catch (e) {
