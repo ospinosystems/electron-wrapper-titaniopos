@@ -2837,8 +2837,17 @@ app.whenReady().then(() => {
   // para verificar desde la UI que la config quedó aplicada).
   ipcMain.handle('smart-pos-config-dump', async () => {
     try {
-      const iniPath = path.join(getVposRuntimeDir(app), 'conf', 'vposconf.ini');
-      if (!fs.existsSync(iniPath)) return { success: false, error: 'El VPOS aún no se ha inicializado en esta caja.' };
+      const runtimeDir = getVposRuntimeDir(app);
+      const iniPath = path.join(runtimeDir, 'conf', 'vposconf.ini');
+      let settingsPath = '';
+      try { settingsPath = require('./titaniopos-settings-file').getSettingsPath(app); } catch (_) {}
+      const paths = {
+        settings: settingsPath, // credenciales guardadas desde la UI
+        runtime: runtimeDir, // distribución que ejecuta el VPOS
+        vposconf: iniPath, // archivo que reescribe la app: [server],[vtid],[pinpad-verifone]
+        vposuniversal: path.join(runtimeDir, 'conf', 'vposuniversal.ini'), // [COMPRA_MEDIOS_PAGO]
+      };
+      if (!fs.existsSync(iniPath)) return { success: false, error: 'El VPOS aún no se ha inicializado en esta caja.', paths };
       const text = fs.readFileSync(iniPath, 'utf8');
       const WANT = ['server', 'tpdu', 'vtid', 'pinpad-verifone', 'ssl'];
       const lines = text.split(/\r?\n/);
@@ -2853,7 +2862,7 @@ app.whenReady().then(() => {
           else if (line.trim() === '') out.push('');
         }
       }
-      return { success: true, path: iniPath, dump: out.join('\n').replace(/\n{3,}/g, '\n\n').trim() };
+      return { success: true, path: iniPath, paths, dump: out.join('\n').replace(/\n{3,}/g, '\n\n').trim() };
     } catch (error) {
       return { success: false, error: error.message };
     }
