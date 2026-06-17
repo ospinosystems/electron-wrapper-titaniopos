@@ -58,6 +58,11 @@
         "filter": ["*.exe"]
       },
       {
+        "from": "drivers/verifone",
+        "to": "drivers/verifone",
+        "filter": ["**/*"]
+      },
+      {
         "from": "vpos-rest",
         "to": "vpos-rest",
         "filter": ["**/*"]

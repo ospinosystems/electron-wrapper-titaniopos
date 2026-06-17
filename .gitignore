@@ -48,6 +48,8 @@ temp/
 # IntTFHKA.exe = driver oficial HKA. SIN esto el servidor fiscal no
 # encuentra el programa en producción ("Programa no encontrado").
 !fiscal-server/IntTFHKA.exe
+# Driver Verifone (P200) — se bundlea para instalarlo desde la app (Smart POS).
+!drivers/verifone/**
 
 # vpos-rest/ = distribución completa de Megasoft VPOS RESTService (~279MB con
 # JRE embebido). NO se versiona por tamaño; debe colocarse en el repo antes de

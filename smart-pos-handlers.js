@@ -19,6 +19,9 @@
 
 const { ipcMain } = require('electron');
 const http = require('http');
+const path = require('path');
+const fs = require('fs');
+const { execFile } = require('child_process');
 
 // El VPOS RESTService escucha por defecto en 127.0.0.1:8085.
 const DEFAULT_VPOS_HOST = '127.0.0.1';
@@ -243,6 +246,47 @@ function registerSmartPosHandlers() {
     } catch (error) {
       return { success: false, status: 0, error: error?.message || 'VPOS no responde' };
     }
+  });
+
+  // -------- Driver del pinpad Verifone (P200) --------
+  // Resuelve drivers/verifone/<file> en dev y empaquetado.
+  const getVerifoneFile = (file) => {
+    const candidates = [];
+    if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, 'drivers', 'verifone', file));
+    candidates.push(path.join(__dirname, 'drivers', 'verifone', file));
+    if (__dirname.includes('app.asar')) {
+      candidates.push(path.join(__dirname.split('app.asar')[0], 'drivers', 'verifone', file));
+    }
+    return candidates.find((c) => { try { return fs.existsSync(c); } catch { return false; } }) || null;
+  };
+
+  // Instala el driver Verifone en modo silencioso y ELEVADO (UAC).
+  // PORT=9 → el pinpad queda en COM9 (coincide con [pinpad] puerto=COM9 del VPOS).
+  ipcMain.handle('smart-pos-install-driver', async () => {
+    const msi = getVerifoneFile('VerifoneUnifiedDriverInstaller64.msi');
+    if (!msi) return { success: false, error: 'El driver no está incluido en esta versión de la app.' };
+    const args = `/qn /i "${msi}" PORT=9 SINGLE_DEVICE_SYSTEM=1 PORT_ROOT_LINK_NAME=COM FILE_LOGGING_OFF=1 IGNOREHWSERNUM=0`;
+    return new Promise((resolve) => {
+      const cmd = `Start-Process -Verb RunAs -Wait -FilePath 'msiexec.exe' -ArgumentList '${args.replace(/'/g, "''")}'`;
+      execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', cmd], { windowsHide: true }, (error) => {
+        if (error) return resolve({ success: false, error: 'No se pudo instalar (¿se canceló el permiso de administrador?).' });
+        resolve({ success: true, message: 'Driver instalado (pinpad en COM9).' });
+      });
+    });
+  });
+
+  // Detecta puertos COM presentes y marca si hay un Verifone (prueba de conexión).
+  ipcMain.handle('smart-pos-detect-pinpad', async () => {
+    return new Promise((resolve) => {
+      const ps = "Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -match '\\(COM\\d+\\)' } | ForEach-Object { $_.Name } | ConvertTo-Json -Compress";
+      execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps], { windowsHide: true }, (error, stdout) => {
+        if (error) return resolve({ success: false, error: 'No se pudieron listar los puertos COM.' });
+        let names = [];
+        try { const j = JSON.parse(stdout.trim() || '[]'); names = Array.isArray(j) ? j : [j]; } catch { names = []; }
+        const verifone = names.filter((n) => /verifone|vx|p200|mx|engage/i.test(n));
+        resolve({ success: true, ports: names, verifone, connected: verifone.length > 0 });
+      });
+    });
   });
 
   console.log('✅ [SMART_POS] Handlers registered');

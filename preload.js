@@ -182,6 +182,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Tareas de caja: imprimeUltimoVoucher | imprimeUltimoVoucherP | precierre | cierre | ultimoCierre. */
   smartPosTask: (action) => ipcRenderer.invoke('smart-pos-task', { action }),
 
+  /** Instala el driver Verifone (P200) en silencio y elevado; deja el pinpad en COM9. */
+  smartPosInstallDriver: () => ipcRenderer.invoke('smart-pos-install-driver'),
+
+  /** Lista puertos COM y detecta si hay un Verifone conectado (prueba de conexión). */
+  smartPosDetectPinpad: () => ipcRenderer.invoke('smart-pos-detect-pinpad'),
+
   /** Lee la config Smart POS (host/port Merchant Server + vtid/afiliación). */
   smartPosConfigGet: () => ipcRenderer.invoke('smart-pos-config-get'),
 
