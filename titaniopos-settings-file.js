@@ -66,6 +66,9 @@ const DEFAULT_SMART_POS = {
   serverPort: '',
   vtid: '',
   id: '',
+  // Modo prueba: apunta al simulador local de Megasoft (SimuladorPayment) en vez
+  // del Merchant Server real. Cuando está activo, Electron lanza el simulador.
+  testMode: false,
   lastConfigUpdate: '',
 };
 
@@ -112,6 +115,7 @@ function normalizeSmartPos(raw) {
     serverPort: String(base.serverPort ?? ''),
     vtid: String(base.vtid ?? ''),
     id: String(base.id ?? ''),
+    testMode: Boolean(base.testMode),
     lastConfigUpdate: String(base.lastConfigUpdate ?? ''),
   };
 }

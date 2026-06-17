@@ -79,7 +79,7 @@ const { registerPrinterHandlers } = require('./printer-handlers');
 const { registerFiscalHandlers } = require('./fiscal-handlers');
 const { registerPinpadHandlers } = require('./pinpad-handlers');
 const { registerSmartPosHandlers } = require('./smart-pos-handlers');
-const { startSmartPosServer, stopSmartPosServer, restartSmartPosServer } = require('./smart-pos-manager');
+const { startSmartPosServer, stopSmartPosServer, restartSmartPosServer, stopSimulator, setSmartPosTestMode } = require('./smart-pos-manager');
 const { registerCajaConfigHandlers } = require('./caja-config-handlers');
 const { registerRemoteSupportHandlers, startRemoteSupportIfEnabled } = require('./remote-support-handlers');
 const { registerPrinterDriverHandlers } = require('./printer-driver-handlers');
@@ -2833,6 +2833,19 @@ app.whenReady().then(() => {
     }
   });
 
+  // Modo prueba Smart POS: presetea config al simulador, reinicia el VPOS y
+  // lanza el simulador (o lo apaga). Todo en un solo switch, sin tocar archivos.
+  ipcMain.handle('smart-pos-test-mode', async (event, enabled) => {
+    try {
+      const result = await setSmartPosTestMode(app, Boolean(enabled));
+      console.log('🧪 [SMART_POS] Modo prueba:', enabled, '->', result?.success);
+      return result;
+    } catch (error) {
+      console.error('❌ [SMART_POS] test-mode:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
   registerCajaConfigHandlers(app);
   console.log('🏪 [CAJA] Caja config (JSON) initialized');
 
@@ -2882,6 +2895,7 @@ app.on('window-all-closed', () => {
   // Stop fiscal server before quitting
   stopFiscalServer();
   stopSmartPosServer();
+  stopSimulator();
 
   if (process.platform !== 'darwin') {
     app.quit();
@@ -2892,6 +2906,7 @@ app.on('before-quit', () => {
   // Ensure fiscal server is stopped
   stopFiscalServer();
   stopSmartPosServer();
+  stopSimulator();
 });
 
 app.on('activate', () => {

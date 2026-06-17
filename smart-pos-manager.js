@@ -33,9 +33,22 @@ const logErr = (...a) => { const m = a.join(' '); console.error(m); logToFile('[
 
 const VPOS_PORT = 8085;
 const MAIN_CLASS = 've.com.megasoft.vpos.service.VposWebService';
+const SIMULATOR_CLASS = 've.com.megasoft.simuladores.payment.SimuladorPayment';
+
+// Valores de PRUEBA: el simulador (Merchant Server falso) escucha el puerto que
+// el VPOS use en [server]. Ambos comparten el mismo conf del runtime dir.
+const TEST_PRESET = {
+  enabled: true,
+  serverHost: '127.0.0.1',
+  serverPort: '5500',
+  vtid: 'caja01',
+  id: '0001',
+  testMode: true,
+};
 
 let vposProcess = null;
 let isRunning = false;
+let simulatorProcess = null;
 
 /** Carpeta origen (empaquetada, posiblemente solo-lectura). */
 const getVposSourceDir = () => {
@@ -273,10 +286,78 @@ const restartSmartPosServer = async (app) => {
   return startSmartPosServer(app);
 };
 
+/** Lanza el simulador de pagos (Merchant Server falso, GUI). Mismo conf/cwd que el VPOS. */
+const startSimulator = (app) => {
+  if (simulatorProcess) return { success: true, message: 'Simulador ya está corriendo' };
+  let runtimeDir;
+  try {
+    runtimeDir = ensureRuntimeCopy(app);
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+  const javaExe = getJavaExe(runtimeDir);
+  const classpath = buildClasspath(runtimeDir);
+  log('[SMART_POS] Lanzando simulador (Merchant Server falso)...');
+  try {
+    simulatorProcess = spawn(javaExe, ['-classpath', classpath, SIMULATOR_CLASS], {
+      cwd: runtimeDir,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    simulatorProcess.stdout.on('data', (d) => log('[SIM]', d.toString().trim()));
+    simulatorProcess.stderr.on('data', (d) => logErr('[SIM]', d.toString().trim()));
+    simulatorProcess.on('error', (err) => { logErr('[SIM] error:', err); simulatorProcess = null; });
+    simulatorProcess.on('close', (code) => { log('[SIM] cerrado código', code); simulatorProcess = null; });
+    return { success: true, message: 'Simulador lanzado' };
+  } catch (e) {
+    logErr('[SMART_POS] Falló lanzar simulador:', e.message);
+    return { success: false, error: e.message };
+  }
+};
+
+const stopSimulator = () => {
+  if (!simulatorProcess) return;
+  log('[SMART_POS] Deteniendo simulador...');
+  try {
+    if (process.platform === 'win32') {
+      spawn('taskkill', ['/pid', simulatorProcess.pid, '/f', '/t'], { shell: true });
+    } else {
+      simulatorProcess.kill('SIGTERM');
+    }
+  } catch (e) { logErr('[SMART_POS] Error al detener simulador:', e.message); }
+  simulatorProcess = null;
+};
+
+/**
+ * Activa/desactiva el MODO PRUEBA en un solo paso:
+ *  - ON: presetea la config al simulador (127.0.0.1:5500, vtid/id de prueba),
+ *        reescribe vposconf.ini, reinicia el VPOS y lanza el simulador.
+ *  - OFF: apaga testMode, detiene el simulador y reinicia el VPOS.
+ * No requiere editar archivos manualmente.
+ */
+const setSmartPosTestMode = async (app, enabled) => {
+  const { readSettings, writeSettings, normalizeSmartPos } = require('./titaniopos-settings-file');
+  const s = readSettings(app);
+  if (enabled) {
+    s.smartPos = normalizeSmartPos({ ...(s.smartPos || {}), ...TEST_PRESET, lastConfigUpdate: new Date().toISOString() });
+    writeSettings(app, s);
+    const r = await restartSmartPosServer(app); // aplica [server]=127.0.0.1:5500 al ini
+    const sim = startSimulator(app);
+    return { success: r.success && sim.success, vpos: r, simulator: sim, config: s.smartPos };
+  }
+  s.smartPos = normalizeSmartPos({ ...(s.smartPos || {}), testMode: false, lastConfigUpdate: new Date().toISOString() });
+  writeSettings(app, s);
+  stopSimulator();
+  const r = await restartSmartPosServer(app);
+  return { success: r.success, vpos: r, config: s.smartPos };
+};
+
 module.exports = {
   startSmartPosServer,
   stopSmartPosServer,
   restartSmartPosServer,
+  startSimulator,
+  stopSimulator,
+  setSmartPosTestMode,
   pingVpos,
   getVposRuntimeDir,
 };

@@ -185,6 +185,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Guarda la config Smart POS y reinicia el servicio para aplicarla. */
   smartPosConfigSave: (config) => ipcRenderer.invoke('smart-pos-config-save', config),
 
+  /** Activa/desactiva el modo prueba (preset al simulador + lanza/cierra simulador). */
+  smartPosTestMode: (enabled) => ipcRenderer.invoke('smart-pos-test-mode', enabled),
+
   // ==================== FISCAL MACHINE (HKA) ====================
   
   /**
