@@ -79,7 +79,7 @@ const { registerPrinterHandlers } = require('./printer-handlers');
 const { registerFiscalHandlers } = require('./fiscal-handlers');
 const { registerPinpadHandlers } = require('./pinpad-handlers');
 const { registerSmartPosHandlers } = require('./smart-pos-handlers');
-const { startSmartPosServer, stopSmartPosServer, restartSmartPosServer } = require('./smart-pos-manager');
+const { startSmartPosServer, stopSmartPosServer, restartSmartPosServer, getVposRuntimeDir } = require('./smart-pos-manager');
 const { registerCajaConfigHandlers } = require('./caja-config-handlers');
 const { registerRemoteSupportHandlers, startRemoteSupportIfEnabled } = require('./remote-support-handlers');
 const { registerPrinterDriverHandlers } = require('./printer-driver-handlers');
@@ -2829,6 +2829,32 @@ app.whenReady().then(() => {
       return { success: true, config: s.smartPos };
     } catch (error) {
       console.error('❌ [SMART_POS CONFIG] save:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Vuelca las secciones clave del vposconf.ini que el VPOS está usando (read-only,
+  // para verificar desde la UI que la config quedó aplicada).
+  ipcMain.handle('smart-pos-config-dump', async () => {
+    try {
+      const iniPath = path.join(getVposRuntimeDir(app), 'conf', 'vposconf.ini');
+      if (!fs.existsSync(iniPath)) return { success: false, error: 'El VPOS aún no se ha inicializado en esta caja.' };
+      const text = fs.readFileSync(iniPath, 'utf8');
+      const WANT = ['server', 'tpdu', 'vtid', 'pinpad-verifone', 'ssl'];
+      const lines = text.split(/\r?\n/);
+      const out = [];
+      let section = null, keep = false;
+      for (const line of lines) {
+        const sec = line.match(/^\s*\[([^\]]+)\]\s*$/);
+        if (sec) { section = sec[1].trim().toLowerCase(); keep = WANT.includes(section); if (keep) out.push(`[${sec[1].trim()}]`); continue; }
+        if (keep) {
+          const kv = line.match(/^\s*([A-Za-z0-9_]+)\s*=(.*)$/);
+          if (kv) out.push(`${kv[1]}=${kv[2].trim()}`);
+          else if (line.trim() === '') out.push('');
+        }
+      }
+      return { success: true, path: iniPath, dump: out.join('\n').replace(/\n{3,}/g, '\n\n').trim() };
+    } catch (error) {
       return { success: false, error: error.message };
     }
   });

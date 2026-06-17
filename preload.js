@@ -194,6 +194,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Guarda la config Smart POS y reinicia el servicio para aplicarla. */
   smartPosConfigSave: (config) => ipcRenderer.invoke('smart-pos-config-save', config),
 
+  /** Devuelve las secciones clave del vposconf.ini en uso (read-only, para verificar en la UI). */
+  smartPosConfigDump: () => ipcRenderer.invoke('smart-pos-config-dump'),
+
   // ==================== FISCAL MACHINE (HKA) ====================
   
   /**
