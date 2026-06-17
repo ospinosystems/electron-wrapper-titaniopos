@@ -2868,6 +2868,46 @@ app.whenReady().then(() => {
     }
   });
 
+  // Devuelve la LISTA de archivos de config relevantes (nombre + ruta), para el visor de la UI.
+  ipcMain.handle('smart-pos-config-files', async () => {
+    try {
+      const runtimeDir = getVposRuntimeDir(app);
+      const confDir = path.join(runtimeDir, 'conf');
+      let settingsPath = '';
+      try { settingsPath = require('./titaniopos-settings-file').getSettingsPath(app); } catch (_) {}
+      const files = [
+        { key: 'settings', label: 'Credenciales (UI)', path: settingsPath },
+        { key: 'vposconf', label: 'vposconf.ini (servidor, vtid, pinpad)', path: path.join(confDir, 'vposconf.ini') },
+        { key: 'vposuniversal', label: 'vposuniversal.ini (medios de pago, pinpads)', path: path.join(confDir, 'vposuniversal.ini') },
+      ].map((f) => ({ ...f, exists: (() => { try { return fs.existsSync(f.path); } catch { return false; } })() }));
+      return { success: true, files };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Lee el contenido COMPLETO de uno de esos archivos (read-only, lista blanca por key).
+  ipcMain.handle('smart-pos-read-config-file', async (_e, key) => {
+    try {
+      const runtimeDir = getVposRuntimeDir(app);
+      const confDir = path.join(runtimeDir, 'conf');
+      let settingsPath = '';
+      try { settingsPath = require('./titaniopos-settings-file').getSettingsPath(app); } catch (_) {}
+      const MAP = {
+        settings: settingsPath,
+        vposconf: path.join(confDir, 'vposconf.ini'),
+        vposuniversal: path.join(confDir, 'vposuniversal.ini'),
+      };
+      const target = MAP[key];
+      if (!target) return { success: false, error: 'Archivo no permitido.' };
+      if (!fs.existsSync(target)) return { success: false, error: 'El archivo aún no existe (arranca el VPOS primero).', path: target };
+      const content = fs.readFileSync(target, 'utf8');
+      return { success: true, path: target, content };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
   registerCajaConfigHandlers(app);
   console.log('🏪 [CAJA] Caja config (JSON) initialized');
 

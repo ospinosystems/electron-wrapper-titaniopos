@@ -197,6 +197,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Devuelve las secciones clave del vposconf.ini en uso (read-only, para verificar en la UI). */
   smartPosConfigDump: () => ipcRenderer.invoke('smart-pos-config-dump'),
 
+  /** Lista de archivos de config relevantes (nombre + ruta). */
+  smartPosConfigFiles: () => ipcRenderer.invoke('smart-pos-config-files'),
+
+  /** Contenido completo de un archivo de config (key: settings|vposconf|vposuniversal). */
+  smartPosReadConfigFile: (key) => ipcRenderer.invoke('smart-pos-read-config-file', key),
+
   // ==================== FISCAL MACHINE (HKA) ====================
   
   /**
