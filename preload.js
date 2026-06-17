@@ -179,6 +179,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Verifica que el VPOS RESTService está vivo. */
   smartPosPing: (payload = {}) => ipcRenderer.invoke('smart-pos-ping', payload),
 
+  /** Tareas de caja: imprimeUltimoVoucher | imprimeUltimoVoucherP | precierre | cierre | ultimoCierre. */
+  smartPosTask: (action) => ipcRenderer.invoke('smart-pos-task', { action }),
+
   /** Lee la config Smart POS (host/port Merchant Server + vtid/afiliación). */
   smartPosConfigGet: () => ipcRenderer.invoke('smart-pos-config-get'),
 

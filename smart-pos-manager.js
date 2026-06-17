@@ -166,6 +166,35 @@ const applyConfigToIni = (runtimeDir, cfg) => {
   log('[SMART_POS] vposconf.ini actualizado con config de la tienda.');
 };
 
+/**
+ * Activa [COMPRA_MEDIOS_PAGO] activo=1 en vposuniversal.ini (requerido por Megasoft
+ * para el ambiente de certificación: "activar con valor 1"). Idempotente: solo
+ * toca la clave `activo` dentro de esa sección.
+ */
+const applyVposUniversalActivation = (runtimeDir) => {
+  const iniPath = path.join(runtimeDir, 'conf', 'vposuniversal.ini');
+  if (!fs.existsSync(iniPath)) return;
+  try {
+    const lines = fs.readFileSync(iniPath, 'utf8').split(/\r?\n/);
+    let section = null, changed = false;
+    const out = lines.map((line) => {
+      const sec = line.match(/^\s*\[([^\]]+)\]\s*$/);
+      if (sec) { section = sec[1].trim().toUpperCase(); return line; }
+      if (section === 'COMPRA_MEDIOS_PAGO') {
+        const kv = line.match(/^(\s*)activo\s*=\s*(.*)$/);
+        if (kv && kv[2].trim() !== '1') { changed = true; return `${kv[1]}activo=1`; }
+      }
+      return line;
+    });
+    if (changed) {
+      fs.writeFileSync(iniPath, out.join('\n'), 'utf8');
+      log('[SMART_POS] vposuniversal.ini: [COMPRA_MEDIOS_PAGO] activo=1');
+    }
+  } catch (e) {
+    logErr('[SMART_POS] No se pudo activar vposuniversal.ini:', e.message);
+  }
+};
+
 const pingVpos = () =>
   new Promise((resolve) => {
     const req = http.request(
@@ -197,6 +226,7 @@ const startSmartPosServer = async (app) => {
     runtimeDir = ensureRuntimeCopy(app);
     const cfg = normalizeSmartPos(readSettings(app).smartPos);
     applyConfigToIni(runtimeDir, cfg);
+    applyVposUniversalActivation(runtimeDir);
   } catch (e) {
     logErr('[SMART_POS] Preparación falló:', e.message);
     return { success: false, error: e.message };

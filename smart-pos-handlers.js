@@ -194,6 +194,46 @@ function registerSmartPosHandlers() {
     }
   });
 
+  // -------- Tareas (cierre, reimpresión de voucher, etc.) --------
+  // Acciones sin parámetros adicionales: solo { accion }.
+  const TASK_ACTIONS = new Set([
+    'imprimeUltimoVoucher',
+    'imprimeUltimoVoucherP',
+    'precierre',
+    'cierre',
+    'ultimoCierre',
+  ]);
+  ipcMain.handle('smart-pos-task', async (event, requestBody = {}) => {
+    try {
+      const action = String((requestBody && requestBody.action) || '');
+      if (!TASK_ACTIONS.has(action)) {
+        return { success: false, status: 400, error: `Acción no permitida: ${action}` };
+      }
+      const { host, port } = resolveEndpoint(requestBody.vposUrl);
+      console.log('[SMART_POS] tarea ->', `${host}:${port}/vpos/metodo`, action);
+      const response = await postToVpos({
+        host,
+        port,
+        path: '/vpos/metodo',
+        payload: { accion: action },
+        timeoutMs: DEFAULT_TIMEOUT_MS,
+      });
+      return {
+        // Para tareas, aprobado/ok lo determina codRespuesta "00" cuando aplica;
+        // si no trae codRespuesta (p.ej. reimpresión), basta con HTTP 200.
+        success: isApproved(response.data) || (response.status >= 200 && response.status < 300),
+        status: response.status,
+        data: response.data,
+      };
+    } catch (error) {
+      console.error('[SMART_POS] Task error:', error);
+      if (error && error.code === 'SMART_POS_TIMEOUT') {
+        return { success: false, status: 408, error: error.message };
+      }
+      return { success: false, status: 500, error: error?.message || 'Error en el proxy VPOS' };
+    }
+  });
+
   // -------- Ping (servicio vivo) --------
   ipcMain.handle('smart-pos-ping', async (event, requestBody = {}) => {
     try {
