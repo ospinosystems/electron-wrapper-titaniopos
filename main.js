@@ -79,7 +79,7 @@ const { registerPrinterHandlers } = require('./printer-handlers');
 const { registerFiscalHandlers } = require('./fiscal-handlers');
 const { registerPinpadHandlers } = require('./pinpad-handlers');
 const { registerSmartPosHandlers } = require('./smart-pos-handlers');
-const { startSmartPosServer, stopSmartPosServer } = require('./smart-pos-manager');
+const { startSmartPosServer, stopSmartPosServer, restartSmartPosServer } = require('./smart-pos-manager');
 const { registerCajaConfigHandlers } = require('./caja-config-handlers');
 const { registerRemoteSupportHandlers, startRemoteSupportIfEnabled } = require('./remote-support-handlers');
 const { registerPrinterDriverHandlers } = require('./printer-driver-handlers');
@@ -2794,10 +2794,44 @@ app.whenReady().then(() => {
 
   // Smart POS (Megasoft VPOS RESTService) — proxy local + arranque del servicio.
   registerSmartPosHandlers();
-  startSmartPosServer()
+  startSmartPosServer(app)
     .then((r) => console.log('🟣 [SMART_POS] VPOS:', r && r.message ? r.message : r))
     .catch((e) => console.warn('[SMART_POS] No se pudo arrancar VPOS:', e && e.message));
   console.log('🟣 [SMART_POS] Local proxy initialized');
+
+  // Config Smart POS (host/port del Merchant Server + vtid/afiliación).
+  // Se guarda en el settings unificado y se reescribe en vposconf.ini al reiniciar.
+  ipcMain.handle('smart-pos-config-get', async () => {
+    try {
+      const { readSettings, normalizeSmartPos } = require('./titaniopos-settings-file');
+      return { success: true, config: normalizeSmartPos(readSettings(app).smartPos) };
+    } catch (error) {
+      console.error('❌ [SMART_POS CONFIG] get:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('smart-pos-config-save', async (event, partial) => {
+    try {
+      const { readSettings, writeSettings, normalizeSmartPos } = require('./titaniopos-settings-file');
+      const s = readSettings(app);
+      s.smartPos = normalizeSmartPos({
+        ...(s.smartPos || {}),
+        ...(partial && typeof partial === 'object' ? partial : {}),
+        lastConfigUpdate: new Date().toISOString(),
+      });
+      writeSettings(app, s);
+      console.log('💾 [SMART_POS CONFIG] Saved:', s.smartPos);
+      // Reaplica config al .ini y reinicia el servicio para que tome efecto.
+      restartSmartPosServer(app)
+        .then((r) => console.log('🟣 [SMART_POS] Reiniciado:', r && r.message ? r.message : r))
+        .catch((e) => console.warn('[SMART_POS] Reinicio falló:', e && e.message));
+      return { success: true, config: s.smartPos };
+    } catch (error) {
+      console.error('❌ [SMART_POS CONFIG] save:', error);
+      return { success: false, error: error.message };
+    }
+  });
 
   registerCajaConfigHandlers(app);
   console.log('🏪 [CAJA] Caja config (JSON) initialized');

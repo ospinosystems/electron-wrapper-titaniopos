@@ -56,12 +56,26 @@ const DEFAULT_UI = {
   reduceAnimations: false,
 };
 
+// Smart POS (Megasoft VPOS RESTService). Estos valores se escriben en
+// vpos-rest/conf/vposconf.ini antes de arrancar el servicio:
+//   [server] host/port  -> Merchant Server de Megasoft (adquiriente)
+//   [vtid]   vtid/id     -> identificador de la caja/afiliación
+const DEFAULT_SMART_POS = {
+  enabled: false,
+  serverHost: '',
+  serverPort: '',
+  vtid: '',
+  id: '',
+  lastConfigUpdate: '',
+};
+
 const DEFAULT_SETTINGS = {
   schemaVersion: 1,
   caja: { ...DEFAULT_CAJA },
   thermalPrinter: { ...DEFAULT_THERMAL },
   fiscal: { ...DEFAULT_FISCAL },
   ui: { ...DEFAULT_UI },
+  smartPos: { ...DEFAULT_SMART_POS },
 };
 
 
@@ -90,6 +104,18 @@ function normalizeUi(raw) {
   return { ...DEFAULT_UI, ...(raw || {}) };
 }
 
+function normalizeSmartPos(raw) {
+  const base = { ...DEFAULT_SMART_POS, ...(raw || {}) };
+  return {
+    enabled: Boolean(base.enabled),
+    serverHost: String(base.serverHost ?? ''),
+    serverPort: String(base.serverPort ?? ''),
+    vtid: String(base.vtid ?? ''),
+    id: String(base.id ?? ''),
+    lastConfigUpdate: String(base.lastConfigUpdate ?? ''),
+  };
+}
+
 function normalizeSettings(raw) {
   if (!raw || typeof raw !== 'object') return clone(DEFAULT_SETTINGS);
   return {
@@ -98,6 +124,7 @@ function normalizeSettings(raw) {
     thermalPrinter: normalizeThermal(raw.thermalPrinter || raw.printer || {}),
     fiscal: normalizeFiscal(raw.fiscal || {}),
     ui: normalizeUi(raw.ui || {}),
+    smartPos: normalizeSmartPos(raw.smartPos || {}),
   };
 }
 
@@ -280,9 +307,11 @@ module.exports = {
   normalizeThermal,
   normalizeFiscal,
   normalizeUi,
+  normalizeSmartPos,
   DEFAULT_SETTINGS,
   DEFAULT_CAJA,
   DEFAULT_UI,
+  DEFAULT_SMART_POS,
   migrateToUnifiedSettings,
   SETTINGS_DIR,
   SETTINGS_FILENAME,

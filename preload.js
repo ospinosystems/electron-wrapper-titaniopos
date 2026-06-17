@@ -179,6 +179,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Verifica que el VPOS RESTService está vivo. */
   smartPosPing: (payload = {}) => ipcRenderer.invoke('smart-pos-ping', payload),
 
+  /** Lee la config Smart POS (host/port Merchant Server + vtid/afiliación). */
+  smartPosConfigGet: () => ipcRenderer.invoke('smart-pos-config-get'),
+
+  /** Guarda la config Smart POS y reinicia el servicio para aplicarla. */
+  smartPosConfigSave: (config) => ipcRenderer.invoke('smart-pos-config-save', config),
+
   // ==================== FISCAL MACHINE (HKA) ====================
   
   /**
