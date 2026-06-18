@@ -78,8 +78,8 @@ const jwt = require('jsonwebtoken');
 const { registerPrinterHandlers } = require('./printer-handlers');
 const { registerFiscalHandlers } = require('./fiscal-handlers');
 const { registerPinpadHandlers } = require('./pinpad-handlers');
-const { registerSmartPosHandlers } = require('./smart-pos-handlers');
-const { startSmartPosServer, stopSmartPosServer, restartSmartPosServer, getVposRuntimeDir } = require('./smart-pos-manager');
+const { registerMegaPosHandlers } = require('./mega-pos-handlers');
+const { startMegaPosServer, stopMegaPosServer, restartMegaPosServer, getVposRuntimeDir } = require('./mega-pos-manager');
 const { registerCajaConfigHandlers } = require('./caja-config-handlers');
 const { registerRemoteSupportHandlers, startRemoteSupportIfEnabled } = require('./remote-support-handlers');
 const { registerPrinterDriverHandlers } = require('./printer-driver-handlers');
@@ -2793,49 +2793,49 @@ app.whenReady().then(() => {
   console.log('💳 [PINPAD] Local proxy initialized');
 
   // Smart POS (Megasoft VPOS RESTService) — proxy local + arranque del servicio.
-  registerSmartPosHandlers();
-  startSmartPosServer(app)
-    .then((r) => console.log('🟣 [SMART_POS] VPOS:', r && r.message ? r.message : r))
-    .catch((e) => console.warn('[SMART_POS] No se pudo arrancar VPOS:', e && e.message));
-  console.log('🟣 [SMART_POS] Local proxy initialized');
+  registerMegaPosHandlers();
+  startMegaPosServer(app)
+    .then((r) => console.log('🟣 [MEGA_POS] VPOS:', r && r.message ? r.message : r))
+    .catch((e) => console.warn('[MEGA_POS] No se pudo arrancar VPOS:', e && e.message));
+  console.log('🟣 [MEGA_POS] Local proxy initialized');
 
   // Config Smart POS (host/port del Merchant Server + vtid/afiliación).
   // Se guarda en el settings unificado y se reescribe en vposconf.ini al reiniciar.
-  ipcMain.handle('smart-pos-config-get', async () => {
+  ipcMain.handle('mega-pos-config-get', async () => {
     try {
-      const { readSettings, normalizeSmartPos } = require('./titaniopos-settings-file');
-      return { success: true, config: normalizeSmartPos(readSettings(app).smartPos) };
+      const { readSettings, normalizeMegaPos } = require('./titaniopos-settings-file');
+      return { success: true, config: normalizeMegaPos(readSettings(app).megaPos) };
     } catch (error) {
-      console.error('❌ [SMART_POS CONFIG] get:', error);
+      console.error('❌ [MEGA_POS CONFIG] get:', error);
       return { success: false, error: error.message };
     }
   });
 
-  ipcMain.handle('smart-pos-config-save', async (event, partial) => {
+  ipcMain.handle('mega-pos-config-save', async (event, partial) => {
     try {
-      const { readSettings, writeSettings, normalizeSmartPos } = require('./titaniopos-settings-file');
+      const { readSettings, writeSettings, normalizeMegaPos } = require('./titaniopos-settings-file');
       const s = readSettings(app);
-      s.smartPos = normalizeSmartPos({
-        ...(s.smartPos || {}),
+      s.megaPos = normalizeMegaPos({
+        ...(s.megaPos || {}),
         ...(partial && typeof partial === 'object' ? partial : {}),
         lastConfigUpdate: new Date().toISOString(),
       });
       writeSettings(app, s);
-      console.log('💾 [SMART_POS CONFIG] Saved:', s.smartPos);
+      console.log('💾 [MEGA_POS CONFIG] Saved:', s.megaPos);
       // Reaplica config al .ini y reinicia el servicio para que tome efecto.
-      restartSmartPosServer(app)
-        .then((r) => console.log('🟣 [SMART_POS] Reiniciado:', r && r.message ? r.message : r))
-        .catch((e) => console.warn('[SMART_POS] Reinicio falló:', e && e.message));
-      return { success: true, config: s.smartPos };
+      restartMegaPosServer(app)
+        .then((r) => console.log('🟣 [MEGA_POS] Reiniciado:', r && r.message ? r.message : r))
+        .catch((e) => console.warn('[MEGA_POS] Reinicio falló:', e && e.message));
+      return { success: true, config: s.megaPos };
     } catch (error) {
-      console.error('❌ [SMART_POS CONFIG] save:', error);
+      console.error('❌ [MEGA_POS CONFIG] save:', error);
       return { success: false, error: error.message };
     }
   });
 
   // Vuelca las secciones clave del vposconf.ini que el VPOS está usando (read-only,
   // para verificar desde la UI que la config quedó aplicada).
-  ipcMain.handle('smart-pos-config-dump', async () => {
+  ipcMain.handle('mega-pos-config-dump', async () => {
     try {
       const runtimeDir = getVposRuntimeDir(app);
       const iniPath = path.join(runtimeDir, 'conf', 'vposconf.ini');
@@ -2869,7 +2869,7 @@ app.whenReady().then(() => {
   });
 
   // Devuelve la LISTA de archivos de config relevantes (nombre + ruta), para el visor de la UI.
-  ipcMain.handle('smart-pos-config-files', async () => {
+  ipcMain.handle('mega-pos-config-files', async () => {
     try {
       const runtimeDir = getVposRuntimeDir(app);
       const confDir = path.join(runtimeDir, 'conf');
@@ -2887,7 +2887,7 @@ app.whenReady().then(() => {
   });
 
   // Lee el contenido COMPLETO de uno de esos archivos (read-only, lista blanca por key).
-  ipcMain.handle('smart-pos-read-config-file', async (_e, key) => {
+  ipcMain.handle('mega-pos-read-config-file', async (_e, key) => {
     try {
       const runtimeDir = getVposRuntimeDir(app);
       const confDir = path.join(runtimeDir, 'conf');
@@ -2956,7 +2956,7 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   // Stop fiscal server before quitting
   stopFiscalServer();
-  stopSmartPosServer();
+  stopMegaPosServer();
 
   if (process.platform !== 'darwin') {
     app.quit();
@@ -2966,7 +2966,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   // Ensure fiscal server is stopped
   stopFiscalServer();
-  stopSmartPosServer();
+  stopMegaPosServer();
 });
 
 app.on('activate', () => {

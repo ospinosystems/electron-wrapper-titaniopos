@@ -174,37 +174,37 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @param {object} payload - { operation, amount(céntimos), document, numSeq, terminalVirtual, vposUrl }
    * @returns {Promise<{success: boolean, status?: number, data?: object, error?: string}>}
    */
-  smartPosTransaction: (payload) => ipcRenderer.invoke('smart-pos-transaction', payload),
+  megaPosTransaction: (payload) => ipcRenderer.invoke('mega-pos-transaction', payload),
 
   /** Verifica que el VPOS RESTService está vivo. */
-  smartPosPing: (payload = {}) => ipcRenderer.invoke('smart-pos-ping', payload),
+  megaPosPing: (payload = {}) => ipcRenderer.invoke('mega-pos-ping', payload),
 
   /** Tareas de caja: imprimeUltimoVoucher | imprimeUltimoVoucherP | precierre | cierre | ultimoCierre. */
-  smartPosTask: (action) => ipcRenderer.invoke('smart-pos-task', { action }),
+  megaPosTask: (action) => ipcRenderer.invoke('mega-pos-task', { action }),
 
   /** Lee el texto del voucher/reporte que generó el VPOS (ruta de nombreVoucher). */
-  smartPosReadVoucher: (filePath) => ipcRenderer.invoke('smart-pos-read-voucher', filePath),
+  megaPosReadVoucher: (filePath) => ipcRenderer.invoke('mega-pos-read-voucher', filePath),
 
   /** Instala el driver Verifone (P200) en silencio y elevado; deja el pinpad en COM9. */
-  smartPosInstallDriver: () => ipcRenderer.invoke('smart-pos-install-driver'),
+  megaPosInstallDriver: () => ipcRenderer.invoke('mega-pos-install-driver'),
 
   /** Lista puertos COM y detecta si hay un Verifone conectado (prueba de conexión). */
-  smartPosDetectPinpad: () => ipcRenderer.invoke('smart-pos-detect-pinpad'),
+  megaPosDetectPinpad: () => ipcRenderer.invoke('mega-pos-detect-pinpad'),
 
   /** Lee la config Smart POS (host/port Merchant Server + vtid/afiliación). */
-  smartPosConfigGet: () => ipcRenderer.invoke('smart-pos-config-get'),
+  megaPosConfigGet: () => ipcRenderer.invoke('mega-pos-config-get'),
 
   /** Guarda la config Smart POS y reinicia el servicio para aplicarla. */
-  smartPosConfigSave: (config) => ipcRenderer.invoke('smart-pos-config-save', config),
+  megaPosConfigSave: (config) => ipcRenderer.invoke('mega-pos-config-save', config),
 
   /** Devuelve las secciones clave del vposconf.ini en uso (read-only, para verificar en la UI). */
-  smartPosConfigDump: () => ipcRenderer.invoke('smart-pos-config-dump'),
+  megaPosConfigDump: () => ipcRenderer.invoke('mega-pos-config-dump'),
 
   /** Lista de archivos de config relevantes (nombre + ruta). */
-  smartPosConfigFiles: () => ipcRenderer.invoke('smart-pos-config-files'),
+  megaPosConfigFiles: () => ipcRenderer.invoke('mega-pos-config-files'),
 
   /** Contenido completo de un archivo de config (key: settings|vposconf|vposuniversal). */
-  smartPosReadConfigFile: (key) => ipcRenderer.invoke('smart-pos-read-config-file', key),
+  megaPosReadConfigFile: (key) => ipcRenderer.invoke('mega-pos-read-config-file', key),
 
   // ==================== FISCAL MACHINE (HKA) ====================
   

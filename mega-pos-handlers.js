@@ -104,7 +104,7 @@ function postToVpos({ host, port, path, payload, timeoutMs }) {
 
     req.setTimeout(timeoutMs, () => {
       const timeoutError = new Error(`VPOS request timeout (${Math.round(timeoutMs / 1000)}s)`);
-      timeoutError.code = 'SMART_POS_TIMEOUT';
+      timeoutError.code = 'MEGA_POS_TIMEOUT';
       req.destroy(timeoutError);
     });
 
@@ -126,7 +126,7 @@ function getToVpos({ host, port, path, timeoutMs }) {
     });
     req.setTimeout(timeoutMs, () => {
       const e = new Error('VPOS ping timeout');
-      e.code = 'SMART_POS_TIMEOUT';
+      e.code = 'MEGA_POS_TIMEOUT';
       req.destroy(e);
     });
     req.on('error', (err) => reject(err));
@@ -134,9 +134,9 @@ function getToVpos({ host, port, path, timeoutMs }) {
   });
 }
 
-function registerSmartPosHandlers() {
+function registerMegaPosHandlers() {
   // -------- Compra / Anulación --------
-  ipcMain.handle('smart-pos-transaction', async (event, requestBody = {}) => {
+  ipcMain.handle('mega-pos-transaction', async (event, requestBody = {}) => {
     try {
       const {
         operation = 'tarjeta', // 'tarjeta' (compra) | 'anulacion'
@@ -166,7 +166,7 @@ function registerSmartPosHandlers() {
       }
       if (terminalVirtual) payload.terminalVirtual = String(terminalVirtual);
 
-      console.log('[SMART_POS] ->', `${host}:${port}/vpos/metodo`, payload);
+      console.log('[MEGA_POS] ->', `${host}:${port}/vpos/metodo`, payload);
 
       const response = await postToVpos({
         host,
@@ -176,7 +176,7 @@ function registerSmartPosHandlers() {
         timeoutMs: DEFAULT_TIMEOUT_MS,
       });
 
-      console.log('[SMART_POS] <-', response.status, response.data && response.data.codRespuesta);
+      console.log('[MEGA_POS] <-', response.status, response.data && response.data.codRespuesta);
 
       return {
         success: isApproved(response.data),
@@ -184,8 +184,8 @@ function registerSmartPosHandlers() {
         data: response.data,
       };
     } catch (error) {
-      console.error('[SMART_POS] Transaction error:', error);
-      if (error && error.code === 'SMART_POS_TIMEOUT') {
+      console.error('[MEGA_POS] Transaction error:', error);
+      if (error && error.code === 'MEGA_POS_TIMEOUT') {
         return { success: false, status: 408, error: error.message };
       }
       // ECONNREFUSED => el servicio VPOS no está corriendo en localhost:8085
@@ -206,14 +206,14 @@ function registerSmartPosHandlers() {
     'cierre',
     'ultimoCierre',
   ]);
-  ipcMain.handle('smart-pos-task', async (event, requestBody = {}) => {
+  ipcMain.handle('mega-pos-task', async (event, requestBody = {}) => {
     try {
       const action = String((requestBody && requestBody.action) || '');
       if (!TASK_ACTIONS.has(action)) {
         return { success: false, status: 400, error: `Acción no permitida: ${action}` };
       }
       const { host, port } = resolveEndpoint(requestBody.vposUrl);
-      console.log('[SMART_POS] tarea ->', `${host}:${port}/vpos/metodo`, action);
+      console.log('[MEGA_POS] tarea ->', `${host}:${port}/vpos/metodo`, action);
       const response = await postToVpos({
         host,
         port,
@@ -229,8 +229,8 @@ function registerSmartPosHandlers() {
         data: response.data,
       };
     } catch (error) {
-      console.error('[SMART_POS] Task error:', error);
-      if (error && error.code === 'SMART_POS_TIMEOUT') {
+      console.error('[MEGA_POS] Task error:', error);
+      if (error && error.code === 'MEGA_POS_TIMEOUT') {
         return { success: false, status: 408, error: error.message };
       }
       return { success: false, status: 500, error: error?.message || 'Error en el proxy VPOS' };
@@ -238,7 +238,7 @@ function registerSmartPosHandlers() {
   });
 
   // -------- Ping (servicio vivo) --------
-  ipcMain.handle('smart-pos-ping', async (event, requestBody = {}) => {
+  ipcMain.handle('mega-pos-ping', async (event, requestBody = {}) => {
     try {
       const { host, port } = resolveEndpoint(requestBody && requestBody.vposUrl);
       const res = await getToVpos({ host, port, path: '/vpos/ping', timeoutMs: PING_TIMEOUT_MS });
@@ -262,7 +262,7 @@ function registerSmartPosHandlers() {
 
   // Instala el driver Verifone en modo silencioso y ELEVADO (UAC).
   // PORT=9 → el pinpad queda en COM9 (coincide con [pinpad] puerto=COM9 del VPOS).
-  ipcMain.handle('smart-pos-install-driver', async () => {
+  ipcMain.handle('mega-pos-install-driver', async () => {
     const msi = getVerifoneFile('VerifoneUnifiedDriverInstaller64.msi');
     if (!msi) return { success: false, error: 'El driver no está incluido en esta versión de la app.' };
     const args = `/qn /i "${msi}" PORT=9 SINGLE_DEVICE_SYSTEM=1 PORT_ROOT_LINK_NAME=COM FILE_LOGGING_OFF=1 IGNOREHWSERNUM=0`;
@@ -276,7 +276,7 @@ function registerSmartPosHandlers() {
   });
 
   // Detecta puertos COM presentes y marca si hay un Verifone (prueba de conexión).
-  ipcMain.handle('smart-pos-detect-pinpad', async () => {
+  ipcMain.handle('mega-pos-detect-pinpad', async () => {
     return new Promise((resolve) => {
       // El P200 (ENGAGE) trabaja por USB directo, no siempre aparece como (COMx).
       // Listamos tanto puertos COM como cualquier dispositivo Verifone/Engage por USB.
@@ -295,7 +295,7 @@ function registerSmartPosHandlers() {
   // -------- Leer voucher/reporte generado por el VPOS (para imprimir en térmica) --------
   // El VPOS escribe el voucher/cierre/precierre como archivo .txt y devuelve su ruta
   // en `nombreVoucher`. Aquí leemos ese texto (lista blanca: solo rutas de voucher).
-  ipcMain.handle('smart-pos-read-voucher', async (_e, filePath) => {
+  ipcMain.handle('mega-pos-read-voucher', async (_e, filePath) => {
     try {
       const p = String(filePath || '').trim();
       if (!p || !/voucher/i.test(p)) return { success: false, error: 'Ruta de voucher no válida.' };
@@ -308,9 +308,9 @@ function registerSmartPosHandlers() {
     }
   });
 
-  console.log('✅ [SMART_POS] Handlers registered');
+  console.log('✅ [MEGA_POS] Handlers registered');
 }
 
 module.exports = {
-  registerSmartPosHandlers,
+  registerMegaPosHandlers,
 };

@@ -20,9 +20,9 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 
-const { readSettings, normalizeSmartPos } = require('./titaniopos-settings-file');
+const { readSettings, normalizeMegaPos } = require('./titaniopos-settings-file');
 
-const LOG_FILE = path.join(os.homedir(), 'titaniopos-smart-pos.log');
+const LOG_FILE = path.join(os.homedir(), 'titaniopos-mega-pos.log');
 const logToFile = (msg) => {
   try {
     fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} ${msg}\n`, 'utf8');
@@ -75,11 +75,11 @@ const ensureRuntimeCopy = (app) => {
   } catch (_) { upToDate = false; }
 
   if (!upToDate) {
-    log(`[SMART_POS] Copiando distribución VPOS a ${runtime} (una vez)...`);
+    log(`[MEGA_POS] Copiando distribución VPOS a ${runtime} (una vez)...`);
     fs.mkdirSync(runtime, { recursive: true });
     fs.cpSync(source, runtime, { recursive: true });
     try { fs.writeFileSync(marker, version, 'utf8'); } catch (_) {}
-    log('[SMART_POS] Copia completa.');
+    log('[MEGA_POS] Copia completa.');
   }
   return runtime;
 };
@@ -104,7 +104,7 @@ const buildClasspath = (dir) => {
         .map((p) => path.resolve(dir, p.replace(/^\.[\\/]/, '')))
         .join(path.delimiter);
     } catch (e) {
-      logErr('[SMART_POS] No se pudo leer classpathRest.txt:', e.message);
+      logErr('[MEGA_POS] No se pudo leer classpathRest.txt:', e.message);
     }
   }
   const jars = [];
@@ -127,12 +127,12 @@ const buildClasspath = (dir) => {
  */
 const applyConfigToIni = (runtimeDir, cfg) => {
   if (!cfg || (!cfg.serverHost && !cfg.serverPort && !cfg.vtid && !cfg.id)) {
-    log('[SMART_POS] Sin config smartPos; se usa vposconf.ini tal cual.');
+    log('[MEGA_POS] Sin config megaPos; se usa vposconf.ini tal cual.');
     return;
   }
   const iniPath = path.join(runtimeDir, 'conf', 'vposconf.ini');
   if (!fs.existsSync(iniPath)) {
-    logErr('[SMART_POS] vposconf.ini no encontrado en', iniPath);
+    logErr('[MEGA_POS] vposconf.ini no encontrado en', iniPath);
     return;
   }
 
@@ -163,7 +163,7 @@ const applyConfigToIni = (runtimeDir, cfg) => {
   });
 
   fs.writeFileSync(iniPath, out.join('\n'), 'utf8');
-  log('[SMART_POS] vposconf.ini actualizado con config de la tienda.');
+  log('[MEGA_POS] vposconf.ini actualizado con config de la tienda.');
 };
 
 /**
@@ -188,10 +188,10 @@ const applyVposUniversalActivation = (runtimeDir) => {
     });
     if (changed) {
       fs.writeFileSync(iniPath, out.join('\n'), 'utf8');
-      log('[SMART_POS] vposuniversal.ini: [COMPRA_MEDIOS_PAGO] activo=1');
+      log('[MEGA_POS] vposuniversal.ini: [COMPRA_MEDIOS_PAGO] activo=1');
     }
   } catch (e) {
-    logErr('[SMART_POS] No se pudo activar vposuniversal.ini:', e.message);
+    logErr('[MEGA_POS] No se pudo activar vposuniversal.ini:', e.message);
   }
 };
 
@@ -225,7 +225,7 @@ const applyPinpadVerifone = (runtimeDir) => {
       // No existe: la agregamos al final.
       const block = ['', '[pinpad-verifone]', ...Object.entries(PINPAD_VERIFONE).map(([k, v]) => `${k}=${v}`)];
       fs.writeFileSync(iniPath, lines.concat(block).join('\n'), 'utf8');
-      log('[SMART_POS] vposconf.ini: agregada sección [pinpad-verifone] (P200 ENGAGE/USB)');
+      log('[MEGA_POS] vposconf.ini: agregada sección [pinpad-verifone] (P200 ENGAGE/USB)');
       return;
     }
     // Existe: actualizar/insertar cada clave dentro del bloque [start+1, end).
@@ -237,9 +237,9 @@ const applyPinpadVerifone = (runtimeDir) => {
     const insert = Object.entries(pending).map(([k, v]) => `${k}=${v}`);
     if (insert.length) lines.splice(end, 0, ...insert);
     fs.writeFileSync(iniPath, lines.join('\n'), 'utf8');
-    log('[SMART_POS] vposconf.ini: [pinpad-verifone] actualizado (P200 ENGAGE/USB)');
+    log('[MEGA_POS] vposconf.ini: [pinpad-verifone] actualizado (P200 ENGAGE/USB)');
   } catch (e) {
-    logErr('[SMART_POS] No se pudo aplicar [pinpad-verifone]:', e.message);
+    logErr('[MEGA_POS] No se pudo aplicar [pinpad-verifone]:', e.message);
   }
 };
 
@@ -257,7 +257,7 @@ const pingVpos = () =>
     req.end();
   });
 
-const startSmartPosServer = async (app) => {
+const startMegaPosServer = async (app) => {
   if (isRunning && vposProcess) {
     return { success: true, message: 'VPOS ya está corriendo' };
   }
@@ -267,7 +267,7 @@ const startSmartPosServer = async (app) => {
   // lo matamos para arrancar el NUESTRO con la config correcta de la app.
   // (Antes lo reusábamos a ciegas, lo que provocaba "FALTA VTID".)
   if (await pingVpos()) {
-    log('[SMART_POS] VPOS externo detectado en :8085; se termina para arrancar el de la app.');
+    log('[MEGA_POS] VPOS externo detectado en :8085; se termina para arrancar el de la app.');
     if (process.platform === 'win32') {
       try {
         const { execSync } = require('child_process');
@@ -284,18 +284,18 @@ const startSmartPosServer = async (app) => {
   let runtimeDir;
   try {
     runtimeDir = ensureRuntimeCopy(app);
-    const cfg = normalizeSmartPos(readSettings(app).smartPos);
+    const cfg = normalizeMegaPos(readSettings(app).megaPos);
     applyConfigToIni(runtimeDir, cfg);
     applyVposUniversalActivation(runtimeDir);
     applyPinpadVerifone(runtimeDir);
   } catch (e) {
-    logErr('[SMART_POS] Preparación falló:', e.message);
+    logErr('[MEGA_POS] Preparación falló:', e.message);
     return { success: false, error: e.message };
   }
 
   const javaExe = getJavaExe(runtimeDir);
   const classpath = buildClasspath(runtimeDir);
-  log('[SMART_POS] javaExe:', javaExe, '| cwd:', runtimeDir);
+  log('[MEGA_POS] javaExe:', javaExe, '| cwd:', runtimeDir);
 
   return new Promise((resolve) => {
     try {
@@ -308,12 +308,12 @@ const startSmartPosServer = async (app) => {
       vposProcess.stderr.on('data', (d) => logErr('[VPOS]', d.toString().trim()));
 
       vposProcess.on('error', (err) => {
-        logErr('[SMART_POS] Process error:', err);
+        logErr('[MEGA_POS] Process error:', err);
         isRunning = false;
         vposProcess = null;
       });
       vposProcess.on('close', (code) => {
-        log('[SMART_POS] VPOS cerrado con código', code);
+        log('[MEGA_POS] VPOS cerrado con código', code);
         isRunning = false;
         vposProcess = null;
       });
@@ -325,24 +325,24 @@ const startSmartPosServer = async (app) => {
         if (await pingVpos()) {
           clearInterval(timer);
           isRunning = true;
-          log('[SMART_POS] VPOS RESTService listo en :8085');
+          log('[MEGA_POS] VPOS RESTService listo en :8085');
           resolve({ success: true, message: 'VPOS iniciado' });
         } else if (checks >= maxChecks) {
           clearInterval(timer);
-          logErr('[SMART_POS] VPOS no respondió a tiempo');
+          logErr('[MEGA_POS] VPOS no respondió a tiempo');
           resolve({ success: false, error: 'VPOS no respondió a tiempo' });
         }
       }, 500);
     } catch (error) {
-      logErr('[SMART_POS] Falló el arranque:', error);
+      logErr('[MEGA_POS] Falló el arranque:', error);
       resolve({ success: false, error: error.message });
     }
   });
 };
 
-const stopSmartPosServer = () => {
+const stopMegaPosServer = () => {
   if (!vposProcess) return;
-  log('[SMART_POS] Deteniendo VPOS...');
+  log('[MEGA_POS] Deteniendo VPOS...');
   try {
     if (process.platform === 'win32') {
       spawn('taskkill', ['/pid', vposProcess.pid, '/f', '/t'], { shell: true });
@@ -350,24 +350,24 @@ const stopSmartPosServer = () => {
       vposProcess.kill('SIGTERM');
     }
   } catch (e) {
-    logErr('[SMART_POS] Error al detener:', e.message);
+    logErr('[MEGA_POS] Error al detener:', e.message);
   }
   vposProcess = null;
   isRunning = false;
 };
 
 /** Reaplica config y reinicia el servicio (tras guardar config en la UI). */
-const restartSmartPosServer = async (app) => {
-  stopSmartPosServer();
+const restartMegaPosServer = async (app) => {
+  stopMegaPosServer();
   // pequeño respiro para que el puerto libere
   await new Promise((r) => setTimeout(r, 800));
-  return startSmartPosServer(app);
+  return startMegaPosServer(app);
 };
 
 module.exports = {
-  startSmartPosServer,
-  stopSmartPosServer,
-  restartSmartPosServer,
+  startMegaPosServer,
+  stopMegaPosServer,
+  restartMegaPosServer,
   pingVpos,
   getVposRuntimeDir,
 };

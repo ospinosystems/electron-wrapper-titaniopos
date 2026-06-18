@@ -60,7 +60,7 @@ const DEFAULT_UI = {
 // vpos-rest/conf/vposconf.ini antes de arrancar el servicio:
 //   [server] host/port  -> Merchant Server de Megasoft (adquiriente)
 //   [vtid]   vtid/id     -> identificador de la caja/afiliación
-const DEFAULT_SMART_POS = {
+const DEFAULT_MEGA_POS = {
   enabled: false,
   serverHost: '',
   serverPort: '',
@@ -75,7 +75,7 @@ const DEFAULT_SETTINGS = {
   thermalPrinter: { ...DEFAULT_THERMAL },
   fiscal: { ...DEFAULT_FISCAL },
   ui: { ...DEFAULT_UI },
-  smartPos: { ...DEFAULT_SMART_POS },
+  megaPos: { ...DEFAULT_MEGA_POS },
 };
 
 
@@ -104,8 +104,8 @@ function normalizeUi(raw) {
   return { ...DEFAULT_UI, ...(raw || {}) };
 }
 
-function normalizeSmartPos(raw) {
-  const base = { ...DEFAULT_SMART_POS, ...(raw || {}) };
+function normalizeMegaPos(raw) {
+  const base = { ...DEFAULT_MEGA_POS, ...(raw || {}) };
   return {
     enabled: Boolean(base.enabled),
     serverHost: String(base.serverHost ?? ''),
@@ -124,7 +124,7 @@ function normalizeSettings(raw) {
     thermalPrinter: normalizeThermal(raw.thermalPrinter || raw.printer || {}),
     fiscal: normalizeFiscal(raw.fiscal || {}),
     ui: normalizeUi(raw.ui || {}),
-    smartPos: normalizeSmartPos(raw.smartPos || {}),
+    megaPos: normalizeMegaPos(raw.megaPos || raw.smartPos || {}),
   };
 }
 
@@ -307,11 +307,11 @@ module.exports = {
   normalizeThermal,
   normalizeFiscal,
   normalizeUi,
-  normalizeSmartPos,
+  normalizeMegaPos,
   DEFAULT_SETTINGS,
   DEFAULT_CAJA,
   DEFAULT_UI,
-  DEFAULT_SMART_POS,
+  DEFAULT_MEGA_POS,
   migrateToUnifiedSettings,
   SETTINGS_DIR,
   SETTINGS_FILENAME,
