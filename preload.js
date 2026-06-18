@@ -182,6 +182,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Tareas de caja: imprimeUltimoVoucher | imprimeUltimoVoucherP | precierre | cierre | ultimoCierre. */
   smartPosTask: (action) => ipcRenderer.invoke('smart-pos-task', { action }),
 
+  /** Lee el texto del voucher/reporte que generó el VPOS (ruta de nombreVoucher). */
+  smartPosReadVoucher: (filePath) => ipcRenderer.invoke('smart-pos-read-voucher', filePath),
+
   /** Instala el driver Verifone (P200) en silencio y elevado; deja el pinpad en COM9. */
   smartPosInstallDriver: () => ipcRenderer.invoke('smart-pos-install-driver'),
 

@@ -292,6 +292,22 @@ function registerSmartPosHandlers() {
     });
   });
 
+  // -------- Leer voucher/reporte generado por el VPOS (para imprimir en térmica) --------
+  // El VPOS escribe el voucher/cierre/precierre como archivo .txt y devuelve su ruta
+  // en `nombreVoucher`. Aquí leemos ese texto (lista blanca: solo rutas de voucher).
+  ipcMain.handle('smart-pos-read-voucher', async (_e, filePath) => {
+    try {
+      const p = String(filePath || '').trim();
+      if (!p || !/voucher/i.test(p)) return { success: false, error: 'Ruta de voucher no válida.' };
+      if (!fs.existsSync(p)) return { success: false, error: `Voucher no encontrado: ${p}` };
+      // Los reportes del VPOS vienen en Windows-1252 (latin1). Lo conservamos.
+      const content = fs.readFileSync(p, 'latin1');
+      return { success: true, path: p, content };
+    } catch (error) {
+      return { success: false, error: error?.message || 'No se pudo leer el voucher' };
+    }
+  });
+
   console.log('✅ [SMART_POS] Handlers registered');
 }
 
