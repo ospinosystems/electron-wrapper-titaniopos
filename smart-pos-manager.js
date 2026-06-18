@@ -262,11 +262,23 @@ const startSmartPosServer = async (app) => {
     return { success: true, message: 'VPOS ya está corriendo' };
   }
 
-  // Si ya hay un VPOS levantado, lo reusamos.
+  // Si hay un VPOS en :8085 que NO arrancamos nosotros (instancia externa o
+  // colgada, p.ej. un VposREST.bat manual con config vieja/vacía → error EA),
+  // lo matamos para arrancar el NUESTRO con la config correcta de la app.
+  // (Antes lo reusábamos a ciegas, lo que provocaba "FALTA VTID".)
   if (await pingVpos()) {
-    isRunning = true;
-    log('[SMART_POS] VPOS ya respondía en :8085, se reusa.');
-    return { success: true, message: 'VPOS ya estaba activo', external: true };
+    log('[SMART_POS] VPOS externo detectado en :8085; se termina para arrancar el de la app.');
+    if (process.platform === 'win32') {
+      try {
+        const { execSync } = require('child_process');
+        try { execSync('taskkill /F /IM javaw.exe', { stdio: 'ignore' }); } catch (_) {}
+        try { execSync('taskkill /F /IM java.exe', { stdio: 'ignore' }); } catch (_) {}
+      } catch (_) { /* noop */ }
+    }
+    // Esperar a que libere el puerto.
+    for (let i = 0; i < 10 && (await pingVpos()); i++) {
+      await new Promise((r) => setTimeout(r, 400));
+    }
   }
 
   let runtimeDir;
