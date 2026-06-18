@@ -179,6 +179,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Verifica que el VPOS RESTService está vivo. */
   megaPosPing: (payload = {}) => ipcRenderer.invoke('mega-pos-ping', payload),
 
+  /** Reinicia / fuerza el arranque del servicio VPOS local. */
+  megaPosRestart: () => ipcRenderer.invoke('mega-pos-restart'),
+
   /** Tareas de caja: imprimeUltimoVoucher | imprimeUltimoVoucherP | precierre | cierre | ultimoCierre. */
   megaPosTask: (action) => ipcRenderer.invoke('mega-pos-task', { action }),
 

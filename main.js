@@ -2799,6 +2799,19 @@ app.whenReady().then(() => {
     .catch((e) => console.warn('[MEGA_POS] No se pudo arrancar VPOS:', e && e.message));
   console.log('🟣 [MEGA_POS] Local proxy initialized');
 
+  // Reiniciar / forzar arranque del servicio VPOS desde la UI. Devuelve el
+  // resultado (success + message/error) para diagnosticar si no levanta.
+  ipcMain.handle('mega-pos-restart', async () => {
+    try {
+      const r = await restartMegaPosServer(app);
+      console.log('🟣 [MEGA_POS] Restart:', r && (r.message || r.error));
+      return r;
+    } catch (error) {
+      console.error('❌ [MEGA_POS] restart:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
   // Config Smart POS (host/port del Merchant Server + vtid/afiliación).
   // Se guarda en el settings unificado y se reescribe en vposconf.ini al reiniciar.
   ipcMain.handle('mega-pos-config-get', async () => {
