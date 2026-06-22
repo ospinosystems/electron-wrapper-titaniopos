@@ -689,14 +689,21 @@ ipcMain.handle('app-versions', () => ({
   node: process.versions.node,
 }));
 
-// IPC: (re)crear el acceso directo de la app en el Escritorio. Útil si el
-// usuario lo borró por error. Usa el exe real de la app (no electron.exe en dev).
-ipcMain.handle('app:create-desktop-shortcut', () => {
+// (Re)crea el acceso directo en el Escritorio. Lo usan el botón de Ajustes y el
+// arranque (self-heal): los updates NSIS borran el acceso directo del escritorio
+// y no lo recrean, así que al iniciar lo restauramos si falta.
+//   - force=false (arranque): solo crea si NO existe (no pisa nada).
+//   - force=true  (botón):    siempre lo reescribe.
+function ensureDesktopShortcut({ force = false } = {}) {
+  // En dev process.execPath es electron.exe; el acceso no serviría.
+  if (!app.isPackaged) return { success: false, error: 'Solo disponible en la app instalada.' };
   try {
     const desktop = app.getPath('desktop');
-    const exePath = process.execPath;
     const shortcutPath = path.join(desktop, 'TitanioPOS.lnk');
-    const ok = shell.writeShortcutLink(shortcutPath, 'replace', {
+    const exists = fs.existsSync(shortcutPath);
+    if (!force && exists) return { success: true, path: shortcutPath, existed: true };
+    const exePath = process.execPath;
+    const ok = shell.writeShortcutLink(shortcutPath, exists ? 'replace' : 'create', {
       target: exePath,
       icon: exePath,
       iconIndex: 0,
@@ -708,7 +715,10 @@ ipcMain.handle('app:create-desktop-shortcut', () => {
     console.error('[SHORTCUT] No se pudo crear el acceso directo:', error.message);
     return { success: false, error: error.message };
   }
-});
+}
+
+// IPC: botón de Ajustes para (re)crear el acceso directo si el usuario lo borró.
+ipcMain.handle('app:create-desktop-shortcut', () => ensureDesktopShortcut({ force: true }));
 
 // IPC: estado de GPU para diagnóstico de perf. Resultado equivalente a
 // chrome://gpu/ pero usable desde DevTools del renderer (donde chrome://gpu
@@ -2759,6 +2769,9 @@ app.whenReady().then(() => {
   createWindow();
   if (app.isPackaged) {
     setupAutoUpdater();
+    // Self-heal: los updates NSIS borran el acceso directo del escritorio.
+    // Si falta, lo recreamos en cada arranque.
+    try { ensureDesktopShortcut(); } catch (_) { /* no crítico */ }
   } else {
     console.log('[UPDATER] Omitido en desarrollo (solo app empaquetada)');
   }
