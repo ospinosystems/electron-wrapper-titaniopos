@@ -74,19 +74,6 @@ function downloadedBinPath(app) {
   return path.join((app || electronApp).getPath('userData'), CONFIGURED_EXE_NAME);
 }
 
-/** Archivo donde el script elevado deja el ID REAL del servicio para la app. */
-function serviceIdPath(app) {
-  return path.join((app || electronApp).getPath('userData'), 'rustdesk-service-id.txt');
-}
-
-/** ID del servicio que dejó el último enable (mismo que muestra la app). */
-function getServiceId(app) {
-  try {
-    const id = fs.readFileSync(serviceIdPath(app), 'utf8').trim();
-    const m = id.match(/\d{6,}/);
-    return m ? m[0] : '';
-  } catch (_) { return ''; }
-}
 
 /**
  * Resuelve un rustdesk.exe utilizable. Prioridad: INSTALADO (servicio) →
@@ -133,8 +120,9 @@ function ensureConfiguredExe(app, baseExe) {
 /**
  * Instala RustDesk como SERVICIO apuntando al self-host y fija la contraseña,
  * en UN solo paso elevado (un único UAC). Tras esto el servicio corre solo
- * (desatendido aunque la app POS esté cerrada). Deja el ID del servicio en
- * `idOutFile` para que la app muestre EXACTAMENTE el mismo ID que la app RustDesk.
+ * (desatendido aunque la app POS esté cerrada). El ID se obtiene aparte con
+ * `--get-id` (ver resolveId): esta versión guarda el id cifrado (enc_id), no en
+ * texto plano, así que no se puede leer del toml.
  */
 function elevatedInstallAndSetPassword(app, configuredExe, pw) {
   return new Promise((resolve) => {
@@ -142,7 +130,6 @@ function elevatedInstallAndSetPassword(app, configuredExe, pw) {
     const ts = configuredExe.length + pw.length; // sufijo estable, sin Date.now
     const ps1 = path.join(tmpDir, `rd-setup-${ts}.ps1`);
     const installedExe = INSTALLED_PATHS[0];
-    const idOut = serviceIdPath(app);
     // TOML del servidor para la config DEL SERVICIO (belt-and-suspenders por si
     // el bakeo por nombre de archivo no aplicara en alguna versión).
     const serverToml = [
@@ -184,16 +171,6 @@ foreach ($svc in 'RustDesk','rustdesk') { Restart-Service -Name $svc -Force }
 Start-Sleep -Seconds 5
 & $rd --password ${psSingleQuote(pw)}
 Start-Sleep -Seconds 2
-# 5) Leer el ID REAL del servicio y dejarlo para la app.
-$id = ''
-foreach ($d in @(${SERVICE_CONFIG_DIRS.map((d) => `'${d}'`).join(',')})) {
-  $f = Join-Path $d 'RustDesk.toml'
-  if (Test-Path $f) {
-    $line = (Get-Content $f | Where-Object { $_ -match "^id\\s*=" } | Select-Object -First 1)
-    if ($line) { $id = ($line -replace "^id\\s*=\\s*'?","") -replace "'.*$","" ; $id = $id.Trim(); break }
-  }
-}
-Set-Content -Path '${idOut.replace(/'/g, "''")}' -Value $id -Encoding ascii
 `;
     try {
       fs.writeFileSync(ps1, script, 'utf8');
@@ -304,10 +281,12 @@ function runRustdesk(exe, args, timeoutMs = 10000) {
   });
 }
 
-/** ID del servicio si lo tenemos cacheado; si no, --get-id como fallback. */
+/**
+ * ID del cliente vía `--get-id`. En esta máquina la config de usuario y la del
+ * servicio comparten el mismo enc_id, así que --get-id devuelve el MISMO ID que
+ * muestra la app RustDesk. (rustdesk.exe imprime el id en stdout y sale.)
+ */
 async function resolveId(app, exe) {
-  const svcId = getServiceId(app);
-  if (svcId) return svcId;
   if (!exe) return '';
   const res = await runRustdesk(exe, ['--get-id'], 8000);
   const m = (res.stdout || '').match(/\d{6,}/);
@@ -352,8 +331,6 @@ foreach ($p in $paths) { if (Test-Path $p) { Remove-Item -Recurse -Force $p } }
     const outer = `Start-Process -Verb RunAs -Wait -WindowStyle Hidden powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','${ps1}'`;
     execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', outer], { timeout: 120000, windowsHide: true }, (error) => {
       try { fs.unlinkSync(ps1); } catch (_) { /* ignore */ }
-      // Limpiar el ID cacheado y el exe descargado.
-      try { fs.unlinkSync(serviceIdPath(app)); } catch (_) { /* ignore */ }
       if (error) {
         return resolve({ ok: false, error: 'No se pudo desinstalar (¿se canceló el permiso de administrador?).' });
       }
@@ -411,11 +388,12 @@ function registerRemoteSupportHandlers(app) {
 
     writeConfig(app, { enabled: true, password: pw });
 
-    // El script ya dejó el ID en archivo; reintentar lectura por si tardó.
-    let id = getServiceId(app);
-    for (let i = 0; i < 5 && !id; i += 1) {
+    // Obtener el ID con --get-id; reintentar por si el servicio tarda en levantar.
+    const installedExe = getInstalledPath() || configuredExe;
+    let id = '';
+    for (let i = 0; i < 6 && !id; i += 1) {
       await new Promise((r) => setTimeout(r, 1500));
-      id = getServiceId(app);
+      id = await resolveId(app, installedExe);
     }
     return { success: true, id, installed: !!getInstalledPath() };
   });
