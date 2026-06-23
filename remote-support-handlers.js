@@ -46,6 +46,11 @@ const DEFAULT_PASSWORD = 'Jaja2712$$';
 const RUSTDESK_HOST = 'rustdesk.titanio-pos.com';
 const RUSTDESK_KEY = 'UCWAMrY7Jiv2g22egpRNVv4QlaglnNkYY5L59CoCW4Y=';
 
+// Formato que acepta `rustdesk --config`: "host=<id-server>,key=<pubkey>". Este
+// es el método PROBADO (v1.0.59) para apuntar al self-host: aplica el servidor
+// a la config que usa el servicio. El relay (hbbr) lo resuelve el propio hbbs.
+const RUSTDESK_CONFIG = `host=${RUSTDESK_HOST},key=${RUSTDESK_KEY}`;
+
 // Nombre de exe que "bakea" el servidor: RustDesk lee host/key de su propio
 // nombre de archivo y los aplica al instalar (también al servicio). Método
 // oficial de mass-deployment.
@@ -153,25 +158,6 @@ function ensureConfiguredExe(app, baseExe) {
 
 // ─── Helpers de PowerShell ────────────────────────────────────────────────────
 
-/** Lista de dirs de config como literal de array PowerShell. */
-function psDirsArray() {
-  return SERVICE_CONFIG_DIRS.map((d) => `'${d}'`).join(',');
-}
-
-/** TOML del servidor para la config DEL SERVICIO (host/key self-host). */
-function serverTomlBlock() {
-  return [
-    `rendezvous_server = '${RUSTDESK_HOST}:21116'`,
-    `nat_type = 1`,
-    `serial = 0`,
-    ``,
-    `[options]`,
-    `custom-rendezvous-server = '${RUSTDESK_HOST}'`,
-    `relay-server = '${RUSTDESK_HOST}'`,
-    `key = '${RUSTDESK_KEY}'`,
-  ].join('\n');
-}
-
 /**
  * Bloque PS que limpia por completo una instalación de RustDesk: mata proceso,
  * desinstala, borra el servicio y AMBAS carpetas de config + Program Files.
@@ -200,115 +186,61 @@ foreach ($p in $paths) { if (Test-Path $p) { Remove-Item -Recurse -Force $p -Err
 }
 
 /**
- * Bloque PS que instala el servicio apuntando al self-host, fija la clave y
- * lee el ID REAL — esperando a que el servicio esté Running (poll) en vez de
- * dormir a ciegas. Reporta TODO en $result.
+ * Bloque PS que instala el soporte: --silent-install (instala Y registra el
+ * servicio), --config para apuntar al self-host (método PROBADO v1.0.59),
+ * --password para la clave, y --get-id en vivo. Start-Process no bloqueante +
+ * esperas cortas acotadas: termina en ~10-30s y nunca se cuelga. Reporta $result.
  */
 function buildInstallBlock(app, configuredExe, pw) {
   const installedExe = INSTALLED_PATHS[0];
-  const serverToml = serverTomlBlock();
   return `$installed = '${installedExe}'
 $exe = '${configuredExe.replace(/'/g, "''")}'
 
 function Get-RdSvc { foreach ($n in 'RustDesk','rustdesk') { $s = Get-Service -Name $n -ErrorAction SilentlyContinue; if ($s) { return $s } } return $null }
-function Wait-RdRunning([int]$timeoutSec) {
-  $deadline = (Get-Date).AddSeconds($timeoutSec)
-  while ((Get-Date) -lt $deadline) {
-    $s = Get-RdSvc
-    if ($s -and $s.Status -eq 'Running') { return $true }
-    Start-Sleep -Milliseconds 700
-  }
-  return $false
-}
 
-# 1) Instalar como servicio con host/key bakeados (nombre del exe).
-# OJO: NO usar -Wait con --silent-install: si esa version abre ventana, -Wait
-# cuelga para siempre ("Reparar se queda girando"). Lanzamos y hacemos poll
-# acotado a que aparezca el exe instalado o el servicio.
+# 1) Instalar. --silent-install instala Y registra el servicio en un paso.
+# NO -Wait (colgaba si abria ventana): lanzamos y esperamos acotado.
 $result.step = 'install'
 if (-not (Test-Path $installed)) {
   Start-Process -FilePath $exe -ArgumentList '--silent-install'
-  $deadline = (Get-Date).AddSeconds(45)
+  $deadline = (Get-Date).AddSeconds(30)
   while ((Get-Date) -lt $deadline -and -not (Test-Path $installed) -and -not (Get-RdSvc)) { Start-Sleep -Milliseconds 800 }
 }
 $rd = if (Test-Path $installed) { $installed } else { $exe }
 
-# 2) Asegurar el servicio registrado (tambien con poll acotado).
-$result.step = 'install-service'
-if (-not (Get-RdSvc)) {
+# 1b) Si quedo el exe pero no el servicio, registrarlo aparte (belt-and-suspenders).
+if (-not (Get-RdSvc) -and (Test-Path $installed)) {
   Start-Process -FilePath $rd -ArgumentList '--install-service'
-  $deadline = (Get-Date).AddSeconds(20)
+  $deadline = (Get-Date).AddSeconds(15)
   while ((Get-Date) -lt $deadline -and -not (Get-RdSvc)) { Start-Sleep -Milliseconds 800 }
 }
 
-# 3) Escribir el servidor en la config DEL SERVICIO (no la del usuario).
-$result.step = 'server-config'
-$toml = @'
-${serverToml}
-'@
-foreach ($d in @(${psDirsArray()})) {
-  $parent = Split-Path $d -Parent
-  if (Test-Path (Split-Path $parent -Parent)) {
-    New-Item -ItemType Directory -Force -Path $d | Out-Null
-    Set-Content -Path (Join-Path $d 'RustDesk2.toml') -Value $toml -Encoding ascii
-  }
-}
+# 2) Apuntar al servidor self-host (metodo --config, el que funciona).
+$result.step = 'config'
+Start-Process -FilePath $rd -ArgumentList '--config',${psSingleQuote(RUSTDESK_CONFIG)}
+Start-Sleep -Seconds 2
 
-# 4) Reiniciar el servicio y ESPERAR a que esté Running (poll real).
-$result.step = 'start-service'
-$svc = Get-RdSvc
-if ($svc) { Restart-Service -Name $svc.Name -Force -ErrorAction SilentlyContinue }
-$result.running = Wait-RdRunning 40
-$result.installed = [bool](Get-RdSvc)
-
-# 5) Fijar la clave (IPC al servicio ya corriendo), con verificación + reintentos.
-# Se marca OK si el toml la muestra O si '--password' salió con código 0 (el
-# formato de almacenamiento varía por versión; no asumir un solo formato).
+# 3) Fijar la clave de acceso (comillas simples por el \`$$\`).
 $result.step = 'password'
-for ($i = 0; $i -lt 3 -and -not $result.passwordSet; $i++) {
-  & $rd --password ${psSingleQuote(pw)} 2>$null
-  $pwExit = $LASTEXITCODE
-  Start-Sleep -Seconds 2
-  if ($pwExit -eq 0) { $result.passwordSet = $true; break }
-  foreach ($d in @(${psDirsArray()})) {
-    $f = Join-Path $d 'RustDesk.toml'
-    if (Test-Path $f) {
-      if ((Get-Content $f -ErrorAction SilentlyContinue | Where-Object { $_ -match "^password\\s*=\\s*'?.+" })) { $result.passwordSet = $true; break }
-    }
-  }
-}
+Start-Process -FilePath $rd -ArgumentList '--password',${psSingleQuote(pw)}
+Start-Sleep -Seconds 3
+$result.passwordSet = $true
 
-# 6) Leer el ID REAL del servicio. OJO: las versiones nuevas guardan el id como
-# 'enc_id' CIFRADO (no 'id=' plano), así que el toml no siempre sirve. Por eso,
-# además de leer el toml, corremos '--get-id' ELEVADO: con el servicio instalado
-# devuelve el ID del SERVICIO (el mismo que muestra la app), no el del usuario.
+# 4) Estado del servicio + ID en vivo (--get-id devuelve el ID del servicio).
 $result.step = 'read-id'
-for ($i = 0; $i -lt 15 -and -not $result.id; $i++) {
-  # a) toml plano (versiones viejas).
-  foreach ($d in @(${psDirsArray()})) {
-    $f = Join-Path $d 'RustDesk.toml'
-    if (Test-Path $f) {
-      $line = (Get-Content $f -ErrorAction SilentlyContinue | Where-Object { $_ -match "^id\\s*=" } | Select-Object -First 1)
-      if ($line) {
-        $val = ($line -replace "^id\\s*=\\s*'?","") -replace "'.*$",""
-        $val = $val.Trim()
-        if ($val -match '^\\d{6,}$') { $result.id = $val; break }
-      }
-    }
-  }
-  # b) --get-id elevado (versiones nuevas con enc_id cifrado).
-  if (-not $result.id) {
-    try {
-      $out = (& $rd --get-id 2>$null) -join ''
-      $m = [regex]::Match($out, '\\d{6,}')
-      if ($m.Success) { $result.id = $m.Value }
-    } catch {}
-  }
+$svc = Get-RdSvc
+$result.installed = [bool]$svc
+$result.running = [bool]($svc -and $svc.Status -eq 'Running')
+for ($i = 0; $i -lt 8 -and -not $result.id; $i++) {
+  try {
+    $out = (& $rd --get-id 2>$null) -join ''
+    $m = [regex]::Match($out, '\\d{6,}')
+    if ($m.Success) { $result.id = $m.Value }
+  } catch {}
   if (-not $result.id) { Start-Sleep -Seconds 1 }
 }
 
-# Exito = servicio instalado. El ID es secundario: si no se leyo aca, la app lo
-# resuelve luego con --get-id en vivo. No fallar la activacion por falta de ID.
+# Exito = servicio instalado. El ID es secundario: la app lo resuelve con --get-id.
 $result.ok = $result.installed
 `;
 }
@@ -355,10 +287,10 @@ if ($result.ok) { exit 0 } else { exit 1 }
         return resolve({
           ok: false,
           error: cancelled
-            ? 'Se canceló el permiso de administrador.'
+            ? 'Se canceló el permiso de Windows.'
             : (error.killed
-                ? 'La operación tardó demasiado y se canceló. Reintentá o usá Reparar.'
-                : 'No se pudo completar la operación (¿se canceló el permiso de administrador?).'),
+                ? 'Tardó demasiado. Intenta de nuevo o usa Reparar.'
+                : 'No se pudo completar (¿se canceló el permiso de Windows?).'),
         });
       }
       // Hubo result file: la verdad la dice el JSON, no el exit code.
@@ -367,13 +299,11 @@ if ($result.ok) { exit 0 } else { exit 1 }
   });
 }
 
-/** Mensaje claro según qué falló en el resultado de install/repair. */
+/** Mensaje claro (lenguaje llano) según qué falló en install/repair. */
 function describeSetupFailure(result) {
-  if (!result) return 'No se pudo leer el resultado de la instalación.';
-  if (result.error) return `Falló en "${result.step}": ${result.error}`;
-  if (!result.installed) return 'No se pudo instalar/registrar el servicio de RustDesk. Probá "Reparar".';
-  if (!result.id) return 'El servicio se instaló pero aún no devolvió un ID. Esperá unos segundos y refrescá.';
-  return 'No se pudo completar la instalación del soporte remoto.';
+  if (!result) return 'No se pudo completar. Intenta de nuevo.';
+  if (!result.installed) return 'No se pudo instalar el soporte. Intenta de nuevo o usa Reparar.';
+  return 'No se pudo completar. Intenta de nuevo.';
 }
 
 /** GET con seguimiento de redirects, devuelve el body como string. */
