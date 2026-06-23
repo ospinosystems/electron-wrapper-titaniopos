@@ -222,16 +222,23 @@ function Wait-RdRunning([int]$timeoutSec) {
 }
 
 # 1) Instalar como servicio con host/key bakeados (nombre del exe).
+# OJO: NO usar -Wait con --silent-install: si esa version abre ventana, -Wait
+# cuelga para siempre ("Reparar se queda girando"). Lanzamos y hacemos poll
+# acotado a que aparezca el exe instalado o el servicio.
 $result.step = 'install'
 if (-not (Test-Path $installed)) {
-  Start-Process -FilePath $exe -ArgumentList '--silent-install' -Wait
+  Start-Process -FilePath $exe -ArgumentList '--silent-install'
+  $deadline = (Get-Date).AddSeconds(45)
+  while ((Get-Date) -lt $deadline -and -not (Test-Path $installed) -and -not (Get-RdSvc)) { Start-Sleep -Milliseconds 800 }
 }
 $rd = if (Test-Path $installed) { $installed } else { $exe }
 
-# 2) Asegurar el servicio registrado.
+# 2) Asegurar el servicio registrado (tambien con poll acotado).
 $result.step = 'install-service'
 if (-not (Get-RdSvc)) {
-  Start-Process -FilePath $rd -ArgumentList '--install-service' -Wait
+  Start-Process -FilePath $rd -ArgumentList '--install-service'
+  $deadline = (Get-Date).AddSeconds(20)
+  while ((Get-Date) -lt $deadline -and -not (Get-RdSvc)) { Start-Sleep -Milliseconds 800 }
 }
 
 # 3) Escribir el servidor en la config DEL SERVICIO (no la del usuario).
@@ -300,7 +307,9 @@ for ($i = 0; $i -lt 15 -and -not $result.id; $i++) {
   if (-not $result.id) { Start-Sleep -Seconds 1 }
 }
 
-$result.ok = ($result.installed -and ($result.id -ne ''))
+# Exito = servicio instalado. El ID es secundario: si no se leyo aca, la app lo
+# resuelve luego con --get-id en vivo. No fallar la activacion por falta de ID.
+$result.ok = $result.installed
 `;
 }
 
@@ -461,11 +470,18 @@ function runRustdesk(exe, args, timeoutMs = 10000) {
 }
 
 /**
- * ID que se muestra en la UI. SIEMPRE el del SERVICIO (cacheado por el último
- * install/repair). No cae a `--get-id` de usuario porque devolvería un ID
- * distinto al que muestra la app RustDesk (contexto LocalService vs usuario).
+ * ID que se muestra en la UI. Fuente de verdad: `--get-id` EN VIVO (devuelve el
+ * mismo ID que muestra la app porque servicio y usuario comparten el `enc_id`).
+ * El caché solo es respaldo si el exe no respondiera. Antes leíamos solo el
+ * caché y se quedaba viejo → por eso el número no coincidía.
  */
-function resolveId(app) {
+async function resolveId(app) {
+  const exe = getRustdeskPath(app);
+  if (exe) {
+    const res = await runRustdesk(exe, ['--get-id'], 8000);
+    const m = (res.stdout || '').match(/\d{6,}/);
+    if (m) return m[0];
+  }
   return getServiceId(app);
 }
 
@@ -505,7 +521,7 @@ function registerRemoteSupportHandlers(app) {
     const exe = getRustdeskPath(app);
     const cfg = readConfig(app);
     const installed = !!getInstalledPath();
-    const id = resolveId(app);
+    const id = await resolveId(app);
     return {
       success: true,
       available: !!exe,
@@ -518,7 +534,7 @@ function registerRemoteSupportHandlers(app) {
   });
 
   ipcMain.handle('remote-support:get-id', async () => {
-    const id = resolveId(app);
+    const id = await resolveId(app);
     return { success: !!id, id };
   });
 
