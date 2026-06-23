@@ -15,9 +15,16 @@
  *    `rustdesk-host=<host>,key=<key>.exe`: RustDesk lo aplica durante el
  *    --silent-install, así queda en la config del SERVICIO. Además, por las
  *    dudas, escribimos RustDesk2.toml directo en la carpeta del servicio.
- *  - El ID se lee de la config DEL SERVICIO (el mismo que muestra la app).
- *  - La clave se fija con `--password` (IPC al servicio ya corriendo).
+ *  - El ID se lee SIEMPRE de la config DEL SERVICIO (el mismo que muestra la
+ *    app). NUNCA se cae a `--get-id` de usuario (devolvería otro ID y por eso
+ *    "el número de la UI no coincidía con el de la app").
+ *  - La clave se fija con `--password` (IPC) DESPUÉS de esperar a que el
+ *    servicio esté `Running` (poll, no `Sleep` a ciegas), con reintentos.
+ *  - Cada operación elevada escribe un JSON de resultado real (instalado/
+ *    corriendo/clave/ID/error). La app NUNCA reporta "activado" si falló: se
+ *    acabó el "éxito ciego" que mostraba OK aunque no funcionara nada.
  *  - El uninstall borra servicio + Program Files + AMBAS carpetas de config.
+ *  - "Reparar" = uninstall limpio + install en UN solo paso elevado (un UAC).
  *
  * Config persistida en userData/remote-support.json: { enabled, password }.
  */
@@ -79,6 +86,20 @@ function serviceIdPath(app) {
   return path.join((app || electronApp).getPath('userData'), 'rustdesk-service-id.txt');
 }
 
+/** JSON de resultado real de la última operación elevada (install/repair). */
+function setupResultPath(app) {
+  return path.join((app || electronApp).getPath('userData'), 'rustdesk-setup-result.json');
+}
+
+function readSetupResult(app) {
+  try { return JSON.parse(fs.readFileSync(setupResultPath(app), 'utf8')); }
+  catch (_) { return null; }
+}
+
+function clearSetupResult(app) {
+  try { fs.unlinkSync(setupResultPath(app)); } catch (_) { /* ignore */ }
+}
+
 /** ID del servicio que dejó el último enable (mismo que muestra la app). */
 function getServiceId(app) {
   try {
@@ -130,85 +151,220 @@ function ensureConfiguredExe(app, baseExe) {
   }
 }
 
-/**
- * Instala RustDesk como SERVICIO apuntando al self-host y fija la contraseña,
- * en UN solo paso elevado (un único UAC). Tras esto el servicio corre solo
- * (desatendido aunque la app POS esté cerrada). Deja el ID del servicio en
- * `idOutFile` para que la app muestre EXACTAMENTE el mismo ID que la app RustDesk.
- */
-function elevatedInstallAndSetPassword(app, configuredExe, pw) {
-  return new Promise((resolve) => {
-    const tmpDir = (app || electronApp).getPath('temp');
-    const ts = configuredExe.length + pw.length; // sufijo estable, sin Date.now
-    const ps1 = path.join(tmpDir, `rd-setup-${ts}.ps1`);
-    const installedExe = INSTALLED_PATHS[0];
-    const idOut = serviceIdPath(app);
-    // TOML del servidor para la config DEL SERVICIO (belt-and-suspenders por si
-    // el bakeo por nombre de archivo no aplicara en alguna versión).
-    const serverToml = [
-      `rendezvous_server = '${RUSTDESK_HOST}:21116'`,
-      `nat_type = 1`,
-      `serial = 0`,
-      ``,
-      `[options]`,
-      `custom-rendezvous-server = '${RUSTDESK_HOST}'`,
-      `relay-server = '${RUSTDESK_HOST}'`,
-      `key = '${RUSTDESK_KEY}'`,
-    ].join('\n');
+// ─── Helpers de PowerShell ────────────────────────────────────────────────────
 
-    const script = `$ErrorActionPreference = 'SilentlyContinue'
-$installed = '${installedExe}'
+/** Lista de dirs de config como literal de array PowerShell. */
+function psDirsArray() {
+  return SERVICE_CONFIG_DIRS.map((d) => `'${d}'`).join(',');
+}
+
+/** TOML del servidor para la config DEL SERVICIO (host/key self-host). */
+function serverTomlBlock() {
+  return [
+    `rendezvous_server = '${RUSTDESK_HOST}:21116'`,
+    `nat_type = 1`,
+    `serial = 0`,
+    ``,
+    `[options]`,
+    `custom-rendezvous-server = '${RUSTDESK_HOST}'`,
+    `relay-server = '${RUSTDESK_HOST}'`,
+    `key = '${RUSTDESK_KEY}'`,
+  ].join('\n');
+}
+
+/**
+ * Bloque PS que limpia por completo una instalación de RustDesk: mata proceso,
+ * desinstala, borra el servicio y AMBAS carpetas de config + Program Files.
+ */
+function buildUninstallBlock() {
+  return `taskkill /IM rustdesk.exe /F 2>$null | Out-Null
+$rdUn = '${(getInstalledPath() || INSTALLED_PATHS[0]).replace(/'/g, "''")}'
+if (Test-Path $rdUn) { & $rdUn --uninstall 2>$null }
+foreach ($svc in 'RustDesk','rustdesk') { sc.exe stop $svc 2>$null | Out-Null; sc.exe delete $svc 2>$null | Out-Null }
+$uns = @(
+  'C:\\Program Files\\RustDesk\\uninstall.exe',
+  'C:\\Program Files\\RustDesk\\Uninstall RustDesk.exe',
+  'C:\\Program Files (x86)\\RustDesk\\uninstall.exe'
+)
+foreach ($u in $uns) { if (Test-Path $u) { Start-Process -FilePath $u -ArgumentList '/S' -Wait } }
+Start-Sleep -Seconds 2
+taskkill /IM rustdesk.exe /F 2>$null | Out-Null
+$paths = @(
+  ${SERVICE_CONFIG_DIRS.map((d) => `'${d.replace(/\\config$/, '')}'`).join(',\n  ')},
+  (Join-Path $env:APPDATA 'RustDesk'),
+  'C:\\Program Files\\RustDesk',
+  'C:\\Program Files (x86)\\RustDesk'
+)
+foreach ($p in $paths) { if (Test-Path $p) { Remove-Item -Recurse -Force $p -ErrorAction SilentlyContinue } }
+`;
+}
+
+/**
+ * Bloque PS que instala el servicio apuntando al self-host, fija la clave y
+ * lee el ID REAL — esperando a que el servicio esté Running (poll) en vez de
+ * dormir a ciegas. Reporta TODO en $result.
+ */
+function buildInstallBlock(app, configuredExe, pw) {
+  const installedExe = INSTALLED_PATHS[0];
+  const serverToml = serverTomlBlock();
+  return `$installed = '${installedExe}'
 $exe = '${configuredExe.replace(/'/g, "''")}'
+
+function Get-RdSvc { foreach ($n in 'RustDesk','rustdesk') { $s = Get-Service -Name $n -ErrorAction SilentlyContinue; if ($s) { return $s } } return $null }
+function Wait-RdRunning([int]$timeoutSec) {
+  $deadline = (Get-Date).AddSeconds($timeoutSec)
+  while ((Get-Date) -lt $deadline) {
+    $s = Get-RdSvc
+    if ($s -and $s.Status -eq 'Running') { return $true }
+    Start-Sleep -Milliseconds 700
+  }
+  return $false
+}
+
 # 1) Instalar como servicio con host/key bakeados (nombre del exe).
+$result.step = 'install'
 if (-not (Test-Path $installed)) {
-  Start-Process -FilePath $exe -ArgumentList '--silent-install'
-  Start-Sleep -Seconds 12
+  Start-Process -FilePath $exe -ArgumentList '--silent-install' -Wait
 }
 $rd = if (Test-Path $installed) { $installed } else { $exe }
-# 2) Asegurar el servicio registrado y corriendo.
-Start-Process -FilePath $rd -ArgumentList '--install-service'
-Start-Sleep -Seconds 5
+
+# 2) Asegurar el servicio registrado.
+$result.step = 'install-service'
+if (-not (Get-RdSvc)) {
+  Start-Process -FilePath $rd -ArgumentList '--install-service' -Wait
+}
+
 # 3) Escribir el servidor en la config DEL SERVICIO (no la del usuario).
+$result.step = 'server-config'
 $toml = @'
 ${serverToml}
 '@
-foreach ($d in @(${SERVICE_CONFIG_DIRS.map((d) => `'${d}'`).join(',')})) {
+foreach ($d in @(${psDirsArray()})) {
   $parent = Split-Path $d -Parent
   if (Test-Path (Split-Path $parent -Parent)) {
     New-Item -ItemType Directory -Force -Path $d | Out-Null
     Set-Content -Path (Join-Path $d 'RustDesk2.toml') -Value $toml -Encoding ascii
   }
 }
-# 4) Reiniciar el servicio para tomar el servidor, luego fijar la clave (IPC).
-foreach ($svc in 'RustDesk','rustdesk') { Restart-Service -Name $svc -Force }
-Start-Sleep -Seconds 5
-& $rd --password ${psSingleQuote(pw)}
-Start-Sleep -Seconds 2
-# 5) Leer el ID REAL del servicio y dejarlo para la app.
-$id = ''
-foreach ($d in @(${SERVICE_CONFIG_DIRS.map((d) => `'${d}'`).join(',')})) {
-  $f = Join-Path $d 'RustDesk.toml'
-  if (Test-Path $f) {
-    $line = (Get-Content $f | Where-Object { $_ -match "^id\\s*=" } | Select-Object -First 1)
-    if ($line) { $id = ($line -replace "^id\\s*=\\s*'?","") -replace "'.*$","" ; $id = $id.Trim(); break }
+
+# 4) Reiniciar el servicio y ESPERAR a que esté Running (poll real).
+$result.step = 'start-service'
+$svc = Get-RdSvc
+if ($svc) { Restart-Service -Name $svc.Name -Force -ErrorAction SilentlyContinue }
+$result.running = Wait-RdRunning 40
+$result.installed = [bool](Get-RdSvc)
+
+# 5) Fijar la clave (IPC al servicio ya corriendo), con verificación + reintentos.
+# Se marca OK si el toml la muestra O si '--password' salió con código 0 (el
+# formato de almacenamiento varía por versión; no asumir un solo formato).
+$result.step = 'password'
+for ($i = 0; $i -lt 3 -and -not $result.passwordSet; $i++) {
+  & $rd --password ${psSingleQuote(pw)} 2>$null
+  $pwExit = $LASTEXITCODE
+  Start-Sleep -Seconds 2
+  if ($pwExit -eq 0) { $result.passwordSet = $true; break }
+  foreach ($d in @(${psDirsArray()})) {
+    $f = Join-Path $d 'RustDesk.toml'
+    if (Test-Path $f) {
+      if ((Get-Content $f -ErrorAction SilentlyContinue | Where-Object { $_ -match "^password\\s*=\\s*'?.+" })) { $result.passwordSet = $true; break }
+    }
   }
 }
-Set-Content -Path '${idOut.replace(/'/g, "''")}' -Value $id -Encoding ascii
+
+# 6) Leer el ID REAL del servicio. OJO: las versiones nuevas guardan el id como
+# 'enc_id' CIFRADO (no 'id=' plano), así que el toml no siempre sirve. Por eso,
+# además de leer el toml, corremos '--get-id' ELEVADO: con el servicio instalado
+# devuelve el ID del SERVICIO (el mismo que muestra la app), no el del usuario.
+$result.step = 'read-id'
+for ($i = 0; $i -lt 15 -and -not $result.id; $i++) {
+  # a) toml plano (versiones viejas).
+  foreach ($d in @(${psDirsArray()})) {
+    $f = Join-Path $d 'RustDesk.toml'
+    if (Test-Path $f) {
+      $line = (Get-Content $f -ErrorAction SilentlyContinue | Where-Object { $_ -match "^id\\s*=" } | Select-Object -First 1)
+      if ($line) {
+        $val = ($line -replace "^id\\s*=\\s*'?","") -replace "'.*$",""
+        $val = $val.Trim()
+        if ($val -match '^\\d{6,}$') { $result.id = $val; break }
+      }
+    }
+  }
+  # b) --get-id elevado (versiones nuevas con enc_id cifrado).
+  if (-not $result.id) {
+    try {
+      $out = (& $rd --get-id 2>$null) -join ''
+      $m = [regex]::Match($out, '\\d{6,}')
+      if ($m.Success) { $result.id = $m.Value }
+    } catch {}
+  }
+  if (-not $result.id) { Start-Sleep -Seconds 1 }
+}
+
+$result.ok = ($result.installed -and ($result.id -ne ''))
 `;
+}
+
+/**
+ * Corre un bloque PS elevado (un solo UAC) envuelto en un harness que captura
+ * el resultado en JSON. `mode` = 'install' | 'repair'. Devuelve {ok, result}.
+ */
+function runElevatedSetup(app, innerBlock, mode) {
+  return new Promise((resolve) => {
+    const tmpDir = (app || electronApp).getPath('temp');
+    const idOut = serviceIdPath(app);
+    const resultOut = setupResultPath(app);
+    const ps1 = path.join(tmpDir, `rd-${mode}-${innerBlock.length}.ps1`);
+
+    const script = `$ErrorActionPreference = 'Continue'
+$result = [ordered]@{ ok = $false; installed = $false; running = $false; passwordSet = $false; id = ''; step = 'start'; error = '' }
+try {
+${innerBlock}
+  $result.step = 'done'
+}
+catch {
+  $result.error = $_.Exception.Message
+}
+try { (ConvertTo-Json $result -Compress) | Set-Content -Path '${resultOut.replace(/'/g, "''")}' -Encoding ascii } catch {}
+try { Set-Content -Path '${idOut.replace(/'/g, "''")}' -Value $result.id -Encoding ascii } catch {}
+if ($result.ok) { exit 0 } else { exit 1 }
+`;
+
     try {
       fs.writeFileSync(ps1, script, 'utf8');
     } catch (e) {
       return resolve({ ok: false, error: 'No se pudo preparar el instalador: ' + e.message });
     }
+
+    // UAC: Start-Process -Verb RunAs. Si el usuario cancela, lanza error en el
+    // powershell externo y lo detectamos abajo.
     const outer = `Start-Process -Verb RunAs -Wait -WindowStyle Hidden powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','${ps1}'`;
-    execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', outer], { timeout: 120000, windowsHide: true }, (error) => {
+    execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', outer], { timeout: 180000, windowsHide: true }, (error) => {
       try { fs.unlinkSync(ps1); } catch (_) { /* ignore */ }
-      if (error) {
-        return resolve({ ok: false, error: 'No se pudo completar la instalación (¿se canceló el permiso de administrador?).' });
+      const result = readSetupResult(app);
+      if (error && !result) {
+        const cancelled = /cancel|denied|1223|operation was canceled/i.test(error.message || '');
+        return resolve({
+          ok: false,
+          error: cancelled
+            ? 'Se canceló el permiso de administrador.'
+            : (error.killed
+                ? 'La operación tardó demasiado y se canceló. Reintentá o usá Reparar.'
+                : 'No se pudo completar la operación (¿se canceló el permiso de administrador?).'),
+        });
       }
-      resolve({ ok: true });
+      // Hubo result file: la verdad la dice el JSON, no el exit code.
+      resolve({ ok: !!(result && result.ok), result });
     });
   });
+}
+
+/** Mensaje claro según qué falló en el resultado de install/repair. */
+function describeSetupFailure(result) {
+  if (!result) return 'No se pudo leer el resultado de la instalación.';
+  if (result.error) return `Falló en "${result.step}": ${result.error}`;
+  if (!result.installed) return 'No se pudo instalar/registrar el servicio de RustDesk. Probá "Reparar".';
+  if (!result.id) return 'El servicio se instaló pero aún no devolvió un ID. Esperá unos segundos y refrescá.';
+  return 'No se pudo completar la instalación del soporte remoto.';
 }
 
 /** GET con seguimiento de redirects, devuelve el body como string. */
@@ -304,14 +460,13 @@ function runRustdesk(exe, args, timeoutMs = 10000) {
   });
 }
 
-/** ID del servicio si lo tenemos cacheado; si no, --get-id como fallback. */
-async function resolveId(app, exe) {
-  const svcId = getServiceId(app);
-  if (svcId) return svcId;
-  if (!exe) return '';
-  const res = await runRustdesk(exe, ['--get-id'], 8000);
-  const m = (res.stdout || '').match(/\d{6,}/);
-  return m ? m[0] : '';
+/**
+ * ID que se muestra en la UI. SIEMPRE el del SERVICIO (cacheado por el último
+ * install/repair). No cae a `--get-id` de usuario porque devolvería un ID
+ * distinto al que muestra la app RustDesk (contexto LocalService vs usuario).
+ */
+function resolveId(app) {
+  return getServiceId(app);
 }
 
 /**
@@ -322,28 +477,10 @@ async function resolveId(app, exe) {
 function elevatedUninstall(app) {
   return new Promise((resolve) => {
     const tmpDir = (app || electronApp).getPath('temp');
-    const ps1 = path.join(tmpDir, `rd-uninstall-${SERVICE_CONFIG_DIRS.length}.ps1`);
+    const block = buildUninstallBlock();
+    const ps1 = path.join(tmpDir, `rd-uninstall-${block.length}.ps1`);
     const script = `$ErrorActionPreference='SilentlyContinue'
-taskkill /IM rustdesk.exe /F
-& '${(getInstalledPath() || INSTALLED_PATHS[0]).replace(/'/g, "''")}' --uninstall
-foreach ($svc in 'RustDesk','rustdesk') { sc.exe stop $svc; sc.exe delete $svc }
-$uns = @(
-  'C:\\Program Files\\RustDesk\\uninstall.exe',
-  'C:\\Program Files\\RustDesk\\Uninstall RustDesk.exe',
-  'C:\\Program Files (x86)\\RustDesk\\uninstall.exe'
-)
-foreach ($u in $uns) { if (Test-Path $u) { Start-Process -FilePath $u -ArgumentList '/S' -Wait } }
-Start-Sleep -Seconds 2
-taskkill /IM rustdesk.exe /F
-# Limpiar config de AMBOS contextos (servicio + usuario) y binarios.
-$paths = @(
-  ${SERVICE_CONFIG_DIRS.map((d) => `'${d.replace(/\\config$/, '')}'`).join(',\n  ')},
-  (Join-Path $env:APPDATA 'RustDesk'),
-  'C:\\Program Files\\RustDesk',
-  'C:\\Program Files (x86)\\RustDesk'
-)
-foreach ($p in $paths) { if (Test-Path $p) { Remove-Item -Recurse -Force $p } }
-`;
+${block}`;
     try {
       fs.writeFileSync(ps1, script, 'utf8');
     } catch (e) {
@@ -352,8 +489,9 @@ foreach ($p in $paths) { if (Test-Path $p) { Remove-Item -Recurse -Force $p } }
     const outer = `Start-Process -Verb RunAs -Wait -WindowStyle Hidden powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','${ps1}'`;
     execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', outer], { timeout: 120000, windowsHide: true }, (error) => {
       try { fs.unlinkSync(ps1); } catch (_) { /* ignore */ }
-      // Limpiar el ID cacheado y el exe descargado.
+      // Limpiar el ID cacheado, el resultado y el exe descargado.
       try { fs.unlinkSync(serviceIdPath(app)); } catch (_) { /* ignore */ }
+      clearSetupResult(app);
       if (error) {
         return resolve({ ok: false, error: 'No se pudo desinstalar (¿se canceló el permiso de administrador?).' });
       }
@@ -367,8 +505,7 @@ function registerRemoteSupportHandlers(app) {
     const exe = getRustdeskPath(app);
     const cfg = readConfig(app);
     const installed = !!getInstalledPath();
-    let id = '';
-    try { id = await resolveId(app, exe); } catch (_) { /* ignore */ }
+    const id = resolveId(app);
     return {
       success: true,
       available: !!exe,
@@ -381,8 +518,7 @@ function registerRemoteSupportHandlers(app) {
   });
 
   ipcMain.handle('remote-support:get-id', async () => {
-    const exe = getRustdeskPath(app);
-    const id = await resolveId(app, exe);
+    const id = resolveId(app);
     return { success: !!id, id };
   });
 
@@ -399,25 +535,58 @@ function registerRemoteSupportHandlers(app) {
   });
 
   // Activa el soporte desatendido: instala el servicio apuntando al self-host,
-  // fija la clave y devuelve el ID REAL del servicio.
+  // fija la clave y devuelve el ID REAL del servicio. Reporta éxito/fallo real.
   ipcMain.handle('remote-support:enable', async (_event, password) => {
     const base = getRustdeskPath(app);
     if (!base) return { success: false, error: 'RustDesk no está disponible. Descargá el componente primero.' };
     const pw = ((password || '').toString().trim()) || DEFAULT_PASSWORD;
     const configuredExe = ensureConfiguredExe(app, base);
 
-    const setup = await elevatedInstallAndSetPassword(app, configuredExe, pw);
-    if (!setup.ok) return { success: false, error: setup.error };
-
-    writeConfig(app, { enabled: true, password: pw });
-
-    // El script ya dejó el ID en archivo; reintentar lectura por si tardó.
-    let id = getServiceId(app);
-    for (let i = 0; i < 5 && !id; i += 1) {
-      await new Promise((r) => setTimeout(r, 1500));
-      id = getServiceId(app);
+    clearSetupResult(app);
+    const run = await runElevatedSetup(app, buildInstallBlock(app, configuredExe, pw), 'install');
+    if (!run.ok) {
+      writeConfig(app, { enabled: false, password: pw });
+      return { success: false, error: run.error || describeSetupFailure(run.result), result: run.result || null };
     }
-    return { success: true, id, installed: !!getInstalledPath() };
+
+    const result = run.result;
+    writeConfig(app, { enabled: true, password: pw });
+    return {
+      success: true,
+      id: result.id || '',
+      installed: !!result.installed,
+      running: !!result.running,
+      passwordSet: !!result.passwordSet,
+    };
+  });
+
+  // Reparar = desinstalar limpio + reinstalar en UN solo UAC. Para cuando el
+  // servicio quedó a medio instalar (sin feedback, ID que no coincide, etc.).
+  ipcMain.handle('remote-support:repair', async (_event, password) => {
+    const base = getRustdeskPath(app);
+    if (!base) return { success: false, error: 'RustDesk no está disponible. Descargá el componente primero.' };
+    const pw = ((password || '').toString().trim()) || DEFAULT_PASSWORD;
+    const configuredExe = ensureConfiguredExe(app, base);
+
+    clearSetupResult(app);
+    try { fs.unlinkSync(serviceIdPath(app)); } catch (_) { /* ignore */ }
+
+    const block = `${buildUninstallBlock()}\nStart-Sleep -Seconds 2\n${buildInstallBlock(app, configuredExe, pw)}`;
+    const run = await runElevatedSetup(app, block, 'repair');
+    if (!run.ok) {
+      writeConfig(app, { enabled: false, password: pw });
+      return { success: false, error: run.error || describeSetupFailure(run.result), result: run.result || null };
+    }
+
+    const result = run.result;
+    writeConfig(app, { enabled: true, password: pw });
+    return {
+      success: true,
+      id: result.id || '',
+      installed: !!result.installed,
+      running: !!result.running,
+      passwordSet: !!result.passwordSet,
+    };
   });
 
   // Desinstala el servicio y limpia todo (un UAC).
