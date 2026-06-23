@@ -1164,6 +1164,18 @@ function setupAutoUpdater() {
   // Permite al banner reconstruirse después de un F5/reload del renderer.
   // El main mantiene la sesión completa de descarga aunque el renderer reset.
   ipcMain.handle('updater:get-state', () => updaterState);
+
+  // Permite al usuario buscar actualizaciones desde Ajustes. Reusa el mismo
+  // flujo que el menú (diálogos nativos + banner de progreso).
+  ipcMain.handle('updater:check', () => {
+    try {
+      checkForUpdatesManual();
+      return { success: true };
+    } catch (err) {
+      console.error('[UPDATER] check manual falló:', err);
+      return { success: false, error: String(err?.message || err) };
+    }
+  });
 }
 
 // Impresión silenciosa

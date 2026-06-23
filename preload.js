@@ -372,6 +372,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Estado actual del updater (para reconstruir el banner tras un reload). */
   updaterGetState: () => ipcRenderer.invoke('updater:get-state'),
 
+  /** Busca actualizaciones de la app (diálogos nativos + banner). */
+  updaterCheck: () => ipcRenderer.invoke('updater:check'),
+
   onUpdaterEvent: (callback) => {
     const handler = (_event, payload) => {
       try { callback(payload); } catch (err) { console.error('[updater event] handler threw:', err); }
