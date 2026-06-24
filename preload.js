@@ -5,6 +5,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Versiones de la app y runtimes
   getVersions: () => ipcRenderer.invoke('app-versions'),
 
+  /** Guarda el tema (dark|light) para que el splash inicial lo use. */
+  saveUiTheme: (theme) => ipcRenderer.invoke('ui:save-theme', theme),
+
+  /** Fuente de la UI activa: 'web' (online) | 'local' (bundle offline). */
+  getUiSource: () => ipcRenderer.invoke('ui:source'),
+
   /** (Re)crea el acceso directo de la app en el Escritorio. */
   createDesktopShortcut: () => ipcRenderer.invoke('app:create-desktop-shortcut'),
 

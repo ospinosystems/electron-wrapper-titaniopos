@@ -6,10 +6,11 @@
   "scripts": {
     "start": "electron .",
     "prebuild": "node prebuild.js",
-    "build": "npm run prebuild && electron-builder --win --publish never",
-    "build:portable": "npm run prebuild && electron-builder --win portable --publish never",
-    "release": "npm run prebuild && electron-builder --win --publish always",
-    "publish": "npm run prebuild && electron-builder --win --publish always"
+    "bundle:frontend": "node bundle-frontend.js",
+    "build": "npm run prebuild && npm run bundle:frontend && electron-builder --win --publish never",
+    "build:portable": "npm run prebuild && npm run bundle:frontend && electron-builder --win portable --publish never",
+    "release": "npm run prebuild && npm run bundle:frontend && electron-builder --win --publish always",
+    "publish": "npm run prebuild && npm run bundle:frontend && electron-builder --win --publish always"
   },
   "author": "TitanioPOS",
   "license": "MIT",
@@ -33,10 +34,21 @@
     "appId": "com.titaniopos.desktop",
     "productName": "TitanioPOS",
     "npmRebuild": false,
+    "files": [
+      "**/*",
+      "!frontend-server/**",
+      "!dist/**",
+      "!dist-*/**"
+    ],
     "asarUnpack": [
       "**/*.ico"
     ],
     "extraResources": [
+      {
+        "from": "frontend-server",
+        "to": "frontend-server",
+        "filter": ["**/*"]
+      },
       {
         "from": "fiscal-server",
         "to": "fiscal-server",

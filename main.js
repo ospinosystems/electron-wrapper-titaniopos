@@ -1,6 +1,12 @@
 const { app, BrowserWindow, ipcMain, Menu, dialog, nativeImage, Notification, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const {
+  startFrontendServer,
+  stopFrontendServer,
+  hasLocalBundle,
+  resolveServerDir,
+} = require('./frontend-server-manager');
 
 function readBuildAppId() {
   try {
@@ -262,7 +268,13 @@ if (!gotTheLock) {
   app.exit(0);
 } else {
   app.on('second-instance', () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
+    // Si la ventana se perdió pero el proceso sigue vivo (quedó sin ventana),
+    // al relanzar el .exe RECREAMOS la ventana en vez de no hacer nada. Esto
+    // evita el caso "la app no abre, no hace nada".
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      try { createWindow(); } catch (e) { console.error('[APP] No se pudo recrear ventana:', e && e.message); }
+      return;
+    }
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
     mainWindow.focus();
@@ -492,6 +504,217 @@ function openDevToolsWithPasswordDialog(browserWindow) {
   promptWin.once('ready-to-show', () => promptWin.show());
 }
 
+// ¿Servir la UI desde el bundle local (abre sin internet) o desde APP_URL remota?
+// - TITANIOPOS_FRONTEND_MODE=local|remote fuerza el modo.
+// - Por defecto: local si hay bundle empaquetado; remoto si no (dev con next dev).
+function shouldUseLocalFrontend() {
+  const mode = String(process.env.TITANIOPOS_FRONTEND_MODE || '').trim().toLowerCase();
+  if (mode === 'local') return true;
+  if (mode === 'remote') return false;
+  return hasLocalBundle();
+}
+
+// Sentinela para "Reintentar" desde las pantallas internas: navegar a esta URL
+// hace que Electron vuelva a ejecutar loadAppUI (no recarga la página de estado).
+const RETRY_SENTINEL = 'tpos://retry';
+
+// Pantalla de estado unificada (dark, sin emoji, acorde a la UI). Sirve para:
+// boot (spinner), error de arranque local, y sin conexión (modo remoto).
+function buildStatusPage({ title, message, spinner = false, retry = false, autoOnline = false }) {
+  // Colores tomados del tema dark de la app (src/app/globals.css): fondo casi
+  // negro, primario NARANJA, texto casi blanco. Electron soporta oklch().
+  const html = `<!doctype html><html lang="es"><head><meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1"><style>
+    :root{
+      --bg:oklch(0.15 0 0); --fg:oklch(0.98 0 0); --muted:oklch(0.65 0.01 55);
+      --primary:oklch(0.66 0.22 55); --primary-h:oklch(0.6 0.2 54); --border:oklch(0.3 0 0);
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);
+      font-family:system-ui,'Segoe UI',sans-serif;display:flex;align-items:center;
+      justify-content:center;overflow:hidden}
+    /* glow naranja suave como el fondo del login */
+    body::before{content:'';position:fixed;top:-10%;right:-5%;width:520px;height:520px;
+      background:var(--primary);opacity:.12;border-radius:50%;filter:blur(150px);pointer-events:none}
+    body::after{content:'';position:fixed;bottom:-15%;left:-5%;width:440px;height:440px;
+      background:var(--primary);opacity:.07;border-radius:50%;filter:blur(130px);pointer-events:none}
+    .box{position:relative;max-width:420px;text-align:center;padding:40px 32px}
+    .brand{font-size:22px;font-weight:600;letter-spacing:-.01em;margin-bottom:30px}
+    .brand b{color:var(--primary);font-weight:700}
+    .s{width:30px;height:30px;margin:0 auto 22px;border:3px solid var(--border);
+      border-top-color:var(--primary);border-radius:50%;animation:r .8s linear infinite}
+    @keyframes r{to{transform:rotate(360deg)}}
+    h1{font-size:18px;font-weight:600;margin:0 0 10px}
+    p{color:var(--muted);font-size:14px;line-height:1.55;margin:0 0 24px}
+    /* Igual que el Button de la app: rounded (4px), h-9 (36px), px-4, text-sm font-medium */
+    button{background:var(--primary);color:#fff;border:0;border-radius:4px;height:36px;
+      padding:0 16px;font-size:14px;font-weight:500;cursor:pointer;transition:background .15s}
+    button:hover{background:var(--primary-h)} button:disabled{opacity:.5;cursor:default}
+    .st{margin-top:18px;font-size:12px;color:var(--muted);opacity:.8;min-height:16px}
+  </style></head><body>
+    <div class="box">
+      <div class="brand">Titanio<b>POS</b></div>
+      ${spinner ? '<div class="s"></div>' : ''}
+      <h1>${title}</h1>
+      ${message ? `<p>${message}</p>` : ''}
+      ${retry ? '<button id="retry" onclick="go()">Reintentar</button>' : ''}
+      <div class="st" id="st"></div>
+    </div>
+    <script>
+      function go(){ var b=document.getElementById('retry'); if(b)b.disabled=true;
+        var s=document.getElementById('st'); if(s)s.textContent='Reintentando…';
+        location.href=${JSON.stringify(RETRY_SENTINEL)}; }
+      ${autoOnline ? `
+      window.addEventListener('online', go);
+      setInterval(function(){ if(navigator.onLine) go(); }, 5000);` : ''}
+    </script>
+  </body></html>`;
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+}
+
+// Splash inicial = MISMO loader branded que la app (BrandedLoader: logo +
+// "Titanio POS" + spinner naranja, sobre fondo oscuro). Se replica en HTML y el
+// logo se embebe en base64 (leído del bundle), así se ve idéntico aunque el
+// server local todavía no haya levantado.
+// Tema persistido por la app (para que el splash combine con el tema del usuario).
+function uiThemePath() {
+  try { return path.join(app.getPath('userData'), 'ui-theme'); } catch { return null; }
+}
+function getSavedUiTheme() {
+  try {
+    const p = uiThemePath();
+    if (p && fs.existsSync(p)) { const t = fs.readFileSync(p, 'utf8').trim(); if (t === 'light' || t === 'dark') return t; }
+  } catch (_) {}
+  // Sin tema guardado (primera apertura): usar el del sistema operativo.
+  try { return require('electron').nativeTheme.shouldUseDarkColors ? 'dark' : 'light'; } catch (_) {}
+  return 'dark';
+}
+function saveUiTheme(t) {
+  if (t !== 'light' && t !== 'dark') return;
+  try { const p = uiThemePath(); if (p) fs.writeFileSync(p, t); } catch (_) {}
+}
+
+// La app avisa su tema (dark|light) vía preload → lo guardamos para el splash.
+ipcMain.handle('ui:save-theme', (_e, theme) => { saveUiTheme(theme); return true; });
+
+// Fuente de la UI activa: 'web' (online) | 'local' (bundle offline). Para el badge.
+ipcMain.handle('ui:source', () => {
+  try { return require('./frontend-server-manager').getUiSource(); } catch (_) { return 'local'; }
+});
+
+let _bootSplash = null;
+function getBootSplash() {
+  if (_bootSplash) return _bootSplash;
+  // Paleta según el tema guardado (claro/oscuro) para que NO salte de color.
+  const dark = getSavedUiTheme() !== 'light';
+  const C = dark
+    ? { bg: 'oklch(0.15 0 0)', fg: 'oklch(0.98 0 0)', muted: 'oklch(0.65 0.01 55)', track: 'rgba(255,255,255,.1)' }
+    : { bg: 'oklch(1 0 0)', fg: 'oklch(0.4 0 0)', muted: 'oklch(0.5 0.01 55)', track: 'rgba(0,0,0,.08)' };
+  let logoTag = '';
+  try {
+    const logoPath = path.join(resolveServerDir(), 'public', 'assets', 'images', 'titanio-icon-2.png');
+    if (fs.existsSync(logoPath)) {
+      const b64 = fs.readFileSync(logoPath).toString('base64');
+      logoTag = `<img src="data:image/png;base64,${b64}" alt="" style="width:48px;height:48px;object-fit:contain">`;
+    }
+  } catch (_) { /* sin logo: queda solo el texto + barra */ }
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+    html,body{height:100%;margin:0;background:${C.bg};color:${C.fg};
+      font-family:system-ui,'Segoe UI',sans-serif;display:flex;flex-direction:column;
+      align-items:center;justify-content:center;gap:28px;overflow:hidden}
+    /* glow naranja sutil (como el login) */
+    body::before{content:'';position:fixed;top:-12%;right:-6%;width:480px;height:480px;
+      background:oklch(0.66 0.22 55);opacity:.10;border-radius:50%;filter:blur(150px)}
+    body::after{content:'';position:fixed;bottom:-16%;left:-6%;width:420px;height:420px;
+      background:oklch(0.66 0.22 55);opacity:.06;border-radius:50%;filter:blur(130px)}
+    .head{position:relative;display:flex;flex-direction:column;align-items:center;gap:8px}
+    .brand{display:flex;align-items:center;gap:8px}
+    .brand span{font-size:24px;font-weight:600;letter-spacing:-.01em}
+    .brand b{color:oklch(0.66 0.22 55);font-weight:700}
+    .tag{font-size:13px;letter-spacing:.02em;color:${C.muted}}
+    .wrap{position:relative;width:256px;max-width:78vw}
+    .bar{height:4px;border-radius:99px;overflow:hidden;background:${C.track}}
+    .bar i{display:block;height:100%;width:0;border-radius:99px;
+      background:oklch(0.66 0.22 55);transition:width .2s ease-out}
+    .row{margin-top:10px;display:flex;justify-content:space-between;
+      font-size:13px;color:${C.muted}}
+  </style></head><body>
+    <div class="head">
+      <div class="brand">${logoTag}<span>Titanio<b>POS</b></span></div>
+      <div class="tag">Sistema de punto de venta</div>
+    </div>
+    <div class="wrap">
+      <div class="bar"><i id="f"></i></div>
+      <div class="row"><span>Iniciando TitanioPOS…</span><span id="p">0%</span></div>
+    </div>
+    <script>
+      // Barra única con porcentaje: el splash cubre 0–30% (el server local
+      // levantando); luego la UI continúa desde 30% sin reiniciar.
+      var v = 0;
+      setInterval(function () {
+        if (v >= 30) return;
+        v = Math.min(30, v + Math.max(0.4, (30 - v) * 0.06));
+        document.getElementById('f').style.width = v + '%';
+        document.getElementById('p').textContent = Math.round(v) + '%';
+      }, 200);
+    </script>
+  </body></html>`;
+  _bootSplash = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+  return _bootSplash;
+}
+
+// Pantalla "sin conexión" (modo remoto): fallo de red al cargar la URL remota.
+function buildOfflinePage() {
+  return buildStatusPage({
+    title: 'Sin conexión',
+    message: 'No se pudo conectar con TitanioPOS. Revisá la conexión de la caja. Se reintentará solo apenas vuelva internet.',
+    retry: true, autoOnline: true,
+  });
+}
+
+// Pantalla de error de arranque local (no es problema de internet).
+function buildLocalErrorPage(detail) {
+  return buildStatusPage({
+    title: 'No se pudo iniciar la app',
+    message: `Hubo un problema al arrancar TitanioPOS localmente.${detail ? '<br><span style="color:#6b7280;font-size:12px">' + detail + '</span>' : ''}`,
+    retry: true,
+  });
+}
+
+// Carga la UI. Local: arranca el server standalone (con reintentos) y apunta al
+// proxy local; si no levanta, muestra error con Reintentar (NO cae a una URL muerta).
+// Remoto: carga APP_URL; si falla la red, el handler did-fail-load muestra "sin conexión".
+async function loadAppUI(win) {
+  if (shouldUseLocalFrontend()) {
+    if (!win.isDestroyed()) win.loadURL(getBootSplash());
+    // Reintenta varias veces detrás del splash. El primer arranque tras un build
+    // o actualización suele fallar porque el ANTIVIRUS (Windows Defender) está
+    // escaneando los .js recién creados y los bloquea un instante → Next no puede
+    // leer un módulo y sale. Reintentando con pausa, apenas el antivirus libera
+    // los archivos arranca, sin que el usuario vea el error.
+    const attempts = 8;
+    const delayMs = 1500;
+    for (let i = 1; i <= attempts; i++) {
+      try {
+        const { url } = await startFrontendServer();
+        if (!win.isDestroyed()) win.loadURL(url);
+        return;
+      } catch (e) {
+        const msg = e && e.message ? e.message : String(e);
+        console.error(`[FRONTEND] Arranque local falló (intento ${i}/${attempts}): ${msg}`);
+        try { stopFrontendServer(); } catch (_) {}
+        if (i < attempts) {
+          await new Promise((r) => setTimeout(r, delayMs));
+        } else if (!win.isDestroyed()) {
+          win.loadURL(buildLocalErrorPage(msg));
+        }
+      }
+    }
+    return;
+  }
+  if (!win.isDestroyed()) win.loadURL(APP_URL);
+}
+
 function createWindow() {
   if (process.platform === 'win32' && !app.isPackaged) {
     console.log(
@@ -514,7 +737,7 @@ function createWindow() {
     // backgroundColor evita el flash blanco inicial sin afectar la carga.
     // No usamos show:false porque cuando la PWA tarda en responder, el
     // usuario se queda mirando una pantalla gris sin feedback.
-    backgroundColor: '#111827',
+    backgroundColor: getSavedUiTheme() === 'light' ? '#ffffff' : '#1a1a1a',
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -529,7 +752,35 @@ function createWindow() {
     title: 'TitanioPOS'
   });
 
-  mainWindow.loadURL(APP_URL);
+  // Abrir maximizada por defecto (la caja se usa a pantalla completa).
+  mainWindow.maximize();
+
+  // [Path B/prueba] Quitar service workers viejos que intercepten las llamadas
+  // (la PWA queda desactivada en la caja; el offline va por el bundle local).
+  try { mainWindow.webContents.session.clearStorageData({ storages: ['serviceworkers'] }); } catch (_) {}
+
+  // "Reintentar" desde las pantallas de estado: navega al sentinela → re-ejecuta
+  // loadAppUI (vuelve a decidir local/remoto y reintenta), sin loops a URLs muertas.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (url && url.startsWith(RETRY_SENTINEL)) {
+      event.preventDefault();
+      loadAppUI(mainWindow);
+    }
+  });
+
+  // Si la carga remota falla por red, mostrar "sin conexión" en vez de la pantalla
+  // gris de Chromium. Solo frame principal, solo fallos de red reales (no data:/sentinela).
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (!isMainFrame) return;
+    if (errorCode === -3) return; // ERR_ABORTED (navegación reemplazada): ignorar
+    if (validatedURL && (validatedURL.startsWith('data:') || validatedURL.startsWith('tpos:'))) return;
+    // En modo local los fallos los maneja loadAppUI (pantalla de error con reintento).
+    if (shouldUseLocalFrontend()) return;
+    console.warn(`[APP] did-fail-load (${errorCode} ${errorDescription}) en ${validatedURL} → sin conexión`);
+    if (!mainWindow.isDestroyed()) mainWindow.loadURL(buildOfflinePage());
+  });
+
+  loadAppUI(mainWindow);
 
   if (process.platform === 'win32' && winIcon) {
     mainWindow.once('show', () => {
@@ -2982,9 +3233,15 @@ app.on('window-all-closed', () => {
   // Stop fiscal server before quitting
   stopFiscalServer();
   stopMegaPosServer();
+  stopFrontendServer();
 
   if (process.platform !== 'darwin') {
     app.quit();
+    // Red de seguridad anti-ZOMBI: si en 1.5s el proceso no salió (algún hijo
+    // mantiene vivo el event loop), forzamos la salida para liberar el lock de
+    // instancia única. Sin esto, un proceso sin ventana se queda colgado y la
+    // próxima apertura "no abre".
+    setTimeout(() => { try { app.exit(0); } catch (_) {} }, 1500);
   }
 });
 
@@ -2992,6 +3249,7 @@ app.on('before-quit', () => {
   // Ensure fiscal server is stopped
   stopFiscalServer();
   stopMegaPosServer();
+  stopFrontendServer();
 });
 
 app.on('activate', () => {
