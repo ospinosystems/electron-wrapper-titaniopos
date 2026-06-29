@@ -99,6 +99,13 @@ function resolveServerDir() {
   const override = (process.env.TITANIOPOS_FRONTEND_SERVER_DIR || '').trim();
   if (override) return override;
 
+  // Hot-swap: si hay una build DESCARGADA activa (<userData>/views/<n>) la
+  // preferimos sobre la horneada. La descarga/promoción la maneja view-updater.js.
+  try {
+    const dl = require('./view-updater').activeServerDir();
+    if (dl) return dl;
+  } catch (_) { /* sin view-updater → horneada */ }
+
   if (app.isPackaged) {
     return path.join(process.resourcesPath, 'frontend-server');
   }
@@ -153,6 +160,24 @@ async function startFrontendServer() {
   }
 
   flogReset();
+
+  // MODO DEV (solo testing): si TITANIOPOS_DEV_UI_URL apunta a un `next dev`,
+  // la UI sale de ahí (HMR) y NO levantamos Next local (la caja de dev no
+  // necesita el bundle). El proxy igual maneja /__backend y /__electric.
+  const devUI = (process.env.TITANIOPOS_DEV_UI_URL || '').trim();
+  if (devUI) {
+    await startProxy(DEFAULT_PORT, 0, HOST, devUI);
+    resolvedUrl = `http://${HOST}:${DEFAULT_PORT}`;
+    uiSource = 'local';
+    flog(`MODO DEV: UI desde ${devUI}, /__backend por el proxy`);
+    return { url: resolvedUrl, port: DEFAULT_PORT };
+  }
+
+  // Hot-swap: aplicar una build PENDIENTE (state.next, descargada o switcheada en
+  // un arranque anterior) ANTES de resolver el dir → así arrancamos con la build
+  // elegida. No-op si no hay pendiente. Con Next aún sin levantar → sin locks.
+  try { require('./view-updater').applyPendingView(flog); } catch (_) {}
+
   const serverDir = resolveServerDir();
   const serverJs = path.join(serverDir, 'server.js');
 
@@ -197,17 +222,11 @@ async function startFrontendServer() {
   try {
     // Esperar a que Next levante (interno); abortar si el proceso muere.
     await waitUntilUp(nextPort, { alive: () => !exited });
-    // ¿Hay web remota online? Si sí, la UI sale de ahí (velocidad); si no, del bundle.
-    const remoteUI = (process.env.TITANIOPOS_URL || '').trim();
-    let uiUpstream = null;
-    if (remoteUI) {
-      const online = await checkReachable(remoteUI);
-      flog(`web remota ${remoteUI} → ${online ? 'ONLINE (UI desde la web)' : 'offline (UI desde bundle)'}`);
-      if (online) uiUpstream = remoteUI;
-    }
-    uiSource = uiUpstream ? 'web' : 'local';
-    await startProxy(DEFAULT_PORT, nextPort, HOST, uiUpstream);
-    flog(`proxy levantado en ${DEFAULT_PORT} → next ${nextPort}${uiUpstream ? ' | UI=' + uiUpstream : ''}`);
+    // Prod/local: la UI SIEMPRE sale del bundle local (login por /__backend, sin
+    // CORS). El modo dev ya se manejó arriba con corto-circuito.
+    uiSource = 'local';
+    await startProxy(DEFAULT_PORT, nextPort, HOST, null);
+    flog(`proxy levantado en ${DEFAULT_PORT} → next ${nextPort} (UI=bundle local)`);
   } catch (e) {
     flog(`ERROR al levantar UI local: ${e && e.message}${exited ? ` (Next exit: ${exitInfo})` : ''}`);
     throw e;
@@ -215,7 +234,30 @@ async function startFrontendServer() {
 
   resolvedUrl = `http://${HOST}:${DEFAULT_PORT}`;
   flog(`UI local lista (con proxy de sesión) en ${resolvedUrl}`);
+
+  // Hot-swap en BACKGROUND: con la app ya arrancando, chequeamos si hay una build
+  // más nueva y la dejamos PENDIENTE para el próximo arranque. NO bloquea el boot.
+  scheduleViewUpdateCheck();
+
   return { url: resolvedUrl, port: DEFAULT_PORT };
+}
+
+/**
+ * Programa el chequeo de actualización de la vista en BACKGROUND (no bloquea el
+ * boot). Solo en la app instalada. El host por defecto es prod
+ * (updates.titanio-pos.com); se puede apuntar a uno de prueba con
+ * TITANIOPOS_VIEW_UPDATE_URL.
+ */
+function scheduleViewUpdateCheck() {
+  if (!app.isPackaged) return; // solo la caja instalada se auto-actualiza
+  const url = (process.env.TITANIOPOS_VIEW_UPDATE_URL || '').trim();
+  setTimeout(() => {
+    try {
+      const { checkAndStageUpdate, DEFAULT_UPDATE_URL } = require('./view-updater');
+      checkAndStageUpdate(url || DEFAULT_UPDATE_URL, flog)
+        .catch((e) => flog(`[VIEW] check falló: ${e && e.message}`));
+    } catch (e) { flog(`[VIEW] no se pudo iniciar el check: ${e && e.message}`); }
+  }, 20000); // 20s tras el boot: no compite con la carga inicial
 }
 
 /** Mata el proxy + el server local. CLAVE: en Windows usa taskkill /F /T para

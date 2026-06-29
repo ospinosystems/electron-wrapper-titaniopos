@@ -122,6 +122,31 @@ function startProxy(localPort, nextPort, host = '127.0.0.1', uiUpstream = null) 
       }
     });
 
+    // WebSocket (HMR del dev server en modo testing): pasar el upgrade al upstream.
+    server.on('upgrade', (req, clientSocket, head) => {
+      try {
+        const base = new URL(uiUpstream || localUI);
+        const upReq = http.request({
+          host: base.hostname,
+          port: base.port || (base.protocol === 'https:' ? 443 : 80),
+          path: req.url,
+          headers: { ...req.headers, host: base.host },
+        });
+        upReq.on('upgrade', (upRes, upSocket, upHead) => {
+          clientSocket.write(
+            'HTTP/1.1 101 Switching Protocols\r\n' +
+            Object.entries(upRes.headers).map(([k, v]) => `${k}: ${v}`).join('\r\n') +
+            '\r\n\r\n'
+          );
+          if (upHead && upHead.length) upSocket.unshift(upHead);
+          upSocket.pipe(clientSocket);
+          clientSocket.pipe(upSocket);
+        });
+        upReq.on('error', () => { try { clientSocket.destroy(); } catch (_) {} });
+        upReq.end();
+      } catch (_) { try { clientSocket.destroy(); } catch (_) {} }
+    });
+
     server.on('error', reject);
     server.listen(localPort, host, () => {
       console.log(`[PROXY] Escuchando en http://${host}:${localPort}`);

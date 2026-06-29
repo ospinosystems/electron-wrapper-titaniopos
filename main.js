@@ -632,32 +632,21 @@ function getBootSplash() {
     .brand span{font-size:24px;font-weight:600;letter-spacing:-.01em}
     .brand b{color:oklch(0.66 0.22 55);font-weight:700}
     .tag{font-size:13px;letter-spacing:.02em;color:${C.muted}}
-    .wrap{position:relative;width:256px;max-width:78vw}
-    .bar{height:4px;border-radius:99px;overflow:hidden;background:${C.track}}
-    .bar i{display:block;height:100%;width:0;border-radius:99px;
-      background:oklch(0.66 0.22 55);transition:width .2s ease-out}
-    .row{margin-top:10px;display:flex;justify-content:space-between;
-      font-size:13px;color:${C.muted}}
+    /* Barra INDETERMINADA (va y viene) durante el arranque: no hay progreso real
+       todavía (la barra 0→100 la lleva el overlay de React después). */
+    .ind{position:relative;width:220px;max-width:72vw;height:3px;margin-top:16px;
+      border-radius:99px;overflow:hidden;background:${C.track}}
+    .ind i{position:absolute;top:0;left:0;width:38%;height:100%;border-radius:99px;
+      background:oklch(0.66 0.22 55);animation:slide 1.05s ease-in-out infinite alternate}
+    @keyframes slide{from{left:0%}to{left:62%}}
+    .boot{margin-top:10px;font-size:12px;letter-spacing:.02em;color:${C.muted}}
   </style></head><body>
     <div class="head">
       <div class="brand">${logoTag}<span>Titanio<b>POS</b></span></div>
       <div class="tag">Sistema de punto de venta</div>
     </div>
-    <div class="wrap">
-      <div class="bar"><i id="f"></i></div>
-      <div class="row"><span>Iniciando TitanioPOS…</span><span id="p">0%</span></div>
-    </div>
-    <script>
-      // Barra única con porcentaje: el splash cubre 0–30% (el server local
-      // levantando); luego la UI continúa desde 30% sin reiniciar.
-      var v = 0;
-      setInterval(function () {
-        if (v >= 30) return;
-        v = Math.min(30, v + Math.max(0.4, (30 - v) * 0.06));
-        document.getElementById('f').style.width = v + '%';
-        document.getElementById('p').textContent = Math.round(v) + '%';
-      }, 200);
-    </script>
+    <div class="ind"><i></i></div>
+    <div class="boot">Iniciando…</div>
   </body></html>`;
   _bootSplash = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
   return _bootSplash;
@@ -942,14 +931,20 @@ ipcMain.handle('app-versions', () => ({
   node: process.versions.node,
 }));
 
-// IPC: (re)crear el acceso directo de la app en el Escritorio. Útil si el
-// usuario lo borró por error. Usa el exe real de la app (no electron.exe en dev).
-ipcMain.handle('app:create-desktop-shortcut', () => {
+// (Re)crea el acceso directo en el Escritorio. Lo usan el botón de Ajustes y el
+// arranque (self-heal): los updates NSIS borran el acceso directo y no lo
+// recrean, así que al iniciar lo restauramos si falta.
+//   - force=false (arranque): solo crea si NO existe (no pisa nada).
+//   - force=true  (botón):    siempre lo reescribe.
+function ensureDesktopShortcut({ force = false } = {}) {
+  if (!app.isPackaged) return { success: false, error: 'Solo disponible en la app instalada.' };
   try {
     const desktop = app.getPath('desktop');
-    const exePath = process.execPath;
     const shortcutPath = path.join(desktop, 'TitanioPOS.lnk');
-    const ok = shell.writeShortcutLink(shortcutPath, 'replace', {
+    const exists = fs.existsSync(shortcutPath);
+    if (!force && exists) return { success: true, path: shortcutPath, existed: true };
+    const exePath = process.execPath;
+    const ok = shell.writeShortcutLink(shortcutPath, exists ? 'replace' : 'create', {
       target: exePath,
       icon: exePath,
       iconIndex: 0,
@@ -961,6 +956,31 @@ ipcMain.handle('app:create-desktop-shortcut', () => {
     console.error('[SHORTCUT] No se pudo crear el acceso directo:', error.message);
     return { success: false, error: error.message };
   }
+}
+
+// IPC: botón de Ajustes para (re)crear el acceso directo si el usuario lo borró.
+ipcMain.handle('app:create-desktop-shortcut', () => ensureDesktopShortcut({ force: true }));
+
+// IPC hot-swap de la vista: listar builds instaladas y switchear a demanda.
+// Útil para rollback (volver a una build anterior conocida-buena) desde soporte.
+ipcMain.handle('view:list-builds', () => {
+  try {
+    const vu = require('./view-updater');
+    const { active, next } = vu.readState();
+    return { ok: true, active: vu.getActiveBuildNumber(), next: next || null, builds: vu.listBuilds(), keep: vu.KEEP_BUILDS };
+  } catch (e) { return { ok: false, error: e && e.message }; }
+});
+
+// Switch a una build instalada + relanzar para aplicarla. relaunch=false solo
+// programa el cambio (se aplica en el próximo arranque manual).
+ipcMain.handle('view:switch-build', (_e, buildNumber, opts = {}) => {
+  try {
+    const vu = require('./view-updater');
+    const res = vu.switchToBuild(buildNumber, (m) => console.log(m));
+    if (!res.ok) return res;
+    if (opts.relaunch !== false) { app.relaunch(); app.exit(0); }
+    return { ok: true, relaunching: opts.relaunch !== false };
+  } catch (e) { return { ok: false, error: e && e.message }; }
 });
 
 // IPC: estado de GPU para diagnóstico de perf. Resultado equivalente a
@@ -3024,6 +3044,9 @@ app.whenReady().then(() => {
   createWindow();
   if (app.isPackaged) {
     setupAutoUpdater();
+    // Self-heal: los updates NSIS borran el acceso directo del escritorio.
+    // Si falta, lo recreamos en cada arranque.
+    try { ensureDesktopShortcut(); } catch (_) { /* no crítico */ }
   } else {
     console.log('[UPDATER] Omitido en desarrollo (solo app empaquetada)');
   }

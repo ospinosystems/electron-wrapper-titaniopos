@@ -381,6 +381,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Busca actualizaciones de la app (diálogos nativos + banner). */
   updaterCheck: () => ipcRenderer.invoke('updater:check'),
 
+  // ==================== HOT-SWAP DE LA VISTA (builds del frontend) ====================
+  /** Lista las builds de la vista instaladas: { ok, active, next, builds:[n], keep }. */
+  viewListBuilds: () => ipcRenderer.invoke('view:list-builds'),
+  /** Switchea a una build instalada y relanza (opts.relaunch=false para solo programar). */
+  viewSwitchBuild: (buildNumber, opts = {}) => ipcRenderer.invoke('view:switch-build', buildNumber, opts),
+
   onUpdaterEvent: (callback) => {
     const handler = (_event, payload) => {
       try { callback(payload); } catch (err) { console.error('[updater event] handler threw:', err); }
