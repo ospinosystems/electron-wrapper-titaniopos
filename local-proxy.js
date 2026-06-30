@@ -24,6 +24,14 @@ const http = require('http');
 const https = require('https');
 const { URL } = require('url');
 
+// Agentes con KEEP-ALIVE: reusan las conexiones (y el handshake TLS) al backend
+// real. Sin esto, CADA llamada a /__backend abría una conexión nueva con
+// handshake TLS completo a www.titanio-pos.com → con varias llamadas por vista
+// (ej. Ajustes) la app se siente MUY lenta. El navegador, al cargar la web
+// directo, ya hace keep-alive; el proxy debe igualarlo.
+const keepAliveHttps = new https.Agent({ keepAlive: true, maxSockets: 64, keepAliveMsecs: 15000 });
+const keepAliveHttp = new http.Agent({ keepAlive: true, maxSockets: 64, keepAliveMsecs: 15000 });
+
 const BACKEND_URL = (process.env.TITANIOPOS_BACKEND_URL || 'https://www.titanio-pos.com').replace(/\/$/, '');
 const ELECTRIC_URL = (process.env.TITANIOPOS_ELECTRIC_URL || 'https://electric.titanio-pos.com').replace(/\/$/, '');
 // Origen que el backend reconoce como "stateful" (SANCTUM_STATEFUL_DOMAINS).
@@ -72,6 +80,7 @@ function proxyToUpstream(req, res, upstreamBase, stripPrefix, spoof) {
     method: req.method,
     path: targetPath,
     headers,
+    agent: isHttps ? keepAliveHttps : keepAliveHttp, // reusa conexión (sin TLS por request)
   };
 
   const upReq = agent.request(options, (upRes) => {
