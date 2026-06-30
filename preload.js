@@ -386,6 +386,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   viewListBuilds: () => ipcRenderer.invoke('view:list-builds'),
   /** Switchea a una build instalada y relanza (opts.relaunch=false para solo programar). */
   viewSwitchBuild: (buildNumber, opts = {}) => ipcRenderer.invoke('view:switch-build', buildNumber, opts),
+  /** Busca actualización de la vista AHORA contra prod: { ok, url, staged, buildNumber?, reason? }. */
+  viewCheckNow: () => ipcRenderer.invoke('view:check-now'),
 
   onUpdaterEvent: (callback) => {
     const handler = (_event, payload) => {

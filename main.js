@@ -983,6 +983,18 @@ ipcMain.handle('view:switch-build', (_e, buildNumber, opts = {}) => {
   } catch (e) { return { ok: false, error: e && e.message }; }
 });
 
+// Buscar actualización de la VISTA AHORA (a demanda), contra el host real
+// (updates.titanio-pos.com por default). Baja + valida + deja pendiente; se
+// aplica al reiniciar. Es el equivalente manual del check en background.
+ipcMain.handle('view:check-now', async () => {
+  try {
+    const vu = require('./view-updater');
+    const url = (process.env.TITANIOPOS_VIEW_UPDATE_URL || '').trim() || vu.DEFAULT_UPDATE_URL;
+    const res = await vu.checkAndStageUpdate(url, (m) => console.log(m));
+    return { ok: true, url, ...res };
+  } catch (e) { return { ok: false, error: e && e.message }; }
+});
+
 // IPC: estado de GPU para diagnóstico de perf. Resultado equivalente a
 // chrome://gpu/ pero usable desde DevTools del renderer (donde chrome://gpu
 // está bloqueado por seguridad). Llamar como:
