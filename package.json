@@ -45,6 +45,10 @@
     ],
     "extraResources": [
       {
+        "from": "caja-config.env",
+        "to": ".env"
+      },
+      {
         "from": "frontend-server",
         "to": "frontend-server",
         "filter": ["**/*"]

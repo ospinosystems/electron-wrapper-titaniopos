@@ -128,6 +128,14 @@ const loadEnvFile = (envPath, logTag) => {
   }
 };
 
+// .env EXTERNO (editable, en resources/ junto a la app) que SOBRESCRIBE al
+// horneado: permite reconfigurar la caja (backend / electric / updates entre
+// prod y local) SIN recompilar. Se carga PRIMERO porque loadEnvFile no pisa una
+// var ya seteada (gana el primero). Queda como archivo suelto en resources/.
+if (process.resourcesPath) {
+  loadEnvFile(path.join(process.resourcesPath, '.env'), 'resources/.env (externo, editable)');
+}
+
 const ROOT_ENV_PATH = path.join(__dirname, '.env');
 loadEnvFile(ROOT_ENV_PATH, ROOT_ENV_PATH);
 
