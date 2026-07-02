@@ -90,6 +90,9 @@ function proxyToUpstream(req, res, upstreamBase, stripPrefix, spoof) {
     }
     res.writeHead(upRes.statusCode || 502, outHeaders);
     upRes.pipe(res);
+    // Si la respuesta upstream falla a mitad, cortamos el cliente (y NO dejamos
+    // el socket keep-alive en un estado raro).
+    upRes.on('error', () => { try { res.destroy(); } catch (_) {} });
   });
 
   upReq.on('error', (err) => {
@@ -100,6 +103,14 @@ function proxyToUpstream(req, res, upstreamBase, stripPrefix, spoof) {
     console.warn('[PROXY] Backend inalcanzable', stripPrefix, err && err.code);
     try { res.destroy(err); } catch (_) {}
     try { req.destroy(); } catch (_) {}
+  });
+
+  // CRÍTICO con keep-alive: si el cliente ABORTA (la navegación cancela las
+  // requests en vuelo), DESTRUIR el upstream. Si no, un socket a medio consumir
+  // vuelve al pool keep-alive "envenenado" y la próxima request sobre él se
+  // cuelga → la barra de navegación se traba y la vista no cambia.
+  res.on('close', () => {
+    if (!res.writableFinished) { try { upReq.destroy(); } catch (_) {} }
   });
 
   req.pipe(upReq);
