@@ -22,8 +22,11 @@
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
-const { execSync } = require('child_process');
+const https = require('https');
+const crypto = require('crypto');
+const { execSync, execFileSync } = require('child_process');
 
 const ELECTRON_DIR = __dirname;
 const FRONTEND_DIR = path.resolve(
@@ -39,11 +42,22 @@ function fail(msg) {
   process.exit(1);
 }
 
+const IS_STATIC = process.env.BUNDLE_STATIC === '1';
+
+// ── Modo FEED (CI del release: runner sin el repo frontend al lado) ──────────
+// Baja el ÚLTIMO bundle publicado (latest.json + zip, validado por sha256) y lo
+// usa como vista horneada. Es exactamente el mismo zip que consumen las cajas.
+// Va ANTES del check de FRONTEND_DIR: en este modo el repo frontend no se usa.
+if (process.env.BUNDLE_FROM_FEED === '1') {
+  bundleFromFeed()
+    .then(() => log('Listo (vista horneada desde el feed).'))
+    .catch((e) => fail(`feed: ${e && e.message}`));
+  return;
+}
+
 if (!fs.existsSync(FRONTEND_DIR)) {
   fail(`No existe FRONTEND_DIR: ${FRONTEND_DIR}`);
 }
-
-const IS_STATIC = process.env.BUNDLE_STATIC === '1';
 
 if (process.env.BUNDLE_BUILD === '1') {
   log(`Corriendo build del frontend en ${FRONTEND_DIR} ...`);
@@ -187,4 +201,59 @@ function execSyncSafe(cmd) {
   } catch {
     return null;
   }
+}
+
+// ── Helpers del modo FEED ─────────────────────────────────────────────────────
+function httpGet(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { timeout: 30000 }, (res) => {
+      if (res.statusCode >= 400) { res.resume(); return reject(new Error(`HTTP ${res.statusCode} en ${url}`)); }
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+      res.on('error', reject);
+    }).on('error', reject).on('timeout', function () { this.destroy(new Error('timeout')); });
+  });
+}
+
+function extractZipTo(zipPath, targetDir) {
+  fs.mkdirSync(targetDir, { recursive: true });
+  try { execFileSync('tar', ['-xf', zipPath, '-C', targetDir], { stdio: 'ignore' }); return; }
+  catch (_) { /* sin bsdtar → fallback */ }
+  if (process.platform === 'win32') {
+    execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+      `Expand-Archive -LiteralPath "${zipPath}" -DestinationPath "${targetDir}" -Force`], { stdio: 'ignore' });
+  } else {
+    execFileSync('unzip', ['-q', '-o', zipPath, '-d', targetDir], { stdio: 'ignore' });
+  }
+}
+
+async function bundleFromFeed() {
+  const base = (process.env.TITANIOPOS_VIEW_UPDATE_URL || 'https://updates.titanio-pos.com').replace(/\/$/, '');
+  log(`Bajando latest.json de ${base} ...`);
+  const meta = JSON.parse((await httpGet(base + '/latest.json')).toString('utf8'));
+  if (!meta.url) fail('latest.json sin url');
+  log(`Bajando bundle ${meta.version} (build ${meta.buildNumber}) ...`);
+  const zipBuf = await httpGet(meta.url);
+  if (meta.sha256) {
+    const got = crypto.createHash('sha256').update(zipBuf).digest('hex');
+    if (got.toLowerCase() !== String(meta.sha256).toLowerCase()) {
+      fail(`sha256 no coincide (esperado ${meta.sha256}, got ${got})`);
+    }
+    log('sha256 OK');
+  }
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tpos-feed-'));
+  const zipPath = path.join(tmp, 'bundle.zip');
+  fs.writeFileSync(zipPath, zipBuf);
+  if (fs.existsSync(OUT_DIR)) fs.rmSync(OUT_DIR, { recursive: true, force: true });
+  extractZipTo(zipPath, OUT_DIR);
+  fs.rmSync(tmp, { recursive: true, force: true });
+  // Identidad intrínseca (igual que hace view-updater al descargar en la caja).
+  fs.writeFileSync(
+    path.join(OUT_DIR, 'view-version.json'),
+    JSON.stringify({ buildNumber: parseInt(meta.buildNumber, 10) || 0, version: meta.version || '' })
+  );
+  // Si el bundle del feed fuera standalone (legacy), aplicar el shim de Windows.
+  if (fs.existsSync(path.join(OUT_DIR, 'server.js'))) patchServerShimForWindows();
+  log(`view-version.json → build ${meta.buildNumber} (${meta.version})`);
 }
