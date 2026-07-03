@@ -1,0 +1,79 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; user-select: none;
+    font-family: 'Segoe UI', system-ui, sans-serif; background: #111827; color: #f9fafb; }
+  body { display: flex; flex-direction: column; gap: 9px; padding: 13px 15px;
+    box-sizing: border-box; -webkit-app-region: drag; border: 1px solid #374151; border-radius: 10px; }
+  .title { font-size: 13px; font-weight: 600; display: flex; justify-content: space-between; align-items: baseline; }
+  .sub { font-size: 11px; color: #9ca3af; }
+  .bar { height: 6px; border-radius: 3px; background: #374151; overflow: hidden; }
+  .fill { height: 100%; width: 0%; background: #22c55e; transition: width .2s; }
+  .fill.indet { width: 30%; animation: slide 1.2s ease-in-out infinite alternate; }
+  @keyframes slide { from { margin-left: 0 } to { margin-left: 70% } }
+  .row { display: flex; justify-content: space-between; align-items: center; }
+  .timer { font-variant-numeric: tabular-nums; font-size: 22px; font-weight: 700; line-height: 1.1; }
+  button { -webkit-app-region: no-drag; background: #22c55e; border: 0; color: #052e16;
+    font-weight: 700; font-size: 12px; padding: 8px 12px; border-radius: 7px; cursor: pointer; }
+  button:hover { background: #4ade80; }
+  .hidden { display: none; }
+  #err { color: #fca5a5; }
+</style>
+</head>
+<body>
+  <div class="title"><span id="title">Actualización de la vista</span><span class="sub" id="pct"></span></div>
+  <div class="bar" id="bar"><div class="fill" id="fill"></div></div>
+  <div class="row hidden" id="stagedRow">
+    <div>
+      <div class="sub">Se reinicia en</div>
+      <div class="timer" id="timer">5:00</div>
+    </div>
+    <button id="btn">Reiniciar ahora</button>
+  </div>
+  <div class="sub hidden" id="err"></div>
+<script>
+  const $ = (id) => document.getElementById(id);
+  let tick = null;
+  function fmt(ms) {
+    const s = Math.max(0, Math.ceil(ms / 1000));
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  }
+  window.widget.onState((st) => {
+    if (st.mode === 'downloading') {
+      $('title').textContent = 'Descargando la vista ' + st.buildNumber + '…';
+      $('bar').classList.remove('hidden');
+      $('stagedRow').classList.add('hidden');
+      $('err').classList.add('hidden');
+      if (st.pct == null) {
+        $('fill').classList.add('indet');
+        $('pct').textContent = '';
+      } else {
+        $('fill').classList.remove('indet');
+        $('fill').style.width = Math.round(st.pct * 100) + '%';
+        $('pct').textContent = Math.round(st.pct * 100) + '%';
+      }
+    } else if (st.mode === 'staged') {
+      $('title').textContent = 'Vista ' + st.buildNumber + ' lista';
+      $('pct').textContent = '';
+      $('bar').classList.add('hidden');
+      $('err').classList.add('hidden');
+      $('stagedRow').classList.remove('hidden');
+      if (tick) clearInterval(tick);
+      const upd = () => { $('timer').textContent = fmt(st.deadlineTs - Date.now()); };
+      upd();
+      tick = setInterval(upd, 250);
+    } else if (st.mode === 'error') {
+      $('title').textContent = 'Actualización de la vista';
+      $('pct').textContent = '';
+      $('bar').classList.add('hidden');
+      $('stagedRow').classList.add('hidden');
+      $('err').classList.remove('hidden');
+      $('err').textContent = 'No se pudo actualizar: ' + (st.message || 'error desconocido');
+    }
+  });
+  $('btn').addEventListener('click', () => window.widget.restartNow());
+</script>
+</body>
+</html>

@@ -1012,68 +1012,61 @@ ipcMain.handle('view:check-now', async () => {
   try {
     const vu = require('./view-updater');
     const url = (process.env.TITANIOPOS_VIEW_UPDATE_URL || '').trim() || vu.DEFAULT_UPDATE_URL;
-    const res = await vu.checkAndStageUpdate(url, (m) => console.log(m));
+    // Mismo notificador que el check automático: la ventanita de progreso y el
+    // temporizador de reinicio aparecen también cuando el check es manual.
+    const res = await vu.checkAndStageUpdate(url, (m) => console.log(m), handleViewUpdateEvent);
     return { ok: true, url, ...res };
   } catch (e) { return { ok: false, error: e && e.message }; }
 });
 
-// ── UX de la actualización de la vista (checks automáticos en background) ────
-// Notificación al empezar la descarga, progreso en la barra de tareas, y al
-// quedar lista un diálogo: "Reiniciar ahora" o auto-reinicio a los 5 minutos.
-// Los eventos también se reenvían al renderer ('view-update') por si la vista
-// quiere pintar su propia UI (window.electronAPI.onViewUpdate).
+// ── UX de la actualización de la vista (checks automáticos y manuales) ───────
+// Ventanita flotante arrastrable (view-update-window.js): progreso de descarga
+// y, al quedar lista, temporizador de reinicio SIEMPRE visible + "Reiniciar
+// ahora". Auto-reinicio a los 5 minutos (el timer autoritativo corre acá, la
+// ventana solo lo muestra). Los eventos también se reenvían al renderer
+// ('view-update') por si la vista quiere pintar su propia UI.
 const VIEW_RESTART_DELAY_MS = 5 * 60 * 1000;
 let viewRestartTimer = null;
+let lastProgressPushAt = 0;
 
 function relaunchForViewUpdate(reason) {
   console.log(`[VIEW] relanzando la app para aplicar la vista (${reason})`);
+  if (viewRestartTimer) { clearTimeout(viewRestartTimer); viewRestartTimer = null; }
   try { app.relaunch(); } catch (_) {}
   app.exit(0);
 }
 
-function setupViewUpdateUX() {
+function handleViewUpdateEvent(ev, data) {
+  const widget = require('./view-update-window');
   const win = () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
-  const toRenderer = (payload) => { try { win()?.webContents.send('view-update', payload); } catch (_) {} };
+  try { win()?.webContents.send('view-update', { type: ev, ...data }); } catch (_) {}
 
-  require('./frontend-server-manager').setViewUpdateNotifier((ev, data) => {
-    toRenderer({ type: ev, ...data });
-    if (ev === 'downloading') {
-      try { win()?.setProgressBar(0.02); } catch (_) {}
-      try {
-        if (Notification.isSupported()) {
-          new Notification({ title: 'TitanioPOS', body: `Descargando la vista ${data.buildNumber}…` }).show();
-        }
-      } catch (_) {}
-    } else if (ev === 'progress') {
-      try { win()?.setProgressBar(data.total > 0 ? data.got / data.total : 0.5); } catch (_) {}
-    } else if (ev === 'error') {
-      try { win()?.setProgressBar(-1); } catch (_) {}
-    } else if (ev === 'staged') {
-      try { win()?.setProgressBar(-1); } catch (_) {}
-      // El timer corre aunque nadie responda el diálogo (caja desatendida).
-      if (viewRestartTimer) clearTimeout(viewRestartTimer);
-      viewRestartTimer = setTimeout(() => relaunchForViewUpdate('timer de 5 min'), VIEW_RESTART_DELAY_MS);
-      const w = win();
-      const opts = {
-        type: 'info',
-        title: 'Actualización de la vista',
-        message: `Se descargó la versión ${data.buildNumber}.`,
-        detail: 'La caja se reiniciará sola en 5 minutos para aplicarla, o puedes reiniciarla ahora.',
-        buttons: ['Reiniciar ahora', 'Esperar 5 minutos'],
-        defaultId: 0,
-        cancelId: 1,
-        noLink: true,
-      };
-      (w ? dialog.showMessageBox(w, opts) : dialog.showMessageBox(opts))
-        .then(({ response }) => {
-          if (response === 0) {
-            if (viewRestartTimer) clearTimeout(viewRestartTimer);
-            relaunchForViewUpdate('botón Reiniciar ahora');
-          }
-        })
-        .catch(() => {});
-    }
-  });
+  if (ev === 'downloading') {
+    widget.showDownloading(data.buildNumber);
+    try { win()?.setProgressBar(0.02); } catch (_) {}
+  } else if (ev === 'progress') {
+    // Throttle: onProgress dispara por chunk; empujar cada frame satura el IPC.
+    const now = Date.now();
+    if (now - lastProgressPushAt < 300) return;
+    lastProgressPushAt = now;
+    widget.setProgress(data.buildNumber, data.got, data.total);
+    try { win()?.setProgressBar(data.total > 0 ? data.got / data.total : 0.5); } catch (_) {}
+  } else if (ev === 'error') {
+    widget.showError(data.message);
+    try { win()?.setProgressBar(-1); } catch (_) {}
+  } else if (ev === 'staged') {
+    try { win()?.setProgressBar(-1); } catch (_) {}
+    // El timer corre aunque nadie toque la ventana (caja desatendida se
+    // actualiza sola); el botón solo lo adelanta.
+    if (viewRestartTimer) clearTimeout(viewRestartTimer);
+    viewRestartTimer = setTimeout(() => relaunchForViewUpdate('timer de 5 min'), VIEW_RESTART_DELAY_MS);
+    widget.showStaged(data.buildNumber, Date.now() + VIEW_RESTART_DELAY_MS,
+      () => relaunchForViewUpdate('botón Reiniciar ahora'));
+  }
+}
+
+function setupViewUpdateUX() {
+  require('./frontend-server-manager').setViewUpdateNotifier(handleViewUpdateEvent);
 }
 
 // IPC: estado de GPU para diagnóstico de perf. Resultado equivalente a
