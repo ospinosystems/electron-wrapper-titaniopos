@@ -44,7 +44,13 @@ if (!fs.existsSync(FRONTEND_DIR)) {
 if (process.env.BUNDLE_BUILD === '1') {
   log(`Corriendo build del frontend en ${FRONTEND_DIR} ...`);
   log('Asegurate de que los NEXT_PUBLIC_* apuntan a PRODUCCIÓN.');
-  execSync('npm run build', { cwd: FRONTEND_DIR, stdio: 'inherit' });
+  // DISABLE_PWA: en la caja el offline lo da el server local, no el service
+  // worker. Igual que el job `bundle` del CI del frontend.
+  execSync('npm run build', {
+    cwd: FRONTEND_DIR,
+    stdio: 'inherit',
+    env: { ...process.env, DISABLE_PWA: '1' },
+  });
 }
 
 const STANDALONE = path.join(FRONTEND_DIR, '.next', 'standalone');
@@ -74,9 +80,37 @@ log('Copiando .next/static...');
 fs.cpSync(STATIC, path.join(OUT_DIR, '.next', 'static'), { recursive: true });
 
 // 3) public -> frontend-server/public
+// Se excluyen sw.js/workbox-*.js: son artefactos generados por builds locales
+// con la PWA activa (están gitignorados pero quedan en disco). Si se empaquetan,
+// la caja registra un service worker con caches de 1 año que luego sirve assets
+// de builds viejos al hacer hot-swap de la vista.
 if (fs.existsSync(PUBLIC)) {
-  log('Copiando public...');
-  fs.cpSync(PUBLIC, path.join(OUT_DIR, 'public'), { recursive: true });
+  log('Copiando public (sin sw.js/workbox-*.js)...');
+  fs.cpSync(PUBLIC, path.join(OUT_DIR, 'public'), {
+    recursive: true,
+    filter: (src) => !/(^|[\\/])(sw\.js|workbox-[^\\/]*\.js)$/i.test(src),
+  });
+}
+
+// 3.5) Identidad intrínseca de la horneada (misma semántica de buildNumber que
+// el CI: nº de commits). Permite a view-updater saber qué build corre aunque
+// state.json se pierda; sin esto la horneada "vale 0" y el updater re-descarga
+// una build igual o más vieja que la que ya corre.
+try {
+  const count = parseInt(
+    execSync('git rev-list --count HEAD', { cwd: FRONTEND_DIR, encoding: 'utf8' }).trim(), 10
+  );
+  const sha = execSync('git rev-parse --short HEAD', { cwd: FRONTEND_DIR, encoding: 'utf8' }).trim();
+  const base = JSON.parse(
+    fs.readFileSync(path.join(FRONTEND_DIR, 'package.json'), 'utf8')
+  ).version.split('.').slice(0, 2).join('.');
+  fs.writeFileSync(
+    path.join(OUT_DIR, 'view-version.json'),
+    JSON.stringify({ buildNumber: count, version: `${base}.${count}+${sha}` })
+  );
+  log(`view-version.json → build ${count} (${sha})`);
+} catch (e) {
+  log(`AVISO: no se pudo escribir view-version.json (${e && e.message}); la horneada queda sin identidad`);
 }
 
 // 4) Parche Windows (red de seguridad de resolución): en Windows + Node 24, la

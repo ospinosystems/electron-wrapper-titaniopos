@@ -161,6 +161,12 @@ async function startFrontendServer() {
 
   flogReset();
 
+  // Hot-swap: aplicar una build PENDIENTE (state.next, descargada o switcheada en
+  // un arranque anterior) ANTES de cualquier corto-circuito → si no, `next` queda
+  // staged para siempre y el prompt de reinicio no muere nunca. Con Next aún sin
+  // levantar → sin locks.
+  try { require('./view-updater').applyPendingView(flog); } catch (_) {}
+
   // MODO DEV (solo testing): si TITANIOPOS_DEV_UI_URL apunta a un `next dev`,
   // la UI sale de ahí (HMR) y NO levantamos Next local (la caja de dev no
   // necesita el bundle). El proxy igual maneja /__backend y /__electric.
@@ -173,13 +179,13 @@ async function startFrontendServer() {
     return { url: resolvedUrl, port: DEFAULT_PORT };
   }
 
-  // Hot-swap: aplicar una build PENDIENTE (state.next, descargada o switcheada en
-  // un arranque anterior) ANTES de resolver el dir → así arrancamos con la build
-  // elegida. No-op si no hay pendiente. Con Next aún sin levantar → sin locks.
-  try { require('./view-updater').applyPendingView(flog); } catch (_) {}
-
   const serverDir = resolveServerDir();
   const serverJs = path.join(serverDir, 'server.js');
+
+  // Registrar qué dir se sirve en ESTA sesión: el updater compara la remota
+  // contra la identidad intrínseca de lo que corre (view-version.json), no solo
+  // contra state.json (que puede perderse y provocar re-stageos espurios).
+  try { require('./view-updater').noteRunningServerDir(serverDir); } catch (_) {}
 
   flog(`startFrontendServer: packaged=${app.isPackaged} execPath=${process.execPath}`);
   flog(`serverDir=${serverDir}`);

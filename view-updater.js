@@ -71,10 +71,45 @@ function listBuilds() {
   } catch { return []; }
 }
 
+/** Dir de la vista HORNEADA (extraResources en packaged, repo en dev). */
+function bakedServerDir() {
+  const override = (process.env.TITANIOPOS_FRONTEND_SERVER_DIR || '').trim();
+  if (override) return override;
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'frontend-server')
+    : path.join(__dirname, 'frontend-server');
+}
+
+/** buildNumber intrínseco de un server dir vía view-version.json (0 si no hay).
+ *  Lo escriben checkAndStageUpdate (bundles descargados) y bundle-frontend.js
+ *  (horneada). Es la red de seguridad cuando state.json se pierde/invalida. */
+function readBuildNumberOf(dir) {
+  try {
+    const v = JSON.parse(fs.readFileSync(path.join(dir, 'view-version.json'), 'utf8'));
+    return parseInt(v.buildNumber, 10) || 0;
+  } catch { return 0; }
+}
+
+// Dir que el manager está SIRVIENDO en esta sesión (lo setea al forkear Next).
+// Sin esto, si state.json se pierde con la app abierta, el updater cree que
+// corre la horneada y re-stagea la build que ya está corriendo.
+let runningServerDir = null;
+function noteRunningServerDir(dir) { runningServerDir = dir || null; }
+
 /** buildNumber de la build ACTIVA (0 si ninguna → se usa la horneada). */
 function getActiveBuildNumber() {
   const { active } = readState();
-  return active && hasServer(buildDir(active)) ? active : 0;
+  if (active && hasServer(buildDir(active))) return active;
+  return readBuildNumberOf(bakedServerDir());
+}
+
+/** buildNumber de lo que se está SIRVIENDO ahora (identidad intrínseca). */
+function getRunningBuildNumber() {
+  if (runningServerDir) {
+    const n = readBuildNumberOf(runningServerDir);
+    if (n) return n;
+  }
+  return getActiveBuildNumber();
 }
 /** Carpeta de la build activa si es válida; si no, null (→ horneada). */
 function activeServerDir() {
@@ -239,8 +274,14 @@ async function checkAndStageUpdate(updateUrl, log = () => {}) {
 
   const remote = parseInt(meta.buildNumber, 10) || 0;
   const active = getActiveBuildNumber();
-  log(`[VIEW] activa=${active} remota=${remote} instaladas=[${listBuilds().join(',')}]`);
-  if (remote <= active) return { staged: false, reason: 'al día' };
+  // Comparar también contra lo que se está SIRVIENDO: si state.json se perdió
+  // (reset manual, antivirus, userData distinto), `active` miente (0/horneada)
+  // y sin este guard se re-descarga y re-stagea la build que YA corre → prompt
+  // de reinicio espurio en loop.
+  const running = getRunningBuildNumber();
+  const current = Math.max(active, running);
+  log(`[VIEW] activa=${active} corriendo=${running} remota=${remote} instaladas=[${listBuilds().join(',')}]`);
+  if (remote <= current) return { staged: false, reason: 'al día' };
   if (hasServer(buildDir(remote))) {
     // Ya descargada (de antes): solo marcarla como pendiente.
     switchToBuild(remote, log);
@@ -280,6 +321,11 @@ async function checkAndStageUpdate(updateUrl, log = () => {}) {
     // Guardar en views/<remote>/ (atómico-ish) y marcar pendiente.
     fs.mkdirSync(viewsRoot(), { recursive: true });
     const dest = buildDir(remote);
+    // Jamás borrar el directorio que Next está sirviendo en vivo (posible si el
+    // estado se leyó mal): borrado parcial con locks de Windows = build corrupta.
+    if (runningServerDir && path.resolve(dest) === path.resolve(runningServerDir)) {
+      throw new Error(`views/${remote} es la build en uso; no se pisa en caliente`);
+    }
     rmrf(dest);
     try { fs.renameSync(serverDir, dest); }
     catch (_) { fs.cpSync(serverDir, dest, { recursive: true }); }
@@ -303,6 +349,8 @@ module.exports = {
   applyPendingView,
   activeServerDir,
   getActiveBuildNumber,
+  getRunningBuildNumber,
+  noteRunningServerDir,
   listBuilds,
   switchToBuild,
   readState,

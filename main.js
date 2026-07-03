@@ -78,6 +78,17 @@ app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 console.log('[PERF] Background throttling disabled (sync sigue corriendo minimized)');
 
+// CRÍTICO — en modo local (vista descargada) TODO va al mismo origen
+// 127.0.0.1:<puerto>: la app, /__backend y /__electric. Electric mantiene 8
+// shape streams (long-polls) vivos, y Chromium limita a 6 conexiones HTTP/1.1
+// por origen: los long-polls saturan el pool y cualquier navegación nueva
+// (fetch RSC de Next) queda encolada indefinidamente → la UI "se traba" (p. ej.
+// Ajustes no entra). La vista horneada no lo sufre porque usa URLs absolutas
+// (electric.titanio-pos.com = otro origen). Este switch elimina el límite solo
+// para el origen local.
+app.commandLine.appendSwitch('ignore-connections-limit', '127.0.0.1,localhost');
+console.log('[PERF] Límite de 6 conexiones/origen deshabilitado para 127.0.0.1 (long-polls de Electric via proxy local)');
+
 const crypto = require('crypto');
 const { autoUpdater } = require('electron-updater');
 const jwt = require('jsonwebtoken');
@@ -754,7 +765,10 @@ function createWindow() {
 
   // [Path B/prueba] Quitar service workers viejos que intercepten las llamadas
   // (la PWA queda desactivada en la caja; el offline va por el bundle local).
-  try { mainWindow.webContents.session.clearStorageData({ storages: ['serviceworkers'] }); } catch (_) {}
+  // También 'cachestorage': los caches de workbox (js/static de builds viejos,
+  // 1 año de maxAge) quedan huérfanos al quitar el SW y podrían servir assets
+  // de otra build si un SW volviera a registrarse.
+  try { mainWindow.webContents.session.clearStorageData({ storages: ['serviceworkers', 'cachestorage'] }); } catch (_) {}
 
   // "Reintentar" desde las pantallas de estado: navega al sentinela → re-ejecuta
   // loadAppUI (vuelve a decidir local/remoto y reintenta), sin loops a URLs muertas.
