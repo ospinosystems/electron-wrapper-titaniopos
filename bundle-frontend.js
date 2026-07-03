@@ -13,10 +13,12 @@
  *
  * Variables:
  *   FRONTEND_DIR   Ruta al repo frontend (default: ../titaniopos-frontend)
- *   BUNDLE_BUILD   Si =1, corre `npm run build` en el frontend antes de copiar.
- *                  IMPORTANTE: ese build debe usar los NEXT_PUBLIC_* de PROD
- *                  (API/Electric apuntando a producción), porque quedan
- *                  "horneados" en el bundle.
+ *   BUNDLE_STATIC  Si =1, empaqueta el EXPORT ESTÁTICO (out/ de `npm run
+ *                  build:caja`) en vez del standalone: sin servidor Node en la
+ *                  caja (el proxy sirve los archivos). Requiere haber corrido
+ *                  build:caja con CAJA_STORES.
+ *   BUNDLE_BUILD   Si =1, corre el build en el frontend antes de copiar
+ *                  (build:caja si BUNDLE_STATIC=1; npm run build si no).
  */
 
 const fs = require('fs');
@@ -41,12 +43,13 @@ if (!fs.existsSync(FRONTEND_DIR)) {
   fail(`No existe FRONTEND_DIR: ${FRONTEND_DIR}`);
 }
 
+const IS_STATIC = process.env.BUNDLE_STATIC === '1';
+
 if (process.env.BUNDLE_BUILD === '1') {
   log(`Corriendo build del frontend en ${FRONTEND_DIR} ...`);
-  log('Asegurate de que los NEXT_PUBLIC_* apuntan a PRODUCCIÓN.');
   // DISABLE_PWA: en la caja el offline lo da el server local, no el service
   // worker. Igual que el job `bundle` del CI del frontend.
-  execSync('npm run build', {
+  execSync(IS_STATIC ? 'npm run build:caja' : 'npm run build', {
     cwd: FRONTEND_DIR,
     stdio: 'inherit',
     env: { ...process.env, DISABLE_PWA: '1' },
@@ -56,8 +59,21 @@ if (process.env.BUNDLE_BUILD === '1') {
 const STANDALONE = path.join(FRONTEND_DIR, '.next', 'standalone');
 const STATIC = path.join(FRONTEND_DIR, '.next', 'static');
 const PUBLIC = path.join(FRONTEND_DIR, 'public');
+const EXPORT_OUT = path.join(FRONTEND_DIR, 'out');
 
-if (!fs.existsSync(path.join(STANDALONE, 'server.js'))) {
+// Excluye sw.js/workbox-*.js: artefactos de builds locales con la PWA activa
+// (gitignorados pero quedan en disco). Si se empaquetan, la caja registra un
+// service worker con caches de 1 año que sirve assets de builds viejos.
+const NO_SW_FILTER = (src) => !/(^|[\\/])(sw\.js|workbox-[^\\/]*\.js)$/i.test(src);
+
+if (IS_STATIC) {
+  if (!fs.existsSync(path.join(EXPORT_OUT, 'index.html'))) {
+    fail(
+      `No se encontró ${path.join(EXPORT_OUT, 'index.html')}.\n` +
+        `Corré primero "npm run build:caja" en el frontend (con CAJA_STORES), o usá BUNDLE_BUILD=1.`
+    );
+  }
+} else if (!fs.existsSync(path.join(STANDALONE, 'server.js'))) {
   fail(
     `No se encontró ${path.join(STANDALONE, 'server.js')}.\n` +
       `Corré primero "npm run build" en el frontend (o usá BUNDLE_BUILD=1).`
@@ -71,25 +87,28 @@ if (fs.existsSync(OUT_DIR)) {
 }
 fs.mkdirSync(OUT_DIR, { recursive: true });
 
-// 1) standalone completo (server.js + node_modules minimo + .next/server)
-log('Copiando standalone...');
-fs.cpSync(STANDALONE, OUT_DIR, { recursive: true });
+if (IS_STATIC) {
+  // Export estático: out/ plano es TODO el bundle (html + _next/static + assets
+  // de public ya incluidos por Next). Sin server.js, sin node_modules, sin shim.
+  log('Copiando export estático (out/)...');
+  fs.cpSync(EXPORT_OUT, OUT_DIR, { recursive: true, filter: NO_SW_FILTER });
+} else {
+  // 1) standalone completo (server.js + node_modules minimo + .next/server)
+  log('Copiando standalone...');
+  fs.cpSync(STANDALONE, OUT_DIR, { recursive: true });
 
-// 2) .next/static -> frontend-server/.next/static
-log('Copiando .next/static...');
-fs.cpSync(STATIC, path.join(OUT_DIR, '.next', 'static'), { recursive: true });
+  // 2) .next/static -> frontend-server/.next/static
+  log('Copiando .next/static...');
+  fs.cpSync(STATIC, path.join(OUT_DIR, '.next', 'static'), { recursive: true });
 
-// 3) public -> frontend-server/public
-// Se excluyen sw.js/workbox-*.js: son artefactos generados por builds locales
-// con la PWA activa (están gitignorados pero quedan en disco). Si se empaquetan,
-// la caja registra un service worker con caches de 1 año que luego sirve assets
-// de builds viejos al hacer hot-swap de la vista.
-if (fs.existsSync(PUBLIC)) {
-  log('Copiando public (sin sw.js/workbox-*.js)...');
-  fs.cpSync(PUBLIC, path.join(OUT_DIR, 'public'), {
-    recursive: true,
-    filter: (src) => !/(^|[\\/])(sw\.js|workbox-[^\\/]*\.js)$/i.test(src),
-  });
+  // 3) public -> frontend-server/public
+  if (fs.existsSync(PUBLIC)) {
+    log('Copiando public (sin sw.js/workbox-*.js)...');
+    fs.cpSync(PUBLIC, path.join(OUT_DIR, 'public'), {
+      recursive: true,
+      filter: NO_SW_FILTER,
+    });
+  }
 }
 
 // 3.5) Identidad intrínseca de la horneada (misma semántica de buildNumber que
@@ -120,7 +139,8 @@ try {
 // resolución falla, intenta resolver el request RELATIVO AL MÓDULO PADRE (o
 // absoluto) y devuelve el archivo si existe en disco. Es estricto: nunca cambia
 // una resolución exitosa; solo recupera archivos existentes que Node no encontró.
-patchServerShimForWindows();
+// Solo bundles standalone: el estático no tiene server.js que parchear.
+if (!IS_STATIC) patchServerShimForWindows();
 
 const size = execSyncSafe(`du -sh "${OUT_DIR}"`) || '';
 log(`Listo. Bundle en ${OUT_DIR} ${size.trim()}`);

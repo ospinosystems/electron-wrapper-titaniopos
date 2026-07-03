@@ -112,11 +112,18 @@ function resolveServerDir() {
   return path.join(__dirname, 'frontend-server');
 }
 
-/** ¿Hay un bundle local válido para servir? */
+/** ¿La vista en `dir` es un export estático (out/ plano, sin servidor Node)? */
+function isStaticView(dir) {
+  try {
+    return !fs.existsSync(path.join(dir, 'server.js')) && fs.existsSync(path.join(dir, 'index.html'));
+  } catch { return false; }
+}
+
+/** ¿Hay un bundle local válido para servir? (standalone legacy o estático) */
 function hasLocalBundle() {
   try {
     const dir = resolveServerDir();
-    return fs.existsSync(path.join(dir, 'server.js'));
+    return fs.existsSync(path.join(dir, 'server.js')) || fs.existsSync(path.join(dir, 'index.html'));
   } catch {
     return false;
   }
@@ -189,6 +196,17 @@ async function startFrontendServer() {
 
   flog(`startFrontendServer: packaged=${app.isPackaged} execPath=${process.execPath}`);
   flog(`serverDir=${serverDir}`);
+
+  // Vista ESTÁTICA (export de Next): sin proceso Node, el proxy sirve los
+  // archivos directo. Adiós fork, shim de Windows, zombis y carrera con Defender.
+  if (isStaticView(serverDir)) {
+    await startProxy(DEFAULT_PORT, 0, HOST, null, serverDir);
+    resolvedUrl = `http://${HOST}:${DEFAULT_PORT}`;
+    uiSource = 'local';
+    flog(`UI local ESTÁTICA lista (sin server Node) en ${resolvedUrl} desde ${serverDir}`);
+    scheduleViewUpdateCheck();
+    return { url: resolvedUrl, port: DEFAULT_PORT };
+  }
 
   if (!fs.existsSync(serverJs)) {
     throw new Error(`No se encontró el frontend empaquetado: ${serverJs}`);

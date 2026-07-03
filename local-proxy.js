@@ -22,6 +22,8 @@
 
 const http = require('http');
 const https = require('https');
+const fs = require('fs');
+const path = require('path');
 const { URL } = require('url');
 
 // Agentes con KEEP-ALIVE: reusan las conexiones (y el handshake TLS) al backend
@@ -116,13 +118,90 @@ function proxyToUpstream(req, res, upstreamBase, stripPrefix, spoof) {
   req.pipe(upReq);
 }
 
+// ── UI estática (export de Next: out/ plano, sin servidor Node) ─────────────
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8', // payloads RSC del router de Next
+  '.js': 'application/javascript; charset=utf-8',
+  '.mjs': 'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.map': 'application/json',
+  '.wasm': 'application/wasm',
+  '.webmanifest': 'application/manifest+json',
+};
+
+function sendFile(req, res, filePath, status = 200) {
+  const ext = path.extname(filePath).toLowerCase();
+  const headers = { 'content-type': MIME[ext] || 'application/octet-stream' };
+  // Assets con hash → cache larga; html/rsc → siempre frescos (hot-swap).
+  headers['cache-control'] = filePath.includes(`${path.sep}_next${path.sep}static${path.sep}`)
+    ? 'public, max-age=31536000, immutable'
+    : 'no-cache';
+  try { headers['content-length'] = fs.statSync(filePath).size; } catch (_) {}
+  res.writeHead(status, headers);
+  if (req.method === 'HEAD') return res.end();
+  const stream = fs.createReadStream(filePath);
+  stream.on('error', () => { try { res.destroy(); } catch (_) {} });
+  stream.pipe(res);
+}
+
+/**
+ * Sirve la SPA exportada con la semántica de rutas de Next export:
+ *   /login → login.html · / → index.html · /checkout/elorza → checkout/elorza.html
+ *   /checkout/elorza.txt (RSC del client router) → archivo exacto
+ *   desconocida → 404.html (la app solo navega a rutas del build).
+ */
+function serveStatic(req, res, rootDir) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.writeHead(405, { allow: 'GET, HEAD' });
+    return res.end();
+  }
+  let pathname;
+  try { pathname = decodeURIComponent(new URL(req.url, 'http://x').pathname); }
+  catch (_) { res.writeHead(400); return res.end(); }
+  pathname = pathname.replace(/\/+$/, '') || '/';
+
+  // Anti path-traversal: el resultado debe quedar DENTRO de rootDir.
+  const safe = (p) => {
+    const abs = path.resolve(rootDir, '.' + p);
+    return abs.startsWith(path.resolve(rootDir) + path.sep) || abs === path.resolve(rootDir) ? abs : null;
+  };
+  const isFile = (p) => { try { return !!p && fs.statSync(p).isFile(); } catch (_) { return false; } };
+
+  const exact = safe(pathname);
+  if (isFile(exact)) return sendFile(req, res, exact);
+  const asHtml = safe(pathname === '/' ? '/index.html' : pathname + '.html');
+  if (isFile(asHtml)) return sendFile(req, res, asHtml);
+  const asIndex = safe(pathname + '/index.html');
+  if (isFile(asIndex)) return sendFile(req, res, asIndex);
+
+  const notFound = safe('/404.html');
+  if (isFile(notFound)) return sendFile(req, res, notFound, 404);
+  res.writeHead(404);
+  res.end('Not found');
+}
+
 /**
  * Arranca el proxy en `localPort`.
  *  - /__backend, /__electric → backend/electric reales.
- *  - resto (UI): si `uiUpstream` está set (ONLINE) → la web remota; si no
- *    (OFFLINE) → Next standalone local (`nextPort`, el bundle empaquetado).
+ *  - resto (UI): si `uiUpstream` está set (ONLINE) → la web remota; si no,
+ *    `staticDir` (export estático) o el Next standalone local (`nextPort`,
+ *    bundles legacy).
  */
-function startProxy(localPort, nextPort, host = '127.0.0.1', uiUpstream = null) {
+function startProxy(localPort, nextPort, host = '127.0.0.1', uiUpstream = null, staticDir = null) {
   const localUI = `http://${host}:${nextPort}`;
   return new Promise((resolve, reject) => {
     server = http.createServer((req, res) => {
@@ -133,7 +212,8 @@ function startProxy(localPort, nextPort, host = '127.0.0.1', uiUpstream = null) 
         if (req.url.startsWith(ELECTRIC_PREFIX)) {
           return proxyToUpstream(req, res, ELECTRIC_URL, ELECTRIC_PREFIX, true);
         }
-        // UI: online → web remota; offline → bundle local.
+        // UI: online → web remota; offline → estático o bundle standalone local.
+        if (!uiUpstream && staticDir) return serveStatic(req, res, staticDir);
         return proxyToUpstream(req, res, uiUpstream || localUI, '', false);
       } catch (e) {
         console.error('[PROXY] Error manejando request:', e && e.message);

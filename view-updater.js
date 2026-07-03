@@ -45,7 +45,14 @@ function viewsRoot() { return path.join(app.getPath('userData'), 'views'); }
 function buildDir(n) { return path.join(viewsRoot(), String(n)); }
 function stateFile() { return path.join(viewsRoot(), 'state.json'); }
 
-function hasServer(dir) { try { return fs.existsSync(path.join(dir, 'server.js')); } catch { return false; } }
+// Una build de la vista es válida si es standalone (server.js, legacy) o un
+// export estático (index.html, sin servidor Node). Ambas conviven: rollback a
+// builds viejas standalone sigue funcionando.
+function hasServer(dir) {
+  try {
+    return fs.existsSync(path.join(dir, 'server.js')) || fs.existsSync(path.join(dir, 'index.html'));
+  } catch { return false; }
+}
 function rmrf(p) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
 
 function readState() {
@@ -314,14 +321,15 @@ async function checkAndStageUpdate(updateUrl, log = () => {}, notify = null) {
     }
 
     extractZip(zipPath, stage);
-    // El zip trae server.js en la raíz (verificado). Por las dudas, si viniera
-    // anidado en una subcarpeta, lo buscamos un nivel.
+    // El zip trae server.js (standalone legacy) o index.html (export estático)
+    // en la raíz. Por las dudas, si viniera anidado, lo buscamos un nivel.
     let serverDir = stage;
     if (!hasServer(serverDir)) {
       const sub = fs.readdirSync(stage).map((n) => path.join(stage, n)).find((p) => hasServer(p));
-      if (sub) serverDir = sub; else throw new Error('el zip no tiene server.js');
+      if (sub) serverDir = sub; else throw new Error('el zip no tiene server.js ni index.html');
     }
 
+    // Solo aplica a bundles standalone (no-op si no hay server.js).
     patchServerJsForWindows(serverDir);
     fs.writeFileSync(path.join(serverDir, 'view-version.json'), JSON.stringify({ buildNumber: remote, version: meta.version || String(remote) }));
 
