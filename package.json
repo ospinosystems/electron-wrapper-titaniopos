@@ -1,6 +1,6 @@
 {
   "name": "titaniopos-electron",
-  "version": "1.0.0",
+  "version": "1.0.67",
   "description": "TitanioPOS Desktop - Wrapper Electron con impresión silenciosa",
   "main": "main.js",
   "scripts": {
@@ -61,37 +61,53 @@
       {
         "from": "frontend-server",
         "to": "frontend-server",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "fiscal-server",
         "to": "fiscal-server",
-        "filter": ["**/*", "!__pycache__/**", "!*.pyc"]
+        "filter": [
+          "**/*",
+          "!__pycache__/**",
+          "!*.pyc"
+        ]
       },
       {
         "from": "python-embed",
         "to": "python-embed",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "bin",
         "to": "bin",
-        "filter": ["*.exe"]
+        "filter": [
+          "*.exe"
+        ]
       },
       {
         "from": "drivers",
         "to": "drivers",
-        "filter": ["*.exe"]
+        "filter": [
+          "*.exe"
+        ]
       },
       {
         "from": "drivers/verifone",
         "to": "drivers/verifone",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "vpos-rest",
         "to": "vpos-rest",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "directories": {
