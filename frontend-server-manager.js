@@ -162,7 +162,10 @@ function waitUntilUp(port, { timeoutMs = 60000, intervalMs = 400, alive = null }
  * no hay bundle / no levanta a tiempo.
  */
 async function startFrontendServer() {
-  if (child && resolvedUrl) {
+  // Idempotente en AMBOS modos: en estático no hay `child` (solo el proxy),
+  // pero resolvedUrl truthy = ya estamos sirviendo; relanzar el proxy daría
+  // EADDRINUSE (p. ej. con el "Reintentar" de la pantalla de error).
+  if (resolvedUrl) {
     return { url: resolvedUrl, port: DEFAULT_PORT };
   }
 
@@ -283,21 +286,34 @@ let viewCheckRunning = false;
 let viewUpdateNotifier = null;
 function setViewUpdateNotifier(fn) { viewUpdateNotifier = fn; }
 
-function runViewUpdateCheck(trigger) {
-  if (viewCheckRunning) { flog(`[VIEW] check omitido (${trigger}): ya hay uno corriendo`); return; }
+/**
+ * Corre UN chequeo de la vista (con el guard anti-solapamiento) y devuelve el
+ * resultado. Lo usan el timer periódico y el botón de Ajustes (view:check-now):
+ * mismo guard, mismo notificador → sin descargas duplicadas ni doble UI.
+ */
+async function checkViewUpdateNow(trigger) {
+  if (viewCheckRunning) {
+    flog(`[VIEW] check omitido (${trigger}): ya hay uno corriendo`);
+    return { ok: true, staged: false, reason: 'chequeo ya en curso' };
+  }
   viewCheckRunning = true;
   try {
     const { checkAndStageUpdate, DEFAULT_UPDATE_URL } = require('./view-updater');
     const url = (process.env.TITANIOPOS_VIEW_UPDATE_URL || '').trim() || DEFAULT_UPDATE_URL;
-    checkAndStageUpdate(url, flog, (ev, data) => {
+    const res = await checkAndStageUpdate(url, flog, (ev, data) => {
       try { if (viewUpdateNotifier) viewUpdateNotifier(ev, data); } catch (_) {}
-    })
-      .catch((e) => flog(`[VIEW] check falló (${trigger}): ${e && e.message}`))
-      .finally(() => { viewCheckRunning = false; });
+    });
+    return { ok: true, url, ...res };
   } catch (e) {
+    flog(`[VIEW] check falló (${trigger}): ${e && e.message}`);
+    return { ok: false, error: e && e.message };
+  } finally {
     viewCheckRunning = false;
-    flog(`[VIEW] no se pudo iniciar el check (${trigger}): ${e && e.message}`);
   }
+}
+
+function runViewUpdateCheck(trigger) {
+  void checkViewUpdateNow(trigger);
 }
 
 function scheduleViewUpdateCheck() {
@@ -315,6 +331,9 @@ function scheduleViewUpdateCheck() {
  *  "la app no abre"). */
 function stopFrontendServer() {
   try { stopProxy(); } catch (_) {}
+  // En modo estático no hay child: igual hay que invalidar resolvedUrl, o el
+  // próximo startFrontendServer devolvería la URL de un proxy ya cerrado.
+  resolvedUrl = null;
   if (!child) return;
   const pid = child.pid;
   try {
@@ -346,6 +365,7 @@ module.exports = {
   hasLocalBundle,
   resolveServerDir,
   setViewUpdateNotifier,
+  checkViewUpdateNow,
   getUiSource: () => uiSource,
   LOCAL_PORT: DEFAULT_PORT,
 };

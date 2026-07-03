@@ -942,6 +942,10 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    // La ventanita de actualización NO debe impedir 'window-all-closed': si
+    // queda viva, la app sigue corriendo sin ventana y el timer de 5 min la
+    // "reabre sola" al relanzar.
+    try { require('./view-update-window').close(); } catch (_) {}
   });
 }
 
@@ -1000,7 +1004,13 @@ ipcMain.handle('view:switch-build', (_e, buildNumber, opts = {}) => {
     const vu = require('./view-updater');
     const res = vu.switchToBuild(buildNumber, (m) => console.log(m));
     if (!res.ok) return res;
-    if (opts.relaunch !== false) { app.relaunch(); app.exit(0); }
+    if (opts.relaunch !== false) {
+      // app.exit() no dispara before-quit: matar el Next hijo explícitamente
+      // (si no, node.exe huérfano por cada switch en vistas standalone).
+      try { stopFrontendServer(); } catch (_) {}
+      app.relaunch();
+      app.exit(0);
+    }
     return { ok: true, relaunching: opts.relaunch !== false };
   } catch (e) { return { ok: false, error: e && e.message }; }
 });
@@ -1009,13 +1019,10 @@ ipcMain.handle('view:switch-build', (_e, buildNumber, opts = {}) => {
 // (updates.titanio-pos.com por default). Baja + valida + deja pendiente; se
 // aplica al reiniciar. Es el equivalente manual del check en background.
 ipcMain.handle('view:check-now', async () => {
+  // Pasa por el manager: mismo guard anti-solapamiento y mismo notificador que
+  // el check periódico (ventanita de progreso + temporizador de reinicio).
   try {
-    const vu = require('./view-updater');
-    const url = (process.env.TITANIOPOS_VIEW_UPDATE_URL || '').trim() || vu.DEFAULT_UPDATE_URL;
-    // Mismo notificador que el check automático: la ventanita de progreso y el
-    // temporizador de reinicio aparecen también cuando el check es manual.
-    const res = await vu.checkAndStageUpdate(url, (m) => console.log(m), handleViewUpdateEvent);
-    return { ok: true, url, ...res };
+    return await require('./frontend-server-manager').checkViewUpdateNow('manual (Ajustes)');
   } catch (e) { return { ok: false, error: e && e.message }; }
 });
 
@@ -1032,6 +1039,10 @@ let lastProgressPushAt = 0;
 function relaunchForViewUpdate(reason) {
   console.log(`[VIEW] relanzando la app para aplicar la vista (${reason})`);
   if (viewRestartTimer) { clearTimeout(viewRestartTimer); viewRestartTimer = null; }
+  // app.exit() NO dispara before-quit/window-all-closed: hay que matar el Next
+  // hijo explícitamente o queda un node.exe huérfano (~200 MB) por cada update
+  // en las cajas con vista standalone.
+  try { stopFrontendServer(); } catch (_) {}
   try { app.relaunch(); } catch (_) {}
   app.exit(0);
 }

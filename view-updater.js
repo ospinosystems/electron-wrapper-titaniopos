@@ -58,13 +58,24 @@ function rmrf(p) { try { fs.rmSync(p, { recursive: true, force: true }); } catch
 function readState() {
   try {
     const s = JSON.parse(fs.readFileSync(stateFile(), 'utf8'));
-    return { active: parseInt(s.active, 10) || null, next: parseInt(s.next, 10) || null };
-  } catch { return { active: null, next: null }; }
+    return {
+      active: parseInt(s.active, 10) || null,
+      next: parseInt(s.next, 10) || null,
+      // skip: build DESCARTADA por un rollback manual; el check no la re-stagea
+      // (si no, el auto-reinicio de 5 min desharía el rollback). Se limpia sola
+      // cuando sale una build más nueva.
+      skip: parseInt(s.skip, 10) || null,
+    };
+  } catch { return { active: null, next: null, skip: null }; }
 }
 function writeState(st) {
   try {
     fs.mkdirSync(viewsRoot(), { recursive: true });
-    fs.writeFileSync(stateFile(), JSON.stringify({ active: st.active || null, next: st.next || null }));
+    fs.writeFileSync(stateFile(), JSON.stringify({
+      active: st.active || null,
+      next: st.next || null,
+      skip: st.skip || null,
+    }));
   } catch (_) {}
 }
 
@@ -133,17 +144,24 @@ function activeServerDir() {
 function applyPendingView(log = () => {}) {
   const st = readState();
   if (!st.next) return false;
-  if (!hasServer(buildDir(st.next))) { writeState({ active: st.active, next: null }); return false; }
-  if (st.next === st.active) { writeState({ active: st.active, next: null }); return false; }
-  writeState({ active: st.next, next: null });
+  if (!hasServer(buildDir(st.next))) { writeState({ active: st.active, next: null, skip: st.skip }); return false; }
+  if (st.next === st.active) { writeState({ active: st.active, next: null, skip: st.skip }); return false; }
+  writeState({ active: st.next, next: null, skip: st.skip });
   log(`[VIEW] build ${st.next} aplicada en este arranque (antes: ${st.active || 'horneada'})`);
   return true;
 }
 
-/** Conserva las KEEP_BUILDS más nuevas + la activa + la pendiente; borra el resto. */
+/** Conserva las KEEP_BUILDS más nuevas + la activa + la pendiente + la que se
+ *  está SIRVIENDO; borra el resto. */
 function pruneOldBuilds(log = () => {}) {
   const st = readState();
   const protect = new Set([st.active, st.next].filter(Boolean));
+  // La build servida en esta sesión se protege POR DIRECTORIO aunque state.json
+  // esté perdido/desfasado: borrarla en vivo = 404 en toda la UI hasta reiniciar.
+  if (runningServerDir) {
+    const runningN = parseInt(path.basename(runningServerDir), 10);
+    if (Number.isInteger(runningN)) protect.add(runningN);
+  }
   const builds = listBuilds();
   const keep = new Set(builds.slice(0, KEEP_BUILDS));
   for (const n of builds) {
@@ -162,8 +180,14 @@ function switchToBuild(n, log = () => {}) {
   const target = parseInt(n, 10);
   if (!target || !hasServer(buildDir(target))) return { ok: false, reason: `build ${n} no instalada` };
   const st = readState();
-  writeState({ active: st.active, next: target });
-  log(`[VIEW] switch programado a build ${target} (se aplica al relanzar)`);
+  // Rollback manual (target menor que lo que se abandona): descartar la build
+  // mayor. Sin esto, el check periódico la re-stagea y el auto-reinicio de
+  // 5 min deshace el rollback — la build rota volvería sola en ~6 minutos.
+  const abandoned = Math.max(st.active || 0, st.next || 0, getRunningBuildNumber() || 0);
+  const skip = abandoned > target ? abandoned : null;
+  writeState({ active: st.active, next: target, skip });
+  log(`[VIEW] switch programado a build ${target} (se aplica al relanzar)` +
+    (skip ? ` — build ${skip} descartada hasta que salga una más nueva` : ''));
   return { ok: true };
 }
 
@@ -293,6 +317,22 @@ async function checkAndStageUpdate(updateUrl, log = () => {}, notify = null) {
   const current = Math.max(active, running);
   log(`[VIEW] activa=${active} corriendo=${running} remota=${remote} instaladas=[${listBuilds().join(',')}]`);
   if (remote <= current) return { staged: false, reason: 'al día' };
+  const st0 = readState();
+  // Build descartada por rollback manual: no re-instalarla. Se reanuda solo
+  // cuando la remota AVANZA más allá de la descartada.
+  if (st0.skip && remote === st0.skip) {
+    return { staged: false, buildNumber: remote, reason: 'descartada por rollback' };
+  }
+  if (st0.skip && remote > st0.skip) {
+    writeState({ active: st0.active, next: st0.next, skip: null });
+    log(`[VIEW] build ${st0.skip} descartada quedó atrás (remota=${remote}); se reanuda la actualización`);
+  }
+  // Ya está marcada como pendiente: NO re-stagear ni re-emitir 'staged' — el
+  // chequeo periódico reseteaba el timer de auto-reinicio a 5:00 cada vez y el
+  // reinicio no llegaba nunca.
+  if (st0.next === remote) {
+    return { staged: false, buildNumber: remote, reason: 'descargada, pendiente de reinicio' };
+  }
   if (hasServer(buildDir(remote))) {
     // Ya descargada (de antes): solo marcarla como pendiente.
     switchToBuild(remote, log);
@@ -346,7 +386,7 @@ async function checkAndStageUpdate(updateUrl, log = () => {}, notify = null) {
     catch (_) { fs.cpSync(serverDir, dest, { recursive: true }); }
 
     const st = readState();
-    writeState({ active: st.active, next: remote });
+    writeState({ active: st.active, next: remote, skip: st.skip });
     pruneOldBuilds(log);
 
     log(`[VIEW] build ${remote} lista → se aplica en el próximo arranque. instaladas=[${listBuilds().join(',')}]`);
@@ -370,6 +410,7 @@ module.exports = {
   noteRunningServerDir,
   listBuilds,
   switchToBuild,
+  pruneOldBuilds,
   readState,
   DEFAULT_UPDATE_URL,
   KEEP_BUILDS,
