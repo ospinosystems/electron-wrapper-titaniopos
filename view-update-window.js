@@ -33,7 +33,7 @@ function ensureWindow() {
     alwaysOnTop: true,
     skipTaskbar: true,
     show: false,
-    backgroundColor: '#111827',
+    transparent: true,
     webPreferences: {
       preload: path.join(__dirname, 'view-update-widget-preload.js'),
       contextIsolation: true,
@@ -49,6 +49,23 @@ function ensureWindow() {
   // showInactive: no roba el foco de la caja (puede haber una venta en curso).
   win.once('ready-to-show', () => { try { win.showInactive(); } catch (_) {} });
   win.on('closed', () => { win = null; });
+  // Mantenerla SIEMPRE dentro del área de trabajo: sin esto se puede arrastrar
+  // debajo de la barra de tareas de Windows y el botón queda inaccesible.
+  let clamping = false;
+  win.on('moved', () => {
+    if (clamping || !win || win.isDestroyed()) return;
+    try {
+      const b = win.getBounds();
+      const wa = screen.getDisplayMatching(b).workArea;
+      const x = Math.min(Math.max(b.x, wa.x), wa.x + wa.width - b.width);
+      const y = Math.min(Math.max(b.y, wa.y), wa.y + wa.height - b.height);
+      if (x !== b.x || y !== b.y) {
+        clamping = true;
+        win.setPosition(x, y);
+        clamping = false;
+      }
+    } catch (_) { clamping = false; }
+  });
   return win;
 }
 
@@ -69,10 +86,11 @@ function close() {
 
 module.exports = {
   showDownloading(buildNumber) {
-    send({ mode: 'downloading', buildNumber, pct: null });
+    send({ mode: 'downloading', buildNumber, got: 0, total: 0, ts: Date.now() });
   },
   setProgress(buildNumber, got, total) {
-    send({ mode: 'downloading', buildNumber, pct: total > 0 ? got / total : null });
+    // got/total/ts crudos: la ventana calcula % y velocidad (MB/s) con deltas.
+    send({ mode: 'downloading', buildNumber, got, total, ts: Date.now() });
   },
   showStaged(buildNumber, deadlineTs, restartCb) {
     onRestartNow = restartCb;

@@ -3,74 +3,118 @@
 <head>
 <meta charset="utf-8">
 <style>
+  :root {
+    --bg: #ffffff; --fg: #0a0a0a; --muted: #71717a; --border: #e4e4e7;
+    --track: #f4f4f5; --accent: #16a34a; --accent-fg: #ffffff; --danger: #dc2626;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #09090b; --fg: #fafafa; --muted: #a1a1aa; --border: #27272a;
+      --track: #27272a; --accent: #22c55e; --accent-fg: #052e16; --danger: #f87171;
+    }
+  }
   html, body { margin: 0; height: 100%; overflow: hidden; user-select: none;
-    font-family: 'Segoe UI', system-ui, sans-serif; background: #111827; color: #f9fafb; }
-  body { display: flex; flex-direction: column; gap: 9px; padding: 13px 15px;
-    box-sizing: border-box; -webkit-app-region: drag; border: 1px solid #374151; border-radius: 10px; }
-  .title { font-size: 13px; font-weight: 600; display: flex; justify-content: space-between; align-items: baseline; }
-  .sub { font-size: 11px; color: #9ca3af; }
-  .bar { height: 6px; border-radius: 3px; background: #374151; overflow: hidden; }
-  .fill { height: 100%; width: 0%; background: #22c55e; transition: width .2s; }
+    font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+  body { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px;
+    box-sizing: border-box; -webkit-app-region: drag;
+    border: 1px solid var(--border); border-radius: 12px; }
+  .head { display: flex; align-items: center; gap: 8px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
+  .dot.pulse { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .35 } }
+  .title { font-size: 13px; font-weight: 600; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pct { font-size: 12px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .bar { height: 6px; border-radius: 999px; background: var(--track); overflow: hidden; }
+  .fill { height: 100%; width: 0%; border-radius: 999px; background: var(--accent); transition: width .25s; }
   .fill.indet { width: 30%; animation: slide 1.2s ease-in-out infinite alternate; }
   @keyframes slide { from { margin-left: 0 } to { margin-left: 70% } }
+  .meta { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .row { display: flex; justify-content: space-between; align-items: center; }
+  .timer-label { font-size: 11px; color: var(--muted); }
   .timer { font-variant-numeric: tabular-nums; font-size: 22px; font-weight: 700; line-height: 1.1; }
-  button { -webkit-app-region: no-drag; background: #22c55e; border: 0; color: #052e16;
-    font-weight: 700; font-size: 12px; padding: 8px 12px; border-radius: 7px; cursor: pointer; }
-  button:hover { background: #4ade80; }
+  button { -webkit-app-region: no-drag; background: var(--accent); border: 0; color: var(--accent-fg);
+    font-family: inherit; font-weight: 600; font-size: 12.5px; padding: 9px 14px; border-radius: 8px; cursor: pointer; }
+  button:hover { filter: brightness(1.08); }
   .hidden { display: none; }
-  #err { color: #fca5a5; }
+  #err { font-size: 12px; color: var(--danger); }
 </style>
 </head>
 <body>
-  <div class="title"><span id="title">Actualización de la vista</span><span class="sub" id="pct"></span></div>
+  <div class="head">
+    <span class="dot pulse" id="dot"></span>
+    <span class="title" id="title">Actualización</span>
+    <span class="pct" id="pct"></span>
+  </div>
   <div class="bar" id="bar"><div class="fill" id="fill"></div></div>
+  <div class="meta" id="meta"><span id="size"></span><span id="speed"></span></div>
   <div class="row hidden" id="stagedRow">
     <div>
-      <div class="sub">Se reinicia en</div>
+      <div class="timer-label">La caja se reinicia en</div>
       <div class="timer" id="timer">5:00</div>
     </div>
     <button id="btn">Reiniciar ahora</button>
   </div>
-  <div class="sub hidden" id="err"></div>
+  <div id="err" class="hidden"></div>
 <script>
   const $ = (id) => document.getElementById(id);
   let tick = null;
-  function fmt(ms) {
+  let last = null; // { got, ts } para velocidad
+  let speedEma = 0;
+
+  const mb = (b) => (b / 1048576).toLocaleString('es-VE', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  const fmtClock = (ms) => {
     const s = Math.max(0, Math.ceil(ms / 1000));
     return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
-  }
+  };
+
   window.widget.onState((st) => {
     if (st.mode === 'downloading') {
-      $('title').textContent = 'Descargando la vista ' + st.buildNumber + '…';
+      $('title').textContent = 'Descargando actualización #' + st.buildNumber;
+      $('dot').classList.add('pulse');
       $('bar').classList.remove('hidden');
+      $('meta').classList.remove('hidden');
       $('stagedRow').classList.add('hidden');
       $('err').classList.add('hidden');
-      if (st.pct == null) {
+      if (st.total > 0) {
+        const pct = st.got / st.total;
+        $('fill').classList.remove('indet');
+        $('fill').style.width = Math.round(pct * 100) + '%';
+        $('pct').textContent = Math.round(pct * 100) + '%';
+        $('size').textContent = mb(st.got) + ' MB de ' + mb(st.total) + ' MB';
+        if (last && st.ts > last.ts && st.got >= last.got) {
+          const inst = (st.got - last.got) / ((st.ts - last.ts) / 1000); // bytes/s
+          speedEma = speedEma ? speedEma * 0.7 + inst * 0.3 : inst;
+          $('speed').textContent = mb(speedEma) + ' MB/s';
+        }
+        last = { got: st.got, ts: st.ts };
+      } else {
         $('fill').classList.add('indet');
         $('pct').textContent = '';
-      } else {
-        $('fill').classList.remove('indet');
-        $('fill').style.width = Math.round(st.pct * 100) + '%';
-        $('pct').textContent = Math.round(st.pct * 100) + '%';
+        $('size').textContent = 'Conectando…';
+        $('speed').textContent = '';
+        last = null; speedEma = 0;
       }
     } else if (st.mode === 'staged') {
-      $('title').textContent = 'Vista ' + st.buildNumber + ' lista';
+      $('title').textContent = 'Actualización #' + st.buildNumber + ' lista';
+      $('dot').classList.remove('pulse');
       $('pct').textContent = '';
       $('bar').classList.add('hidden');
+      $('meta').classList.add('hidden');
       $('err').classList.add('hidden');
       $('stagedRow').classList.remove('hidden');
       if (tick) clearInterval(tick);
-      const upd = () => { $('timer').textContent = fmt(st.deadlineTs - Date.now()); };
+      const upd = () => { $('timer').textContent = fmtClock(st.deadlineTs - Date.now()); };
       upd();
       tick = setInterval(upd, 250);
     } else if (st.mode === 'error') {
-      $('title').textContent = 'Actualización de la vista';
+      $('title').textContent = 'Actualización';
+      $('dot').classList.remove('pulse');
       $('pct').textContent = '';
       $('bar').classList.add('hidden');
+      $('meta').classList.add('hidden');
       $('stagedRow').classList.add('hidden');
       $('err').classList.remove('hidden');
-      $('err').textContent = 'No se pudo actualizar: ' + (st.message || 'error desconocido');
+      $('err').textContent = 'No se pudo descargar: ' + (st.message || 'error desconocido');
     }
   });
   $('btn').addEventListener('click', () => window.widget.restartNow());
