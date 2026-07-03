@@ -1017,6 +1017,65 @@ ipcMain.handle('view:check-now', async () => {
   } catch (e) { return { ok: false, error: e && e.message }; }
 });
 
+// ── UX de la actualización de la vista (checks automáticos en background) ────
+// Notificación al empezar la descarga, progreso en la barra de tareas, y al
+// quedar lista un diálogo: "Reiniciar ahora" o auto-reinicio a los 5 minutos.
+// Los eventos también se reenvían al renderer ('view-update') por si la vista
+// quiere pintar su propia UI (window.electronAPI.onViewUpdate).
+const VIEW_RESTART_DELAY_MS = 5 * 60 * 1000;
+let viewRestartTimer = null;
+
+function relaunchForViewUpdate(reason) {
+  console.log(`[VIEW] relanzando la app para aplicar la vista (${reason})`);
+  try { app.relaunch(); } catch (_) {}
+  app.exit(0);
+}
+
+function setupViewUpdateUX() {
+  const win = () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
+  const toRenderer = (payload) => { try { win()?.webContents.send('view-update', payload); } catch (_) {} };
+
+  require('./frontend-server-manager').setViewUpdateNotifier((ev, data) => {
+    toRenderer({ type: ev, ...data });
+    if (ev === 'downloading') {
+      try { win()?.setProgressBar(0.02); } catch (_) {}
+      try {
+        if (Notification.isSupported()) {
+          new Notification({ title: 'TitanioPOS', body: `Descargando la vista ${data.buildNumber}…` }).show();
+        }
+      } catch (_) {}
+    } else if (ev === 'progress') {
+      try { win()?.setProgressBar(data.total > 0 ? data.got / data.total : 0.5); } catch (_) {}
+    } else if (ev === 'error') {
+      try { win()?.setProgressBar(-1); } catch (_) {}
+    } else if (ev === 'staged') {
+      try { win()?.setProgressBar(-1); } catch (_) {}
+      // El timer corre aunque nadie responda el diálogo (caja desatendida).
+      if (viewRestartTimer) clearTimeout(viewRestartTimer);
+      viewRestartTimer = setTimeout(() => relaunchForViewUpdate('timer de 5 min'), VIEW_RESTART_DELAY_MS);
+      const w = win();
+      const opts = {
+        type: 'info',
+        title: 'Actualización de la vista',
+        message: `Se descargó la versión ${data.buildNumber}.`,
+        detail: 'La caja se reiniciará sola en 5 minutos para aplicarla, o puedes reiniciarla ahora.',
+        buttons: ['Reiniciar ahora', 'Esperar 5 minutos'],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+      };
+      (w ? dialog.showMessageBox(w, opts) : dialog.showMessageBox(opts))
+        .then(({ response }) => {
+          if (response === 0) {
+            if (viewRestartTimer) clearTimeout(viewRestartTimer);
+            relaunchForViewUpdate('botón Reiniciar ahora');
+          }
+        })
+        .catch(() => {});
+    }
+  });
+}
+
 // IPC: estado de GPU para diagnóstico de perf. Resultado equivalente a
 // chrome://gpu/ pero usable desde DevTools del renderer (donde chrome://gpu
 // está bloqueado por seguridad). Llamar como:
@@ -3084,6 +3143,7 @@ app.whenReady().then(() => {
   } else {
     console.log('[UPDATER] Omitido en desarrollo (solo app empaquetada)');
   }
+  setupViewUpdateUX();
 
   // Register printer handlers immediately after window is created
   registerPrinterHandlers(app, mainWindow);

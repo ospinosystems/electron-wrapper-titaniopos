@@ -253,17 +253,41 @@ async function startFrontendServer() {
  * boot). Solo en la app instalada. El host por defecto es prod
  * (updates.titanio-pos.com); se puede apuntar a uno de prueba con
  * TITANIOPOS_VIEW_UPDATE_URL.
+ *
+ * Cadencia: primer check a los 20s del boot y luego uno cada 30 min (override
+ * con TITANIOPOS_VIEW_CHECK_INTERVAL_MIN), así una caja que queda abierta todo
+ * el día también recibe la actualización sin reiniciar. main.js puede registrar
+ * un notificador (setViewUpdateNotifier) para mostrar progreso/diálogo.
  */
+let viewCheckScheduled = false;
+let viewCheckRunning = false;
+let viewUpdateNotifier = null;
+function setViewUpdateNotifier(fn) { viewUpdateNotifier = fn; }
+
+function runViewUpdateCheck(trigger) {
+  if (viewCheckRunning) { flog(`[VIEW] check omitido (${trigger}): ya hay uno corriendo`); return; }
+  viewCheckRunning = true;
+  try {
+    const { checkAndStageUpdate, DEFAULT_UPDATE_URL } = require('./view-updater');
+    const url = (process.env.TITANIOPOS_VIEW_UPDATE_URL || '').trim() || DEFAULT_UPDATE_URL;
+    checkAndStageUpdate(url, flog, (ev, data) => {
+      try { if (viewUpdateNotifier) viewUpdateNotifier(ev, data); } catch (_) {}
+    })
+      .catch((e) => flog(`[VIEW] check falló (${trigger}): ${e && e.message}`))
+      .finally(() => { viewCheckRunning = false; });
+  } catch (e) {
+    viewCheckRunning = false;
+    flog(`[VIEW] no se pudo iniciar el check (${trigger}): ${e && e.message}`);
+  }
+}
+
 function scheduleViewUpdateCheck() {
   if (!app.isPackaged) return; // solo la caja instalada se auto-actualiza
-  const url = (process.env.TITANIOPOS_VIEW_UPDATE_URL || '').trim();
-  setTimeout(() => {
-    try {
-      const { checkAndStageUpdate, DEFAULT_UPDATE_URL } = require('./view-updater');
-      checkAndStageUpdate(url || DEFAULT_UPDATE_URL, flog)
-        .catch((e) => flog(`[VIEW] check falló: ${e && e.message}`));
-    } catch (e) { flog(`[VIEW] no se pudo iniciar el check: ${e && e.message}`); }
-  }, 20000); // 20s tras el boot: no compite con la carga inicial
+  if (viewCheckScheduled) return; // idempotente (reintentos de arranque)
+  viewCheckScheduled = true;
+  const intervalMin = parseInt(process.env.TITANIOPOS_VIEW_CHECK_INTERVAL_MIN, 10) || 30;
+  setTimeout(() => runViewUpdateCheck('boot+20s'), 20000); // no compite con la carga inicial
+  setInterval(() => runViewUpdateCheck('periódico'), intervalMin * 60 * 1000);
 }
 
 /** Mata el proxy + el server local. CLAVE: en Windows usa taskkill /F /T para
@@ -302,6 +326,7 @@ module.exports = {
   getFrontendUrl,
   hasLocalBundle,
   resolveServerDir,
+  setViewUpdateNotifier,
   getUiSource: () => uiSource,
   LOCAL_PORT: DEFAULT_PORT,
 };

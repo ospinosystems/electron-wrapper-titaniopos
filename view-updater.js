@@ -263,9 +263,13 @@ function patchServerJsForWindows(serverDir) {
  * extrae + parchea, la guarda en views/<n>/ y marca next=<n> (se aplica al
  * próximo arranque). Prune de las viejas. NO toca la build en uso. Llamar en
  * BACKGROUND con la app ya abierta.
+ * `notify(evento, data)` (opcional) informa el avance para UI: 'downloading'
+ * {buildNumber,size}, 'progress' {buildNumber,got,total}, 'staged'
+ * {buildNumber}, 'error' {message}. Nunca lanza (se traga errores del caller).
  * @returns {Promise<{staged:boolean, buildNumber?:number, reason?:string}>}
  */
-async function checkAndStageUpdate(updateUrl, log = () => {}) {
+async function checkAndStageUpdate(updateUrl, log = () => {}, notify = null) {
+  const emit = (ev, data) => { try { if (notify) notify(ev, data); } catch (_) {} };
   const base = String(updateUrl || DEFAULT_UPDATE_URL).replace(/\/$/, '');
 
   let meta;
@@ -285,6 +289,7 @@ async function checkAndStageUpdate(updateUrl, log = () => {}) {
   if (hasServer(buildDir(remote))) {
     // Ya descargada (de antes): solo marcarla como pendiente.
     switchToBuild(remote, log);
+    emit('staged', { buildNumber: remote });
     return { staged: true, buildNumber: remote, reason: 'ya estaba descargada' };
   }
   if (!meta.url) return { staged: false, reason: 'latest.json sin url' };
@@ -294,7 +299,9 @@ async function checkAndStageUpdate(updateUrl, log = () => {}) {
   const stage = path.join(tmp, 'stage');
   try {
     log(`[VIEW] descargando build ${remote}: ${meta.url}`);
-    await downloadToFile(meta.url, zipPath);
+    emit('downloading', { buildNumber: remote, size: parseInt(meta.size, 10) || 0 });
+    await downloadToFile(meta.url, zipPath, 180000, (got, total) =>
+      emit('progress', { buildNumber: remote, got, total }));
 
     if (meta.size) {
       const got = fs.statSync(zipPath).size;
@@ -335,9 +342,11 @@ async function checkAndStageUpdate(updateUrl, log = () => {}) {
     pruneOldBuilds(log);
 
     log(`[VIEW] build ${remote} lista → se aplica en el próximo arranque. instaladas=[${listBuilds().join(',')}]`);
+    emit('staged', { buildNumber: remote });
     return { staged: true, buildNumber: remote };
   } catch (e) {
     log(`[VIEW] error preparando update (${e && e.message}) → conservo la vista actual`);
+    emit('error', { message: e && e.message });
     return { staged: false, reason: e && e.message };
   } finally {
     rmrf(tmp);

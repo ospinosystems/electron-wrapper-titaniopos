@@ -388,6 +388,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   viewSwitchBuild: (buildNumber, opts = {}) => ipcRenderer.invoke('view:switch-build', buildNumber, opts),
   /** Busca actualización de la vista AHORA contra prod: { ok, url, staged, buildNumber?, reason? }. */
   viewCheckNow: () => ipcRenderer.invoke('view:check-now'),
+  /** Eventos del check automático de la vista: { type: 'downloading'|'progress'|'staged'|'error', ... }.
+   *  Devuelve una función para desuscribirse. */
+  onViewUpdate: (callback) => {
+    const handler = (_event, payload) => { try { callback(payload); } catch (_) {} };
+    ipcRenderer.on('view-update', handler);
+    return () => ipcRenderer.removeListener('view-update', handler);
+  },
 
   onUpdaterEvent: (callback) => {
     const handler = (_event, payload) => {
