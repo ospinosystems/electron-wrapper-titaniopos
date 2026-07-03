@@ -254,10 +254,11 @@ async function startFrontendServer() {
  * (updates.titanio-pos.com); se puede apuntar a uno de prueba con
  * TITANIOPOS_VIEW_UPDATE_URL.
  *
- * Cadencia: primer check a los 20s del boot y luego uno cada 30 min (override
- * con TITANIOPOS_VIEW_CHECK_INTERVAL_MIN), así una caja que queda abierta todo
- * el día también recibe la actualización sin reiniciar. main.js puede registrar
- * un notificador (setViewUpdateNotifier) para mostrar progreso/diálogo.
+ * Cadencia: primer check a los 20s del boot y luego uno cada 3 min (override
+ * con TITANIOPOS_VIEW_CHECK_INTERVAL_MIN). latest.json pesa ~300 bytes tras
+ * CloudFront: chequear seguido es casi gratis y la actualización llega a las
+ * cajas a los pocos minutos de publicada (sin canal push). main.js puede
+ * registrar un notificador (setViewUpdateNotifier) para la UI de progreso.
  */
 let viewCheckScheduled = false;
 let viewCheckRunning = false;
@@ -285,7 +286,7 @@ function scheduleViewUpdateCheck() {
   if (!app.isPackaged) return; // solo la caja instalada se auto-actualiza
   if (viewCheckScheduled) return; // idempotente (reintentos de arranque)
   viewCheckScheduled = true;
-  const intervalMin = parseInt(process.env.TITANIOPOS_VIEW_CHECK_INTERVAL_MIN, 10) || 30;
+  const intervalMin = parseInt(process.env.TITANIOPOS_VIEW_CHECK_INTERVAL_MIN, 10) || 3;
   setTimeout(() => runViewUpdateCheck('boot+20s'), 20000); // no compite con la carga inicial
   setInterval(() => runViewUpdateCheck('periódico'), intervalMin * 60 * 1000);
 }
