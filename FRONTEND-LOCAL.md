@@ -26,8 +26,11 @@ El puerto fijo NO debe cambiarse en una caja ya instalada: el origen
 ## Build
 
 ```
-# 1) En el frontend, build con NEXT_PUBLIC_* de PRODUCCIÓN (quedan horneados):
-#    NEXT_PUBLIC_API_URL=<api prod>  NEXT_PUBLIC_ELECTRIC_URL=<electric prod>  ... npm run build
+# 1) En el frontend, build con URLs RELATIVAS al proxy local (igual que el job
+#    `bundle` del CI). ⚠️ NO usar URLs absolutas de prod: desde el origen
+#    127.0.0.1:3010 dan CORS; el proxy local (/__backend, /__electric) es quien
+#    reescribe cookies y spoofea el origin que Sanctum acepta.
+#    DISABLE_PWA=1 NEXT_PUBLIC_API_URL=/__backend NEXT_PUBLIC_ELECTRIC_URL=/__electric npm run build
 # 2) En el Electron:
 npm run build:portable     # corre prebuild + bundle:frontend + electron-builder
 ```

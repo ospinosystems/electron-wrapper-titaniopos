@@ -38,7 +38,17 @@
       "**/*",
       "!frontend-server/**",
       "!dist/**",
-      "!dist-*/**"
+      "!dist-*/**",
+      "!_view-host/**",
+      "!_chat-backup/**",
+      "!python-embed/**",
+      "!fiscal-server/**",
+      "!vpos-rest/**",
+      "!drivers/**",
+      "!**/*.zip",
+      "!**/*.tar.gz",
+      "!**/*.log",
+      "!.env.bak"
     ],
     "asarUnpack": [
       "**/*.ico"
