@@ -1,6 +1,6 @@
 {
   "name": "titaniopos-electron",
-  "version": "1.0.71",
+  "version": "1.0.72",
   "description": "TitanioPOS Desktop - Wrapper Electron con impresión silenciosa",
   "main": "main.js",
   "scripts": {
