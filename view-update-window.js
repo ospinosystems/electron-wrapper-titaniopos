@@ -12,8 +12,8 @@
 const { BrowserWindow, ipcMain, screen } = require('electron');
 const path = require('path');
 
-const W = 340;
-const H = 136;
+const W = 344;
+const H = 150;
 
 let win = null;
 let onRestartNow = null;
