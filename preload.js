@@ -5,6 +5,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Versiones de la app y runtimes
   getVersions: () => ipcRenderer.invoke('app-versions'),
 
+  /** Guarda el tema (dark|light) para que el splash inicial lo use. */
+  saveUiTheme: (theme) => ipcRenderer.invoke('ui:save-theme', theme),
+
+  /** Fuente de la UI activa: 'web' (online) | 'local' (bundle offline). */
+  getUiSource: () => ipcRenderer.invoke('ui:source'),
+
   /** (Re)crea el acceso directo de la app en el Escritorio. */
   createDesktopShortcut: () => ipcRenderer.invoke('app:create-desktop-shortcut'),
 
@@ -167,6 +173,47 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @returns {Promise<{success: boolean, status?: number, data?: object, error?: string}>}
    */
   pinpadTransaction: (payload) => ipcRenderer.invoke('pinpad-transaction', payload),
+
+  /**
+   * Smart POS (Megasoft VPOS RESTService) — compra/anulación de punto de venta
+   * contra el servicio local en http://localhost:8085/vpos/...
+   * @param {object} payload - { operation, amount(céntimos), document, numSeq, terminalVirtual, vposUrl }
+   * @returns {Promise<{success: boolean, status?: number, data?: object, error?: string}>}
+   */
+  megaPosTransaction: (payload) => ipcRenderer.invoke('mega-pos-transaction', payload),
+
+  /** Verifica que el VPOS RESTService está vivo. */
+  megaPosPing: (payload = {}) => ipcRenderer.invoke('mega-pos-ping', payload),
+
+  /** Reinicia / fuerza el arranque del servicio VPOS local. */
+  megaPosRestart: () => ipcRenderer.invoke('mega-pos-restart'),
+
+  /** Tareas de caja: imprimeUltimoVoucher | imprimeUltimoVoucherP | precierre | cierre | ultimoCierre. */
+  megaPosTask: (action) => ipcRenderer.invoke('mega-pos-task', { action }),
+
+  /** Lee el texto del voucher/reporte que generó el VPOS (ruta de nombreVoucher). */
+  megaPosReadVoucher: (filePath) => ipcRenderer.invoke('mega-pos-read-voucher', filePath),
+
+  /** Instala el driver Verifone (P200) en silencio y elevado; deja el pinpad en COM9. */
+  megaPosInstallDriver: () => ipcRenderer.invoke('mega-pos-install-driver'),
+
+  /** Lista puertos COM y detecta si hay un Verifone conectado (prueba de conexión). */
+  megaPosDetectPinpad: () => ipcRenderer.invoke('mega-pos-detect-pinpad'),
+
+  /** Lee la config Smart POS (host/port Merchant Server + vtid/afiliación). */
+  megaPosConfigGet: () => ipcRenderer.invoke('mega-pos-config-get'),
+
+  /** Guarda la config Smart POS y reinicia el servicio para aplicarla. */
+  megaPosConfigSave: (config) => ipcRenderer.invoke('mega-pos-config-save', config),
+
+  /** Devuelve las secciones clave del vposconf.ini en uso (read-only, para verificar en la UI). */
+  megaPosConfigDump: () => ipcRenderer.invoke('mega-pos-config-dump'),
+
+  /** Lista de archivos de config relevantes (nombre + ruta). */
+  megaPosConfigFiles: () => ipcRenderer.invoke('mega-pos-config-files'),
+
+  /** Contenido completo de un archivo de config (key: settings|vposconf|vposuniversal). */
+  megaPosReadConfigFile: (key) => ipcRenderer.invoke('mega-pos-read-config-file', key),
 
   // ==================== FISCAL MACHINE (HKA) ====================
   
@@ -331,6 +378,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Estado actual del updater (para reconstruir el banner tras un reload). */
   updaterGetState: () => ipcRenderer.invoke('updater:get-state'),
 
+  /** Busca actualizaciones de la app (diálogos nativos + banner). */
+  updaterCheck: () => ipcRenderer.invoke('updater:check'),
+
+  // ==================== HOT-SWAP DE LA VISTA (builds del frontend) ====================
+  /** Lista las builds de la vista instaladas: { ok, active, next, builds:[n], keep }. */
+  viewListBuilds: () => ipcRenderer.invoke('view:list-builds'),
+  /** Switchea a una build instalada y relanza (opts.relaunch=false para solo programar). */
+  viewSwitchBuild: (buildNumber, opts = {}) => ipcRenderer.invoke('view:switch-build', buildNumber, opts),
+  /** Busca actualización de la vista AHORA contra prod: { ok, url, staged, buildNumber?, reason? }. */
+  viewCheckNow: () => ipcRenderer.invoke('view:check-now'),
+  /** Eventos del check automático de la vista: { type: 'downloading'|'progress'|'staged'|'error', ... }.
+   *  Devuelve una función para desuscribirse. */
+  onViewUpdate: (callback) => {
+    const handler = (_event, payload) => { try { callback(payload); } catch (_) {} };
+    ipcRenderer.on('view-update', handler);
+    return () => ipcRenderer.removeListener('view-update', handler);
+  },
+
   onUpdaterEvent: (callback) => {
     const handler = (_event, payload) => {
       try { callback(payload); } catch (err) { console.error('[updater event] handler threw:', err); }
@@ -348,6 +413,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   remoteSupportDownload: () => ipcRenderer.invoke('remote-support:download'),
   /** Activa el acceso desatendido con contraseña fija. Devuelve { id }. */
   remoteSupportEnable: (password) => ipcRenderer.invoke('remote-support:enable', password),
+  /** Repara: desinstala limpio + reinstala el servicio en un solo UAC. */
+  remoteSupportRepair: (password) => ipcRenderer.invoke('remote-support:repair', password),
   /** Desactiva el acceso desatendido y cierra RustDesk. */
   remoteSupportDisable: () => ipcRenderer.invoke('remote-support:disable'),
   /** Abre la ventana de RustDesk manualmente. */

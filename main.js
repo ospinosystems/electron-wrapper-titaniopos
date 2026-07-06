@@ -1,6 +1,12 @@
 const { app, BrowserWindow, ipcMain, Menu, dialog, nativeImage, Notification, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const {
+  startFrontendServer,
+  stopFrontendServer,
+  hasLocalBundle,
+  resolveServerDir,
+} = require('./frontend-server-manager');
 
 function readBuildAppId() {
   try {
@@ -72,12 +78,25 @@ app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 console.log('[PERF] Background throttling disabled (sync sigue corriendo minimized)');
 
+// CRÍTICO — en modo local (vista descargada) TODO va al mismo origen
+// 127.0.0.1:<puerto>: la app, /__backend y /__electric. Electric mantiene 8
+// shape streams (long-polls) vivos, y Chromium limita a 6 conexiones HTTP/1.1
+// por origen: los long-polls saturan el pool y cualquier navegación nueva
+// (fetch RSC de Next) queda encolada indefinidamente → la UI "se traba" (p. ej.
+// Ajustes no entra). La vista horneada no lo sufre porque usa URLs absolutas
+// (electric.titanio-pos.com = otro origen). Este switch elimina el límite solo
+// para el origen local.
+app.commandLine.appendSwitch('ignore-connections-limit', '127.0.0.1,localhost');
+console.log('[PERF] Límite de 6 conexiones/origen deshabilitado para 127.0.0.1 (long-polls de Electric via proxy local)');
+
 const crypto = require('crypto');
 const { autoUpdater } = require('electron-updater');
 const jwt = require('jsonwebtoken');
 const { registerPrinterHandlers } = require('./printer-handlers');
 const { registerFiscalHandlers } = require('./fiscal-handlers');
 const { registerPinpadHandlers } = require('./pinpad-handlers');
+const { registerMegaPosHandlers } = require('./mega-pos-handlers');
+const { startMegaPosServer, stopMegaPosServer, restartMegaPosServer, getVposRuntimeDir } = require('./mega-pos-manager');
 const { registerCajaConfigHandlers } = require('./caja-config-handlers');
 const { registerRemoteSupportHandlers, startRemoteSupportIfEnabled } = require('./remote-support-handlers');
 const { registerPrinterDriverHandlers } = require('./printer-driver-handlers');
@@ -119,6 +138,14 @@ const loadEnvFile = (envPath, logTag) => {
     console.warn('[ENV] Could not load', envPath, error.message);
   }
 };
+
+// .env EXTERNO (editable, en resources/ junto a la app) que SOBRESCRIBE al
+// horneado: permite reconfigurar la caja (backend / electric / updates entre
+// prod y local) SIN recompilar. Se carga PRIMERO porque loadEnvFile no pisa una
+// var ya seteada (gana el primero). Queda como archivo suelto en resources/.
+if (process.resourcesPath) {
+  loadEnvFile(path.join(process.resourcesPath, '.env'), 'resources/.env (externo, editable)');
+}
 
 const ROOT_ENV_PATH = path.join(__dirname, '.env');
 loadEnvFile(ROOT_ENV_PATH, ROOT_ENV_PATH);
@@ -260,7 +287,13 @@ if (!gotTheLock) {
   app.exit(0);
 } else {
   app.on('second-instance', () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
+    // Si la ventana se perdió pero el proceso sigue vivo (quedó sin ventana),
+    // al relanzar el .exe RECREAMOS la ventana en vez de no hacer nada. Esto
+    // evita el caso "la app no abre, no hace nada".
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      try { createWindow(); } catch (e) { console.error('[APP] No se pudo recrear ventana:', e && e.message); }
+      return;
+    }
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
     mainWindow.focus();
@@ -490,6 +523,206 @@ function openDevToolsWithPasswordDialog(browserWindow) {
   promptWin.once('ready-to-show', () => promptWin.show());
 }
 
+// ¿Servir la UI desde el bundle local (abre sin internet) o desde APP_URL remota?
+// - TITANIOPOS_FRONTEND_MODE=local|remote fuerza el modo.
+// - Por defecto: local si hay bundle empaquetado; remoto si no (dev con next dev).
+function shouldUseLocalFrontend() {
+  const mode = String(process.env.TITANIOPOS_FRONTEND_MODE || '').trim().toLowerCase();
+  if (mode === 'local') return true;
+  if (mode === 'remote') return false;
+  return hasLocalBundle();
+}
+
+// Sentinela para "Reintentar" desde las pantallas internas: navegar a esta URL
+// hace que Electron vuelva a ejecutar loadAppUI (no recarga la página de estado).
+const RETRY_SENTINEL = 'tpos://retry';
+
+// Pantalla de estado unificada (dark, sin emoji, acorde a la UI). Sirve para:
+// boot (spinner), error de arranque local, y sin conexión (modo remoto).
+function buildStatusPage({ title, message, spinner = false, retry = false, autoOnline = false }) {
+  // Colores tomados del tema dark de la app (src/app/globals.css): fondo casi
+  // negro, primario NARANJA, texto casi blanco. Electron soporta oklch().
+  const html = `<!doctype html><html lang="es"><head><meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1"><style>
+    :root{
+      --bg:oklch(0.15 0 0); --fg:oklch(0.98 0 0); --muted:oklch(0.65 0.01 55);
+      --primary:oklch(0.66 0.22 55); --primary-h:oklch(0.6 0.2 54); --border:oklch(0.3 0 0);
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);
+      font-family:system-ui,'Segoe UI',sans-serif;display:flex;align-items:center;
+      justify-content:center;overflow:hidden}
+    /* glow naranja suave como el fondo del login */
+    body::before{content:'';position:fixed;top:-10%;right:-5%;width:520px;height:520px;
+      background:var(--primary);opacity:.12;border-radius:50%;filter:blur(150px);pointer-events:none}
+    body::after{content:'';position:fixed;bottom:-15%;left:-5%;width:440px;height:440px;
+      background:var(--primary);opacity:.07;border-radius:50%;filter:blur(130px);pointer-events:none}
+    .box{position:relative;max-width:420px;text-align:center;padding:40px 32px}
+    .brand{font-size:22px;font-weight:600;letter-spacing:-.01em;margin-bottom:30px}
+    .brand b{color:var(--primary);font-weight:700}
+    .s{width:30px;height:30px;margin:0 auto 22px;border:3px solid var(--border);
+      border-top-color:var(--primary);border-radius:50%;animation:r .8s linear infinite}
+    @keyframes r{to{transform:rotate(360deg)}}
+    h1{font-size:18px;font-weight:600;margin:0 0 10px}
+    p{color:var(--muted);font-size:14px;line-height:1.55;margin:0 0 24px}
+    /* Igual que el Button de la app: rounded (4px), h-9 (36px), px-4, text-sm font-medium */
+    button{background:var(--primary);color:#fff;border:0;border-radius:4px;height:36px;
+      padding:0 16px;font-size:14px;font-weight:500;cursor:pointer;transition:background .15s}
+    button:hover{background:var(--primary-h)} button:disabled{opacity:.5;cursor:default}
+    .st{margin-top:18px;font-size:12px;color:var(--muted);opacity:.8;min-height:16px}
+  </style></head><body>
+    <div class="box">
+      <div class="brand">Titanio<b>POS</b></div>
+      ${spinner ? '<div class="s"></div>' : ''}
+      <h1>${title}</h1>
+      ${message ? `<p>${message}</p>` : ''}
+      ${retry ? '<button id="retry" onclick="go()">Reintentar</button>' : ''}
+      <div class="st" id="st"></div>
+    </div>
+    <script>
+      function go(){ var b=document.getElementById('retry'); if(b)b.disabled=true;
+        var s=document.getElementById('st'); if(s)s.textContent='Reintentando…';
+        location.href=${JSON.stringify(RETRY_SENTINEL)}; }
+      ${autoOnline ? `
+      window.addEventListener('online', go);
+      setInterval(function(){ if(navigator.onLine) go(); }, 5000);` : ''}
+    </script>
+  </body></html>`;
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+}
+
+// Splash inicial = MISMO loader branded que la app (BrandedLoader: logo +
+// "Titanio POS" + spinner naranja, sobre fondo oscuro). Se replica en HTML y el
+// logo se embebe en base64 (leído del bundle), así se ve idéntico aunque el
+// server local todavía no haya levantado.
+// Tema persistido por la app (para que el splash combine con el tema del usuario).
+function uiThemePath() {
+  try { return path.join(app.getPath('userData'), 'ui-theme'); } catch { return null; }
+}
+function getSavedUiTheme() {
+  try {
+    const p = uiThemePath();
+    if (p && fs.existsSync(p)) { const t = fs.readFileSync(p, 'utf8').trim(); if (t === 'light' || t === 'dark') return t; }
+  } catch (_) {}
+  // Sin tema guardado (primera apertura): usar el del sistema operativo.
+  try { return require('electron').nativeTheme.shouldUseDarkColors ? 'dark' : 'light'; } catch (_) {}
+  return 'dark';
+}
+function saveUiTheme(t) {
+  if (t !== 'light' && t !== 'dark') return;
+  try { const p = uiThemePath(); if (p) fs.writeFileSync(p, t); } catch (_) {}
+}
+
+// La app avisa su tema (dark|light) vía preload → lo guardamos para el splash.
+ipcMain.handle('ui:save-theme', (_e, theme) => { saveUiTheme(theme); return true; });
+
+// Fuente de la UI activa: 'web' (online) | 'local' (bundle offline). Para el badge.
+ipcMain.handle('ui:source', () => {
+  try { return require('./frontend-server-manager').getUiSource(); } catch (_) { return 'local'; }
+});
+
+let _bootSplash = null;
+function getBootSplash() {
+  if (_bootSplash) return _bootSplash;
+  // Paleta según el tema guardado (claro/oscuro) para que NO salte de color.
+  const dark = getSavedUiTheme() !== 'light';
+  const C = dark
+    ? { bg: 'oklch(0.15 0 0)', fg: 'oklch(0.98 0 0)', muted: 'oklch(0.65 0.01 55)', track: 'rgba(255,255,255,.1)' }
+    : { bg: 'oklch(1 0 0)', fg: 'oklch(0.4 0 0)', muted: 'oklch(0.5 0.01 55)', track: 'rgba(0,0,0,.08)' };
+  let logoTag = '';
+  try {
+    const logoPath = path.join(resolveServerDir(), 'public', 'assets', 'images', 'titanio-icon-2.png');
+    if (fs.existsSync(logoPath)) {
+      const b64 = fs.readFileSync(logoPath).toString('base64');
+      logoTag = `<img src="data:image/png;base64,${b64}" alt="" style="width:48px;height:48px;object-fit:contain">`;
+    }
+  } catch (_) { /* sin logo: queda solo el texto + barra */ }
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+    html,body{height:100%;margin:0;background:${C.bg};color:${C.fg};
+      font-family:system-ui,'Segoe UI',sans-serif;display:flex;flex-direction:column;
+      align-items:center;justify-content:center;gap:28px;overflow:hidden}
+    /* glow naranja sutil (como el login) */
+    body::before{content:'';position:fixed;top:-12%;right:-6%;width:480px;height:480px;
+      background:oklch(0.66 0.22 55);opacity:.10;border-radius:50%;filter:blur(150px)}
+    body::after{content:'';position:fixed;bottom:-16%;left:-6%;width:420px;height:420px;
+      background:oklch(0.66 0.22 55);opacity:.06;border-radius:50%;filter:blur(130px)}
+    .head{position:relative;display:flex;flex-direction:column;align-items:center;gap:8px}
+    .brand{display:flex;align-items:center;gap:8px}
+    .brand span{font-size:24px;font-weight:600;letter-spacing:-.01em}
+    .brand b{color:oklch(0.66 0.22 55);font-weight:700}
+    .tag{font-size:13px;letter-spacing:.02em;color:${C.muted}}
+    /* Barra INDETERMINADA (va y viene) durante el arranque: no hay progreso real
+       todavía (la barra 0→100 la lleva el overlay de React después). */
+    .ind{position:relative;width:220px;max-width:72vw;height:3px;margin-top:16px;
+      border-radius:99px;overflow:hidden;background:${C.track}}
+    .ind i{position:absolute;top:0;left:0;width:38%;height:100%;border-radius:99px;
+      background:oklch(0.66 0.22 55);animation:slide 1.05s ease-in-out infinite alternate}
+    @keyframes slide{from{left:0%}to{left:62%}}
+    .boot{margin-top:10px;font-size:12px;letter-spacing:.02em;color:${C.muted}}
+  </style></head><body>
+    <div class="head">
+      <div class="brand">${logoTag}<span>Titanio<b>POS</b></span></div>
+      <div class="tag">Sistema de punto de venta</div>
+    </div>
+    <div class="ind"><i></i></div>
+    <div class="boot">Iniciando…</div>
+  </body></html>`;
+  _bootSplash = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+  return _bootSplash;
+}
+
+// Pantalla "sin conexión" (modo remoto): fallo de red al cargar la URL remota.
+function buildOfflinePage() {
+  return buildStatusPage({
+    title: 'Sin conexión',
+    message: 'No se pudo conectar con TitanioPOS. Revisá la conexión de la caja. Se reintentará solo apenas vuelva internet.',
+    retry: true, autoOnline: true,
+  });
+}
+
+// Pantalla de error de arranque local (no es problema de internet).
+function buildLocalErrorPage(detail) {
+  return buildStatusPage({
+    title: 'No se pudo iniciar la app',
+    message: `Hubo un problema al arrancar TitanioPOS localmente.${detail ? '<br><span style="color:#6b7280;font-size:12px">' + detail + '</span>' : ''}`,
+    retry: true,
+  });
+}
+
+// Carga la UI. Local: arranca el server standalone (con reintentos) y apunta al
+// proxy local; si no levanta, muestra error con Reintentar (NO cae a una URL muerta).
+// Remoto: carga APP_URL; si falla la red, el handler did-fail-load muestra "sin conexión".
+async function loadAppUI(win) {
+  if (shouldUseLocalFrontend()) {
+    if (!win.isDestroyed()) win.loadURL(getBootSplash());
+    // Reintenta varias veces detrás del splash. El primer arranque tras un build
+    // o actualización suele fallar porque el ANTIVIRUS (Windows Defender) está
+    // escaneando los .js recién creados y los bloquea un instante → Next no puede
+    // leer un módulo y sale. Reintentando con pausa, apenas el antivirus libera
+    // los archivos arranca, sin que el usuario vea el error.
+    const attempts = 8;
+    const delayMs = 1500;
+    for (let i = 1; i <= attempts; i++) {
+      try {
+        const { url } = await startFrontendServer();
+        if (!win.isDestroyed()) win.loadURL(url);
+        return;
+      } catch (e) {
+        const msg = e && e.message ? e.message : String(e);
+        console.error(`[FRONTEND] Arranque local falló (intento ${i}/${attempts}): ${msg}`);
+        try { stopFrontendServer(); } catch (_) {}
+        if (i < attempts) {
+          await new Promise((r) => setTimeout(r, delayMs));
+        } else if (!win.isDestroyed()) {
+          win.loadURL(buildLocalErrorPage(msg));
+        }
+      }
+    }
+    return;
+  }
+  if (!win.isDestroyed()) win.loadURL(APP_URL);
+}
+
 function createWindow() {
   if (process.platform === 'win32' && !app.isPackaged) {
     console.log(
@@ -512,7 +745,7 @@ function createWindow() {
     // backgroundColor evita el flash blanco inicial sin afectar la carga.
     // No usamos show:false porque cuando la PWA tarda en responder, el
     // usuario se queda mirando una pantalla gris sin feedback.
-    backgroundColor: '#111827',
+    backgroundColor: getSavedUiTheme() === 'light' ? '#ffffff' : '#1a1a1a',
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -527,7 +760,38 @@ function createWindow() {
     title: 'TitanioPOS'
   });
 
-  mainWindow.loadURL(APP_URL);
+  // Abrir maximizada por defecto (la caja se usa a pantalla completa).
+  mainWindow.maximize();
+
+  // [Path B/prueba] Quitar service workers viejos que intercepten las llamadas
+  // (la PWA queda desactivada en la caja; el offline va por el bundle local).
+  // También 'cachestorage': los caches de workbox (js/static de builds viejos,
+  // 1 año de maxAge) quedan huérfanos al quitar el SW y podrían servir assets
+  // de otra build si un SW volviera a registrarse.
+  try { mainWindow.webContents.session.clearStorageData({ storages: ['serviceworkers', 'cachestorage'] }); } catch (_) {}
+
+  // "Reintentar" desde las pantallas de estado: navega al sentinela → re-ejecuta
+  // loadAppUI (vuelve a decidir local/remoto y reintenta), sin loops a URLs muertas.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (url && url.startsWith(RETRY_SENTINEL)) {
+      event.preventDefault();
+      loadAppUI(mainWindow);
+    }
+  });
+
+  // Si la carga remota falla por red, mostrar "sin conexión" en vez de la pantalla
+  // gris de Chromium. Solo frame principal, solo fallos de red reales (no data:/sentinela).
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (!isMainFrame) return;
+    if (errorCode === -3) return; // ERR_ABORTED (navegación reemplazada): ignorar
+    if (validatedURL && (validatedURL.startsWith('data:') || validatedURL.startsWith('tpos:'))) return;
+    // En modo local los fallos los maneja loadAppUI (pantalla de error con reintento).
+    if (shouldUseLocalFrontend()) return;
+    console.warn(`[APP] did-fail-load (${errorCode} ${errorDescription}) en ${validatedURL} → sin conexión`);
+    if (!mainWindow.isDestroyed()) mainWindow.loadURL(buildOfflinePage());
+  });
+
+  loadAppUI(mainWindow);
 
   if (process.platform === 'win32' && winIcon) {
     mainWindow.once('show', () => {
@@ -678,6 +942,10 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    // La ventanita de actualización NO debe impedir 'window-all-closed': si
+    // queda viva, la app sigue corriendo sin ventana y el timer de 5 min la
+    // "reabre sola" al relanzar.
+    try { require('./view-update-window').close(); } catch (_) {}
   });
 }
 
@@ -690,12 +958,11 @@ ipcMain.handle('app-versions', () => ({
 }));
 
 // (Re)crea el acceso directo en el Escritorio. Lo usan el botón de Ajustes y el
-// arranque (self-heal): los updates NSIS borran el acceso directo del escritorio
-// y no lo recrean, así que al iniciar lo restauramos si falta.
+// arranque (self-heal): los updates NSIS borran el acceso directo y no lo
+// recrean, así que al iniciar lo restauramos si falta.
 //   - force=false (arranque): solo crea si NO existe (no pisa nada).
 //   - force=true  (botón):    siempre lo reescribe.
 function ensureDesktopShortcut({ force = false } = {}) {
-  // En dev process.execPath es electron.exe; el acceso no serviría.
   if (!app.isPackaged) return { success: false, error: 'Solo disponible en la app instalada.' };
   try {
     const desktop = app.getPath('desktop');
@@ -719,6 +986,99 @@ function ensureDesktopShortcut({ force = false } = {}) {
 
 // IPC: botón de Ajustes para (re)crear el acceso directo si el usuario lo borró.
 ipcMain.handle('app:create-desktop-shortcut', () => ensureDesktopShortcut({ force: true }));
+
+// IPC hot-swap de la vista: listar builds instaladas y switchear a demanda.
+// Útil para rollback (volver a una build anterior conocida-buena) desde soporte.
+ipcMain.handle('view:list-builds', () => {
+  try {
+    const vu = require('./view-updater');
+    const { active, next } = vu.readState();
+    return { ok: true, active: vu.getActiveBuildNumber(), next: next || null, builds: vu.listBuilds(), keep: vu.KEEP_BUILDS };
+  } catch (e) { return { ok: false, error: e && e.message }; }
+});
+
+// Switch a una build instalada + relanzar para aplicarla. relaunch=false solo
+// programa el cambio (se aplica en el próximo arranque manual).
+ipcMain.handle('view:switch-build', (_e, buildNumber, opts = {}) => {
+  try {
+    const vu = require('./view-updater');
+    const res = vu.switchToBuild(buildNumber, (m) => console.log(m));
+    if (!res.ok) return res;
+    if (opts.relaunch !== false) {
+      // app.exit() no dispara before-quit: matar el Next hijo explícitamente
+      // (si no, node.exe huérfano por cada switch en vistas standalone).
+      try { stopFrontendServer(); } catch (_) {}
+      app.relaunch();
+      app.exit(0);
+    }
+    return { ok: true, relaunching: opts.relaunch !== false };
+  } catch (e) { return { ok: false, error: e && e.message }; }
+});
+
+// Buscar actualización de la VISTA AHORA (a demanda), contra el host real
+// (updates.titanio-pos.com por default). Baja + valida + deja pendiente; se
+// aplica al reiniciar. Es el equivalente manual del check en background.
+ipcMain.handle('view:check-now', async () => {
+  // Pasa por el manager: mismo guard anti-solapamiento y mismo notificador que
+  // el check periódico (ventanita de progreso + temporizador de reinicio).
+  try {
+    return await require('./frontend-server-manager').checkViewUpdateNow('manual (Ajustes)');
+  } catch (e) { return { ok: false, error: e && e.message }; }
+});
+
+// ── UX de la actualización de la vista (checks automáticos y manuales) ───────
+// Ventanita flotante arrastrable (view-update-window.js): progreso de descarga
+// y, al quedar lista, temporizador de reinicio SIEMPRE visible + "Reiniciar
+// ahora". Auto-reinicio a los 5 minutos (el timer autoritativo corre acá, la
+// ventana solo lo muestra). Los eventos también se reenvían al renderer
+// ('view-update') por si la vista quiere pintar su propia UI.
+const VIEW_RESTART_DELAY_MS = 5 * 60 * 1000;
+let viewRestartTimer = null;
+let lastProgressPushAt = 0;
+
+function relaunchForViewUpdate(reason) {
+  console.log(`[VIEW] relanzando la app para aplicar la vista (${reason})`);
+  if (viewRestartTimer) { clearTimeout(viewRestartTimer); viewRestartTimer = null; }
+  // app.exit() NO dispara before-quit/window-all-closed: hay que matar el Next
+  // hijo explícitamente o queda un node.exe huérfano (~200 MB) por cada update
+  // en las cajas con vista standalone.
+  try { stopFrontendServer(); } catch (_) {}
+  try { app.relaunch(); } catch (_) {}
+  app.exit(0);
+}
+
+function handleViewUpdateEvent(ev, data) {
+  const widget = require('./view-update-window');
+  const win = () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
+  try { win()?.webContents.send('view-update', { type: ev, ...data }); } catch (_) {}
+
+  if (ev === 'downloading') {
+    widget.showDownloading(data.buildNumber);
+    try { win()?.setProgressBar(0.02); } catch (_) {}
+  } else if (ev === 'progress') {
+    // Throttle: onProgress dispara por chunk; empujar cada frame satura el IPC.
+    const now = Date.now();
+    if (now - lastProgressPushAt < 300) return;
+    lastProgressPushAt = now;
+    widget.setProgress(data.buildNumber, data.got, data.total);
+    try { win()?.setProgressBar(data.total > 0 ? data.got / data.total : 0.5); } catch (_) {}
+  } else if (ev === 'error') {
+    widget.showError(data.message);
+    try { win()?.setProgressBar(-1); } catch (_) {}
+  } else if (ev === 'staged') {
+    try { win()?.setProgressBar(-1); } catch (_) {}
+    // El timer corre aunque nadie toque la ventana (caja desatendida se
+    // actualiza sola); el botón solo lo adelanta.
+    if (viewRestartTimer) clearTimeout(viewRestartTimer);
+    viewRestartTimer = setTimeout(() => relaunchForViewUpdate('timer de 5 min'), VIEW_RESTART_DELAY_MS);
+    widget.showStaged(data.buildNumber, Date.now() + VIEW_RESTART_DELAY_MS,
+      () => relaunchForViewUpdate('botón Reiniciar ahora'));
+  }
+}
+
+function setupViewUpdateUX() {
+  require('./frontend-server-manager').setViewUpdateNotifier(handleViewUpdateEvent);
+}
 
 // IPC: estado de GPU para diagnóstico de perf. Resultado equivalente a
 // chrome://gpu/ pero usable desde DevTools del renderer (donde chrome://gpu
@@ -1172,6 +1532,18 @@ function setupAutoUpdater() {
   // Permite al banner reconstruirse después de un F5/reload del renderer.
   // El main mantiene la sesión completa de descarga aunque el renderer reset.
   ipcMain.handle('updater:get-state', () => updaterState);
+
+  // Permite al usuario buscar actualizaciones desde Ajustes. Reusa el mismo
+  // flujo que el menú (diálogos nativos + banner de progreso).
+  ipcMain.handle('updater:check', () => {
+    try {
+      checkForUpdatesManual();
+      return { success: true };
+    } catch (err) {
+      console.error('[UPDATER] check manual falló:', err);
+      return { success: false, error: String(err?.message || err) };
+    }
+  });
 }
 
 // Impresión silenciosa
@@ -2775,6 +3147,7 @@ app.whenReady().then(() => {
   } else {
     console.log('[UPDATER] Omitido en desarrollo (solo app empaquetada)');
   }
+  setupViewUpdateUX();
 
   // Register printer handlers immediately after window is created
   registerPrinterHandlers(app, mainWindow);
@@ -2802,6 +3175,135 @@ app.whenReady().then(() => {
   // Register pinpad handlers for local LAN proxy
   registerPinpadHandlers();
   console.log('💳 [PINPAD] Local proxy initialized');
+
+  // Smart POS (Megasoft VPOS RESTService) — proxy local + arranque del servicio.
+  registerMegaPosHandlers();
+  startMegaPosServer(app)
+    .then((r) => console.log('🟣 [MEGA_POS] VPOS:', r && r.message ? r.message : r))
+    .catch((e) => console.warn('[MEGA_POS] No se pudo arrancar VPOS:', e && e.message));
+  console.log('🟣 [MEGA_POS] Local proxy initialized');
+
+  // Reiniciar / forzar arranque del servicio VPOS desde la UI. Devuelve el
+  // resultado (success + message/error) para diagnosticar si no levanta.
+  ipcMain.handle('mega-pos-restart', async () => {
+    try {
+      const r = await restartMegaPosServer(app);
+      console.log('🟣 [MEGA_POS] Restart:', r && (r.message || r.error));
+      return r;
+    } catch (error) {
+      console.error('❌ [MEGA_POS] restart:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Config Smart POS (host/port del Merchant Server + vtid/afiliación).
+  // Se guarda en el settings unificado y se reescribe en vposconf.ini al reiniciar.
+  ipcMain.handle('mega-pos-config-get', async () => {
+    try {
+      const { readSettings, normalizeMegaPos } = require('./titaniopos-settings-file');
+      return { success: true, config: normalizeMegaPos(readSettings(app).megaPos) };
+    } catch (error) {
+      console.error('❌ [MEGA_POS CONFIG] get:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('mega-pos-config-save', async (event, partial) => {
+    try {
+      const { readSettings, writeSettings, normalizeMegaPos } = require('./titaniopos-settings-file');
+      const s = readSettings(app);
+      s.megaPos = normalizeMegaPos({
+        ...(s.megaPos || {}),
+        ...(partial && typeof partial === 'object' ? partial : {}),
+        lastConfigUpdate: new Date().toISOString(),
+      });
+      writeSettings(app, s);
+      console.log('💾 [MEGA_POS CONFIG] Saved:', s.megaPos);
+      // Reaplica config al .ini y reinicia el servicio para que tome efecto.
+      restartMegaPosServer(app)
+        .then((r) => console.log('🟣 [MEGA_POS] Reiniciado:', r && r.message ? r.message : r))
+        .catch((e) => console.warn('[MEGA_POS] Reinicio falló:', e && e.message));
+      return { success: true, config: s.megaPos };
+    } catch (error) {
+      console.error('❌ [MEGA_POS CONFIG] save:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Vuelca las secciones clave del vposconf.ini que el VPOS está usando (read-only,
+  // para verificar desde la UI que la config quedó aplicada).
+  ipcMain.handle('mega-pos-config-dump', async () => {
+    try {
+      const runtimeDir = getVposRuntimeDir(app);
+      const iniPath = path.join(runtimeDir, 'conf', 'vposconf.ini');
+      let settingsPath = '';
+      try { settingsPath = require('./titaniopos-settings-file').getSettingsPath(app); } catch (_) {}
+      const paths = {
+        settings: settingsPath, // credenciales guardadas desde la UI
+        runtime: runtimeDir, // distribución que ejecuta el VPOS
+        vposconf: iniPath, // archivo que reescribe la app: [server],[vtid],[pinpad-verifone]
+        vposuniversal: path.join(runtimeDir, 'conf', 'vposuniversal.ini'), // [COMPRA_MEDIOS_PAGO]
+      };
+      if (!fs.existsSync(iniPath)) return { success: false, error: 'El VPOS aún no se ha inicializado en esta caja.', paths };
+      const text = fs.readFileSync(iniPath, 'utf8');
+      const WANT = ['server', 'tpdu', 'vtid', 'pinpad-verifone', 'ssl'];
+      const lines = text.split(/\r?\n/);
+      const out = [];
+      let section = null, keep = false;
+      for (const line of lines) {
+        const sec = line.match(/^\s*\[([^\]]+)\]\s*$/);
+        if (sec) { section = sec[1].trim().toLowerCase(); keep = WANT.includes(section); if (keep) out.push(`[${sec[1].trim()}]`); continue; }
+        if (keep) {
+          const kv = line.match(/^\s*([A-Za-z0-9_]+)\s*=(.*)$/);
+          if (kv) out.push(`${kv[1]}=${kv[2].trim()}`);
+          else if (line.trim() === '') out.push('');
+        }
+      }
+      return { success: true, path: iniPath, paths, dump: out.join('\n').replace(/\n{3,}/g, '\n\n').trim() };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Devuelve la LISTA de archivos de config relevantes (nombre + ruta), para el visor de la UI.
+  ipcMain.handle('mega-pos-config-files', async () => {
+    try {
+      const runtimeDir = getVposRuntimeDir(app);
+      const confDir = path.join(runtimeDir, 'conf');
+      let settingsPath = '';
+      try { settingsPath = require('./titaniopos-settings-file').getSettingsPath(app); } catch (_) {}
+      const files = [
+        { key: 'settings', label: 'Credenciales (UI)', path: settingsPath },
+        { key: 'vposconf', label: 'vposconf.ini (servidor, vtid, pinpad)', path: path.join(confDir, 'vposconf.ini') },
+        { key: 'vposuniversal', label: 'vposuniversal.ini (medios de pago, pinpads)', path: path.join(confDir, 'vposuniversal.ini') },
+      ].map((f) => ({ ...f, exists: (() => { try { return fs.existsSync(f.path); } catch { return false; } })() }));
+      return { success: true, files };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Lee el contenido COMPLETO de uno de esos archivos (read-only, lista blanca por key).
+  ipcMain.handle('mega-pos-read-config-file', async (_e, key) => {
+    try {
+      const runtimeDir = getVposRuntimeDir(app);
+      const confDir = path.join(runtimeDir, 'conf');
+      let settingsPath = '';
+      try { settingsPath = require('./titaniopos-settings-file').getSettingsPath(app); } catch (_) {}
+      const MAP = {
+        settings: settingsPath,
+        vposconf: path.join(confDir, 'vposconf.ini'),
+        vposuniversal: path.join(confDir, 'vposuniversal.ini'),
+      };
+      const target = MAP[key];
+      if (!target) return { success: false, error: 'Archivo no permitido.' };
+      if (!fs.existsSync(target)) return { success: false, error: 'El archivo aún no existe (arranca el VPOS primero).', path: target };
+      const content = fs.readFileSync(target, 'utf8');
+      return { success: true, path: target, content };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
 
   registerCajaConfigHandlers(app);
   console.log('🏪 [CAJA] Caja config (JSON) initialized');
@@ -2851,15 +3353,24 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   // Stop fiscal server before quitting
   stopFiscalServer();
+  stopMegaPosServer();
+  stopFrontendServer();
 
   if (process.platform !== 'darwin') {
     app.quit();
+    // Red de seguridad anti-ZOMBI: si en 1.5s el proceso no salió (algún hijo
+    // mantiene vivo el event loop), forzamos la salida para liberar el lock de
+    // instancia única. Sin esto, un proceso sin ventana se queda colgado y la
+    // próxima apertura "no abre".
+    setTimeout(() => { try { app.exit(0); } catch (_) {} }, 1500);
   }
 });
 
 app.on('before-quit', () => {
   // Ensure fiscal server is stopped
   stopFiscalServer();
+  stopMegaPosServer();
+  stopFrontendServer();
 });
 
 app.on('activate', () => {

@@ -1,15 +1,16 @@
 {
   "name": "titaniopos-electron",
-  "version": "1.0.0",
+  "version": "1.0.71",
   "description": "TitanioPOS Desktop - Wrapper Electron con impresión silenciosa",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "prebuild": "node prebuild.js",
-    "build": "npm run prebuild && electron-builder --win --publish never",
-    "build:portable": "npm run prebuild && electron-builder --win portable --publish never",
-    "release": "npm run prebuild && electron-builder --win --publish always",
-    "publish": "npm run prebuild && electron-builder --win --publish always"
+    "bundle:frontend": "node bundle-frontend.js",
+    "build": "npm run prebuild && npm run bundle:frontend && electron-builder --win --publish never",
+    "build:portable": "npm run prebuild && npm run bundle:frontend && electron-builder --win portable --publish never",
+    "release": "npm run prebuild && npm run bundle:frontend && electron-builder --win --publish always",
+    "publish": "npm run prebuild && npm run bundle:frontend && electron-builder --win --publish always"
   },
   "author": "TitanioPOS",
   "license": "MIT",
@@ -33,29 +34,72 @@
     "appId": "com.titaniopos.desktop",
     "productName": "TitanioPOS",
     "npmRebuild": false,
+    "files": [
+      "**/*",
+      "!dist/**",
+      "!dist-*/**",
+      "!_view-host/**",
+      "!_chat-backup/**",
+      "!python-embed/**",
+      "!fiscal-server/**",
+      "!vpos-rest/**",
+      "!drivers/**",
+      "!**/*.zip",
+      "!**/*.tar.gz",
+      "!**/*.log",
+      "!.env.bak"
+    ],
     "asarUnpack": [
       "**/*.ico"
     ],
     "extraResources": [
       {
+        "from": "caja-config.env",
+        "to": ".env"
+      },
+      {
         "from": "fiscal-server",
         "to": "fiscal-server",
-        "filter": ["**/*", "!__pycache__/**", "!*.pyc"]
+        "filter": [
+          "**/*",
+          "!__pycache__/**",
+          "!*.pyc"
+        ]
       },
       {
         "from": "python-embed",
         "to": "python-embed",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "bin",
         "to": "bin",
-        "filter": ["*.exe"]
+        "filter": [
+          "*.exe"
+        ]
       },
       {
         "from": "drivers",
         "to": "drivers",
-        "filter": ["*.exe"]
+        "filter": [
+          "*.exe"
+        ]
+      },
+      {
+        "from": "drivers/verifone",
+        "to": "drivers/verifone",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "vpos-rest",
+        "to": "vpos-rest",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "directories": {

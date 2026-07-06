@@ -126,6 +126,35 @@ To publish a release from your PC you need a valid **`GH_TOKEN`** with permissio
 
 ---
 
+## Instalación lenta en las cajas (10-20 min)
+
+El instalador NSIS extrae miles de archivos pequeños y **Windows Defender escanea
+cada uno en tiempo real** — en máquinas con HDD eso domina el tiempo de instalación.
+Mitigaciones, en orden de impacto:
+
+1. **Exclusión de Defender** (una vez por caja, PowerShell como admin — suele
+   recortar ~70% del tiempo, y evita la carrera Defender-vs-archivos al arrancar):
+
+   ```powershell
+   Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\Programs\TitanioPOS"
+   ```
+
+2. **Vista horneada dentro del app.asar** (hecho en v1.0.71): ~2.000 archivos
+   menos que extraer; la vista viaja como un solo archivo y el proxy la lee del
+   asar directo. Solo aplica a vistas estáticas.
+
+3. **Pendiente si sigue lento**: `python-embed/` (2.162 archivos del server
+   fiscal) → convertirlo en zip que se auto-extrae al primer arranque en
+   `userData`, con marcador de versión para no re-extraer.
+
+Nota: las actualizaciones del **shell** llegan solas por `electron-updater`
+(GitHub Releases publica `latest.yml` + blockmap desde v1.0.67: descarga
+diferencial en segundo plano, instala al cerrar). Las de la **vista** llegan por
+el feed (`updates.titanio-pos.com`) sin reinstalar nada. Reinstalar a mano solo
+hace falta para cambios profundos del shell en una caja sin el updater.
+
+---
+
 ## CI/CD (GitHub Actions)
 
 The workflow **`.github/workflows/release-windows.yml`** builds on **Windows** and publishes when:

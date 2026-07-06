@@ -83,4 +83,7 @@ jobs:
       - name: Build and publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # El runner no tiene el repo frontend al lado: la vista horneada se
+          # baja del feed (el mismo zip ya publicado que consumen las cajas).
+          BUNDLE_FROM_FEED: '1'
         run: npm run release
