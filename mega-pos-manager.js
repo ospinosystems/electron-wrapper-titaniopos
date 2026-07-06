@@ -319,7 +319,14 @@ const startMegaPosServer = async (app) => {
   let runtimeDir;
   try {
     runtimeDir = ensureRuntimeCopy(app);
-    const cfg = normalizeMegaPos(readSettings(app).megaPos);
+    const settings = readSettings(app);
+    const cfg = normalizeMegaPos(settings.megaPos);
+    // El id de [vtid] es el número de caja en la tienda: sale solo del número
+    // de caja ya configurado en la app (no se pide aparte en la UI).
+    const cajaNum = settings.caja && settings.caja.cashRegisterNumber;
+    if (!cfg.id && cajaNum != null && String(cajaNum).trim() !== '') {
+      cfg.id = String(cajaNum).trim().padStart(4, '0');
+    }
     applyConfigToIni(runtimeDir, cfg);
     applyVposUniversalActivation(runtimeDir);
     applyPinpadVerifone(runtimeDir);
