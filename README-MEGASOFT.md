@@ -70,7 +70,7 @@ settings; editar los `.ini` a mano no sirve (se pisan al reiniciar).
 
 1. Instalar la app (build local con `vpos-rest/` empaquetado, o copiar `vpos-rest/` a `resources\` aparte).
 2. Conectar el P200 por USB e instalar el driver desde Settings → Caja ("Instalar driver (COM9)").
-3. En Settings → Caja (sección protegida): cargar **VTID** e **ID/afiliación** de esa caja (host/puerto/SSL ya vienen por defecto en producción) y guardar — el servicio se reinicia solo.
+3. En Settings → Caja (sección protegida): cargar **VTID** (terminal virtual que asigna Megasoft) e **ID de caja** (numeración interna de la tienda, p.ej. `0001`); host/puerto/SSL ya vienen por defecto en producción. Guardar — el servicio se reinicia solo. La afiliación bancaria NO se configura en la caja: los bancos la envían a Megasoft y vive en el Merchant Server asociada al VTID.
 4. "Probar servicio" (ping) y hacer una compra de prueba con tarjeta real.
 5. Encender el toggle "Mega POS" para que aparezca la tab en el cobro.
 

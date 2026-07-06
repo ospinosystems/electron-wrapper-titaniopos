@@ -60,7 +60,10 @@ const DEFAULT_UI = {
 // vpos-rest/conf/vposconf.ini antes de arrancar el servicio:
 //   [server] host/port  -> Merchant Server de Megasoft (adquiriente)
 //   [SSL]    active      -> conexión SSL caja-Merchant (producción la exige)
-//   [vtid]   vtid/id     -> identificador de la caja/afiliación
+//   [vtid]   vtid        -> terminal virtual asignado por Megasoft (uno por caja)
+//            id           -> número de caja en la tienda (p.ej. 0001); la
+//                            afiliación bancaria NO va aquí (vive en el
+//                            Merchant Server, asociada al vtid)
 // Defaults = ambiente de PRODUCCIÓN (correo Megasoft 2026-07-06); solo falta
 // cargar el vtid/id propio de cada caja cuando Megasoft los genere.
 const DEFAULT_MEGA_POS = {
