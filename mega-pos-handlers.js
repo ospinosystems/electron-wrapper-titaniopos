@@ -205,6 +205,11 @@ function registerMegaPosHandlers() {
     'precierre',
     'cierre',
     'ultimoCierre',
+    // Consulta del resultado de la última transacción procesada por el VPOS.
+    // Único mecanismo para saber si un cobro interrumpido (crash/timeout)
+    // llegó a aprobarse: el request de compra no admite id propio.
+    'ultimaTransaccion',
+    'ultimaTransaccionRealizada',
   ]);
   ipcMain.handle('mega-pos-task', async (event, requestBody = {}) => {
     try {
