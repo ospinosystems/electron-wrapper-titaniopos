@@ -88,6 +88,14 @@ const ensureRuntimeCopy = (app) => {
   } catch (_) { upToDate = false; }
 
   if (!upToDate) {
+    // Borrar la copia anterior COMPLETA antes de copiar: cpSync sobre un
+    // runtime viejo mezcla distros (p.ej. jre/lib/ext de Java 8 sobrevivía
+    // al upgrade a Java 21 y la JVM abortaba con "extensions mechanism no
+    // longer supported").
+    if (fs.existsSync(runtime)) {
+      log(`[MEGA_POS] Eliminando copia runtime anterior en ${runtime}...`);
+      fs.rmSync(runtime, { recursive: true, force: true });
+    }
     log(`[MEGA_POS] Copiando distribución VPOS a ${runtime} (una vez)...`);
     fs.mkdirSync(runtime, { recursive: true });
     fs.cpSync(source, runtime, { recursive: true });
