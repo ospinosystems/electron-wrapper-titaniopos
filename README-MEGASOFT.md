@@ -38,7 +38,7 @@ settings; editar los `.ini` a mano no sirve (se pisan al reiniciar).
 
 | Archivo | Claves que escribe la app |
 |---|---|
-| `vpos-rest/conf/vposconf.ini` | `[server] host/port` (Merchant), `[SSL] active` (1 en prod), `[vtid] vtid/id` (caja), `[pinpad] marca=VERIFONE tipoPuerto=USB dataSensibleEncriptada=1`, `[pinpad-verifone] modelo=ENGAGE comandosNuevos=1 tipoPinblock=DUKPT`. |
+| `vpos-rest/conf/vposconf.ini` | `[server] host/port` (Merchant), `[SSL] active` (1 en prod), `[vtid] vtid/id` (caja), `[pinpad] marca=VERIFONE tipoPuerto=USB dataSensibleEncriptada=1`, `[pinpad-verifone] modelo=ENGAGE puerto=USB comandosNuevos=1 tipoPinblock=DUKPT dataSensibleEncriptada=1 mantenerConexion=1`. |
 | `vpos-rest/conf/vposuniversal.ini` | `[COMPRA_MEDIOS_PAGO] activo=1` (requisito Megasoft; de fábrica viene en 0). |
 | `vpos-rest/conf/confSeguridad.ini` | Credenciales internas del VPOS — no se toca. |
 

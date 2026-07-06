@@ -232,10 +232,16 @@ const PINPAD_SECTIONS = {
     tipoPuerto: 'USB',
     dataSensibleEncriptada: '1',
   },
+  // Valores ajustados a mano en pruebas del 2026-07-06 (incluye las claves
+  // estilo 3.15 puerto/dataSensibleEncriptada, que la 3.16 tolera): se aplican
+  // SIEMPRE aquí para que sobrevivan a la recopia del runtime.
   'pinpad-verifone': {
     modelo: 'ENGAGE',
+    puerto: 'USB',
     comandosNuevos: '1',
     tipoPinblock: 'DUKPT',
+    dataSensibleEncriptada: '1',
+    mantenerConexion: '1',
   },
 };
 /** Actualiza/inserta claves dentro de una sección exacta del ini (en memoria). */
