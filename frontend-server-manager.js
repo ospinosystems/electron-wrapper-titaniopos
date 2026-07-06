@@ -106,10 +106,11 @@ function resolveServerDir() {
     if (dl) return dl;
   } catch (_) { /* sin view-updater → horneada */ }
 
-  if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'frontend-server');
-  }
-  return path.join(__dirname, 'frontend-server');
+  // Horneada DENTRO del app.asar (ver bakedServerDir en view-updater.js): el
+  // proxy la sirve leyendo del asar. ⚠️ Solo vale para vistas ESTÁTICAS (desde
+  // 1.0.71 la horneada siempre lo es): un standalone dentro del asar no podría
+  // forkearse. Las descargadas siguen en userData/views (archivos reales).
+  return path.join(app.getAppPath(), 'frontend-server');
 }
 
 /** ¿La vista en `dir` es un export estático (out/ plano, sin servidor Node)? */

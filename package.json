@@ -1,6 +1,6 @@
 {
   "name": "titaniopos-electron",
-  "version": "1.0.70",
+  "version": "1.0.71",
   "description": "TitanioPOS Desktop - Wrapper Electron con impresión silenciosa",
   "main": "main.js",
   "scripts": {
@@ -36,7 +36,6 @@
     "npmRebuild": false,
     "files": [
       "**/*",
-      "!frontend-server/**",
       "!dist/**",
       "!dist-*/**",
       "!_view-host/**",
@@ -57,13 +56,6 @@
       {
         "from": "caja-config.env",
         "to": ".env"
-      },
-      {
-        "from": "frontend-server",
-        "to": "frontend-server",
-        "filter": [
-          "**/*"
-        ]
       },
       {
         "from": "fiscal-server",

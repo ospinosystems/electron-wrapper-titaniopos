@@ -89,13 +89,15 @@ function listBuilds() {
   } catch { return []; }
 }
 
-/** Dir de la vista HORNEADA (extraResources en packaged, repo en dev). */
+/** Dir de la vista HORNEADA. Vive DENTRO del app.asar (un solo archivo en vez
+ *  de ~2.200: el instalador NSIS extrae miles de archivos con Defender
+ *  escaneando cada uno — la vista suelta duplicaba el tiempo de instalación).
+ *  fs de Electron lee dentro del asar de forma transparente en el main.
+ *  app.getAppPath() = <resources>/app.asar en packaged, el repo en dev. */
 function bakedServerDir() {
   const override = (process.env.TITANIOPOS_FRONTEND_SERVER_DIR || '').trim();
   if (override) return override;
-  return app.isPackaged
-    ? path.join(process.resourcesPath, 'frontend-server')
-    : path.join(__dirname, 'frontend-server');
+  return path.join(app.getAppPath(), 'frontend-server');
 }
 
 /** buildNumber intrínseco de un server dir vía view-version.json (0 si no hay).
