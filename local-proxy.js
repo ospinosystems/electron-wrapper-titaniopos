@@ -58,6 +58,25 @@ function rewriteSetCookie(values) {
   );
 }
 
+// Versiones de la caja en cada request (trazabilidad en logs del backend y
+// soporte: saber QUÉ shell y QUÉ vista hace cada llamada). Se inyectan del
+// lado servidor → sin preflights de CORS; el backend simplemente las ve.
+// Cache de 60s: getRunningBuildNumber lee un json de disco.
+let versionHeaders = null;
+let versionHeadersAt = 0;
+function getVersionHeaders() {
+  if (versionHeaders && Date.now() - versionHeadersAt < 60000) return versionHeaders;
+  const h = {};
+  try { h['x-titaniopos-shell'] = require('electron').app.getVersion(); } catch (_) {}
+  try {
+    const n = require('./view-updater').getRunningBuildNumber();
+    if (n) h['x-titaniopos-view'] = String(n);
+  } catch (_) {}
+  versionHeaders = h;
+  versionHeadersAt = Date.now();
+  return h;
+}
+
 function proxyToUpstream(req, res, upstreamBase, stripPrefix, spoof) {
   const base = new URL(upstreamBase);
   const isHttps = base.protocol === 'https:';
@@ -72,6 +91,7 @@ function proxyToUpstream(req, res, upstreamBase, stripPrefix, spoof) {
     headers.origin = SPOOF_ORIGIN;
     headers.referer = SPOOF_ORIGIN + '/';
   }
+  Object.assign(headers, getVersionHeaders());
   // accept-encoding: para /__backend pasa TAL CUAL — el cuerpo se pipea intacto
   // con su content-encoding y el navegador descomprime (verificado: cookies de
   // Sanctum se reescriben igual, son headers; y prod SÍ comprime: login y API
