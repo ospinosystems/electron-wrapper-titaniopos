@@ -66,6 +66,34 @@ settings; editar los `.ini` a mano no sirve (se pisan al reiniciar).
 | frontend `src/app/(auth)/settings/caja/page.tsx` | UI de administración (sección protegida): credenciales, SSL, probar/reiniciar servicio, driver, visor de config. |
 | backend | Sin código específico: el pago entra como método `mega_pos` (id 82, `verify=false`) y el JSON del terminal se persiste en `orders_payments.pinpad_response`. |
 
+## Base de datos (backend)
+
+El método de pago debe existir en `payments_types` (ojo: la tabla es
+`payments_types`, no `payment_types`) y estar relacionado con cada tienda en
+`store_payments_types`. El tipo lo crea `PaymentMethodsSeeder` (rama
+`feat/mega-pos-cierre`); la relación por tienda se hace a mano:
+
+```sql
+-- Tipo de pago (idempotente; también lo crea PaymentMethodsSeeder)
+INSERT INTO payments_types (name, currency, type, verify, should_convert, hidden, position, created_at, updated_at)
+SELECT 'mega_pos', 'ves', 'debit', false, true, false, 100, now(), now()
+WHERE NOT EXISTS (SELECT 1 FROM payments_types WHERE name = 'mega_pos' AND deleted_at IS NULL);
+
+-- Relación con las tiendas objetivo (prod: 12=Maracay, 14=Guacara, 18=Tinaquillo)
+INSERT INTO store_payments_types (payment_type_id, store_id, created_at, updated_at)
+SELECT pt.id, s.id, now(), now()
+FROM payments_types pt JOIN stores s ON s.id IN (12, 14, 18)
+WHERE pt.name = 'mega_pos' AND pt.deleted_at IS NULL
+  AND NOT EXISTS (SELECT 1 FROM store_payments_types x
+                  WHERE x.payment_type_id = pt.id AND x.store_id = s.id);
+```
+
+Claves del tipo: `currency=ves`, `type=debit` (cae en el grupo Débito del
+cierre), `verify=false` (sin transaction request de verificación),
+`should_convert=true`. En prod y en la BD local `importada` quedó con id 82.
+Además `PaymentType::isAutoBalancedForClosure()` debe incluir `mega_pos`
+(commit 05ae9e1) o el cierre se descuadra con la primera venta.
+
 ## Checklist de despliegue por caja
 
 1. Instalar la app (build local con `vpos-rest/` empaquetado, o copiar `vpos-rest/` a `resources\` aparte).
