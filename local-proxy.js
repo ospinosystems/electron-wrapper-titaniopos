@@ -72,8 +72,10 @@ function proxyToUpstream(req, res, upstreamBase, stripPrefix, spoof) {
     headers.origin = SPOOF_ORIGIN;
     headers.referer = SPOOF_ORIGIN + '/';
   }
-  // Evitar compresiones raras al re-emitir; dejamos pasar tal cual el cuerpo.
-  delete headers['accept-encoding'];
+  // accept-encoding pasa TAL CUAL: el cuerpo se pipea intacto y content-encoding
+  // se copia en la respuesta, así que gzip/br viajan de punta a punta (backend y
+  // Electric comprimen → mucho menos tráfico en el sync con enlaces lentos).
+  // Antes se borraba "por las dudas" y todo viajaba sin comprimir.
 
   const options = {
     protocol: base.protocol,
@@ -261,6 +263,10 @@ function startProxy(localPort, nextPort, host = '127.0.0.1', uiUpstream = null, 
 function stopProxy() {
   if (server) {
     try { server.close(); } catch (_) {}
+    // server.close() solo deja de aceptar conexiones nuevas; con keep-alive del
+    // navegador las viejas sobreviven y el puerto queda tomado para un restart
+    // en caliente (camino "Reintentar").
+    try { server.closeAllConnections(); } catch (_) {}
     server = null;
   }
 }

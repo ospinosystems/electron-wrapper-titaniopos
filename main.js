@@ -1005,11 +1005,9 @@ ipcMain.handle('view:switch-build', (_e, buildNumber, opts = {}) => {
     const res = vu.switchToBuild(buildNumber, (m) => console.log(m));
     if (!res.ok) return res;
     if (opts.relaunch !== false) {
-      // app.exit() no dispara before-quit: matar el Next hijo explícitamente
-      // (si no, node.exe huérfano por cada switch en vistas standalone).
-      try { stopFrontendServer(); } catch (_) {}
-      app.relaunch();
-      app.exit(0);
+      // Mismo camino seguro que el auto-reinicio (mata Next hijo y evita que
+      // autoInstallOnAppQuit dispare el NSIS del shell sin relanzar).
+      relaunchToApplyView(`switch manual a build ${buildNumber}`);
     }
     return { ok: true, relaunching: opts.relaunch !== false };
   } catch (e) { return { ok: false, error: e && e.message }; }
@@ -1036,16 +1034,30 @@ const VIEW_RESTART_DELAY_MS = 5 * 60 * 1000;
 let viewRestartTimer = null;
 let lastProgressPushAt = 0;
 
-function relaunchForViewUpdate(reason) {
+// Reinicio para aplicar una vista. app.exit() NO dispara before-quit/
+// window-all-closed: hay que matar el Next hijo explícitamente (si no, node.exe
+// huérfano por reinicio en vistas standalone). Y OJO con el updater del SHELL:
+// app.exit(0) SÍ emite 'quit' → autoInstallOnAppQuit lanzaría el NSIS silencioso
+// SIN relanzar, compitiendo con app.relaunch() → caja cerrada a mitad de jornada.
+function relaunchToApplyView(reason) {
   console.log(`[VIEW] relanzando la app para aplicar la vista (${reason})`);
   if (viewRestartTimer) { clearTimeout(viewRestartTimer); viewRestartTimer = null; }
-  // app.exit() NO dispara before-quit/window-all-closed: hay que matar el Next
-  // hijo explícitamente o queda un node.exe huérfano (~200 MB) por cada update
-  // en las cajas con vista standalone.
   try { stopFrontendServer(); } catch (_) {}
+  try {
+    if (updaterState.phase === 'done') {
+      // Shell descargado pendiente: instalarlo EN este reinicio (silencioso y
+      // relanzando); la vista pendiente se aplica igual al arrancar.
+      console.log('[VIEW] shell descargado pendiente → quitAndInstall(instala y relanza)');
+      autoUpdater.quitAndInstall(true, true);
+      return;
+    }
+    autoUpdater.autoInstallOnAppQuit = false; // cinturón para este exit
+  } catch (_) {}
   try { app.relaunch(); } catch (_) {}
   app.exit(0);
 }
+
+function relaunchForViewUpdate(reason) { relaunchToApplyView(reason); }
 
 function handleViewUpdateEvent(ev, data) {
   const widget = require('./view-update-window');
@@ -1278,6 +1290,8 @@ function buildApplicationMenu() {
 // Estado del título original de la ventana para restaurarlo cuando termina la descarga.
 let updaterOriginalTitle = null;
 let updaterDownloading = false;
+let updaterDialogOpen = false;
+let updaterDismissedVersion = null;
 
 // Estado actual del updater — se actualiza en cada evento y se sirve al renderer
 // vía IPC para que el banner pueda reconstruirse después de un reload del frontend.
@@ -1375,17 +1389,30 @@ function setupAutoUpdater() {
 
   autoUpdater.on('update-available', async (info) => {
     console.log('[UPDATER] Actualización disponible:', info.version);
+    // En una caja desatendida los checks de cada 2h apilaban un modal idéntico
+    // por check (y dos "Descargar" disparaban downloadUpdate dos veces). Un solo
+    // diálogo a la vez, y si dijeron "Ahora no" para ESTA versión no se vuelve a
+    // ofrecer sola (el check manual del menú sí la re-ofrece).
+    if (updaterDialogOpen) return;
+    if (!updateCheckRequestedByUser && updaterDismissedVersion === info.version) return;
     const win = getUpdaterWindow();
-    const { response } = await dialog.showMessageBox(win, {
-      type: 'info',
-      title: 'Actualización disponible',
-      message: `Hay una nueva versión: ${info.version}.`,
-      detail:
-        '¿Descargar ahora? Puedes posponerlo; también desde el menú Help → Buscar actualizaciones… (Alt para ver la barra de menús).',
-      buttons: ['Descargar', 'Ahora no'],
-      defaultId: 0,
-      cancelId: 1,
-    });
+    updaterDialogOpen = true;
+    let response;
+    try {
+      ({ response } = await dialog.showMessageBox(win, {
+        type: 'info',
+        title: 'Actualización disponible',
+        message: `Hay una nueva versión: ${info.version}.`,
+        detail:
+          '¿Descargar ahora? Puedes posponerlo; también desde el menú Help → Buscar actualizaciones… (Alt para ver la barra de menús).',
+        buttons: ['Descargar', 'Ahora no'],
+        defaultId: 0,
+        cancelId: 1,
+      }));
+    } finally {
+      updaterDialogOpen = false;
+    }
+    if (response !== 0) updaterDismissedVersion = info.version;
     if (response === 0) {
       // Feedback inmediato: el primer evento download-progress puede tardar varios
       // segundos (handshake/redirect), así que arrancamos con barra indeterminada

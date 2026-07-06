@@ -119,8 +119,12 @@ function noteRunningServerDir(dir) { runningServerDir = dir || null; }
 /** buildNumber de la build ACTIVA (0 si ninguna → se usa la horneada). */
 function getActiveBuildNumber() {
   const { active } = readState();
-  if (active && hasServer(buildDir(active))) return active;
-  return readBuildNumberOf(bakedServerDir());
+  const baked = readBuildNumberOf(bakedServerDir());
+  // Si la horneada es MÁS NUEVA que la descargada activa (shell recién
+  // actualizado con una vista más reciente adentro), manda la horneada: si no,
+  // la caja serviría la vieja y offline se quedaría ahí para siempre.
+  if (active && hasServer(buildDir(active)) && active >= baked) return active;
+  return baked;
 }
 
 /** buildNumber de lo que se está SIRVIENDO ahora (identidad intrínseca). */
@@ -131,10 +135,13 @@ function getRunningBuildNumber() {
   }
   return getActiveBuildNumber();
 }
-/** Carpeta de la build activa si es válida; si no, null (→ horneada). */
+/** Carpeta de la build activa si es válida Y no la supera la horneada; si no,
+ *  null (→ horneada). */
 function activeServerDir() {
   const { active } = readState();
-  return active && hasServer(buildDir(active)) ? buildDir(active) : null;
+  if (!active || !hasServer(buildDir(active))) return null;
+  if (readBuildNumberOf(bakedServerDir()) > active) return null; // horneada más nueva
+  return buildDir(active);
 }
 
 /**
@@ -171,6 +178,12 @@ function pruneOldBuilds(log = () => {}) {
     rmrf(buildDir(n));
     log(`[VIEW] build ${n} eliminada (prune, conservo ${KEEP_BUILDS})`);
   }
+  // Staging interrumpido: directorios <n>.tmp huérfanos de una copia a medias.
+  try {
+    for (const d of fs.readdirSync(viewsRoot())) {
+      if (d.endsWith('.tmp')) rmrf(path.join(viewsRoot(), d));
+    }
+  } catch (_) {}
 }
 
 /**
@@ -193,48 +206,80 @@ function switchToBuild(n, log = () => {}) {
   return { ok: true };
 }
 
+// OJO en ambas funciones HTTP: el `timeout` de Node es de INACTIVIDAD del
+// socket, no total. Sin `res.on('error')` una respuesta truncada colgaba la
+// promesa para siempre → el guard `viewCheckRunning` quedaba tomado y la caja
+// no volvía a chequear updates hasta reiniciar la app.
 function fetchText(url, timeoutMs = 8000) {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const done = (fn, v) => { if (!settled) { settled = true; fn(v); } };
     try {
       const u = new URL(url);
       const mod = u.protocol === 'https:' ? https : http;
       const req = mod.get(u, { timeout: timeoutMs }, (res) => {
-        if (res.statusCode && res.statusCode >= 400) { res.resume(); return reject(new Error('HTTP ' + res.statusCode)); }
+        if (res.statusCode && res.statusCode >= 400) { res.resume(); return done(reject, new Error('HTTP ' + res.statusCode)); }
         let data = '';
         res.on('data', (c) => (data += c));
-        res.on('end', () => resolve(data));
+        res.on('end', () => done(resolve, data));
+        res.on('error', (e) => done(reject, e));
+        res.on('aborted', () => done(reject, new Error('respuesta abortada')));
       });
-      req.on('error', reject);
-      req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-    } catch (e) { reject(e); }
+      req.on('error', (e) => done(reject, e));
+      req.on('timeout', () => { req.destroy(); done(reject, new Error('timeout')); });
+    } catch (e) { done(reject, e); }
   });
 }
 
-function downloadToFile(url, destPath, timeoutMs = 180000, onProgress = null) {
+/**
+ * Descarga a archivo calculando sha256 EN STREAMING (evita releer el zip
+ * completo a RAM en los Celeron). Resuelve { sha256 }. `timeoutMs` es de
+ * inactividad; `deadlineMs` corta descargas que gotean indefinidamente.
+ */
+function downloadToFile(url, destPath, timeoutMs = 180000, onProgress = null, deadlineMs = 15 * 60 * 1000) {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let req = null;
+    const file = fs.createWriteStream(destPath);
+    const hash = crypto.createHash('sha256');
+    const deadline = setTimeout(() => fail(new Error('deadline de descarga excedido')), deadlineMs);
+    const fail = (e) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      try { req && req.destroy(); } catch (_) {}
+      // Cerrar el WriteStream ANTES de borrar: en Windows un archivo abierto
+      // no se puede borrar y el temp quedaba acumulándose por cada fallo.
+      file.close(() => { try { fs.unlinkSync(destPath); } catch (_) {} });
+      reject(e);
+    };
     try {
       const u = new URL(url);
       const mod = u.protocol === 'https:' ? https : http;
-      const file = fs.createWriteStream(destPath);
-      const req = mod.get(u, { timeout: timeoutMs }, (res) => {
-        if (res.statusCode && res.statusCode >= 400) { res.resume(); return reject(new Error('HTTP ' + res.statusCode)); }
+      req = mod.get(u, { timeout: timeoutMs }, (res) => {
+        if (res.statusCode && res.statusCode >= 400) { res.resume(); return fail(new Error('HTTP ' + res.statusCode)); }
         const total = parseInt(res.headers['content-length'] || '0', 10) || 0;
         let got = 0;
-        res.on('data', (c) => { got += c.length; if (onProgress) { try { onProgress(got, total); } catch (_) {} } });
+        res.on('data', (c) => {
+          got += c.length;
+          hash.update(c);
+          if (onProgress) { try { onProgress(got, total); } catch (_) {} }
+        });
+        res.on('error', (e) => fail(e));
+        res.on('aborted', () => fail(new Error('descarga abortada')));
         res.pipe(file);
-        file.on('finish', () => file.close(() => resolve()));
+        file.on('finish', () => file.close(() => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(deadline);
+          resolve({ sha256: hash.digest('hex') });
+        }));
       });
-      req.on('error', reject);
-      req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-      file.on('error', (e) => { try { fs.unlinkSync(destPath); } catch (_) {} reject(e); });
-    } catch (e) { reject(e); }
+      req.on('error', (e) => fail(e));
+      req.on('timeout', () => fail(new Error('timeout (socket inactivo)')));
+      file.on('error', (e) => fail(e));
+    } catch (e) { fail(e); }
   });
-}
-
-function sha256File(p) {
-  const h = crypto.createHash('sha256');
-  h.update(fs.readFileSync(p));
-  return h.digest('hex');
 }
 
 /** Extrae un .zip a targetDir. Win10+/macOS: bsdtar (`tar -xf`). Linux: unzip. */
@@ -347,9 +392,22 @@ async function checkAndStageUpdate(updateUrl, log = () => {}, notify = null) {
   const zipPath = path.join(tmp, 'bundle.zip');
   const stage = path.join(tmp, 'stage');
   try {
+    // Espacio en disco: pico de ~3× el bundle (zip + extraído + copia). Fallar
+    // ANTES de descargar evita la copia parcial en disco lleno.
+    const needBytes = 3 * (parseInt(meta.size, 10) || 50 * 1024 * 1024);
+    try {
+      const sfs = fs.statfsSync(app.getPath('userData'));
+      if (sfs.bavail * sfs.bsize < needBytes) {
+        throw new Error(`espacio en disco insuficiente (necesita ~${Math.round(needBytes / 1e6)} MB libres)`);
+      }
+    } catch (e) {
+      if (String(e && e.message).includes('espacio en disco')) throw e;
+      /* statfs no disponible → seguir */
+    }
+
     log(`[VIEW] descargando build ${remote}: ${meta.url}`);
     emit('downloading', { buildNumber: remote, size: parseInt(meta.size, 10) || 0 });
-    await downloadToFile(meta.url, zipPath, 180000, (got, total) =>
+    const dl = await downloadToFile(meta.url, zipPath, 180000, (got, total) =>
       emit('progress', { buildNumber: remote, got, total }));
 
     if (meta.size) {
@@ -357,8 +415,8 @@ async function checkAndStageUpdate(updateUrl, log = () => {}, notify = null) {
       if (got !== parseInt(meta.size, 10)) throw new Error(`size no coincide (esperado ${meta.size}, got ${got})`);
     }
     if (meta.sha256) {
-      const got = sha256File(zipPath);
-      if (got.toLowerCase() !== String(meta.sha256).toLowerCase()) throw new Error(`sha256 no coincide (esperado ${meta.sha256})`);
+      // Hash calculado en streaming durante la descarga (sin releer el zip).
+      if (dl.sha256.toLowerCase() !== String(meta.sha256).toLowerCase()) throw new Error(`sha256 no coincide (esperado ${meta.sha256})`);
       log('[VIEW] sha256 + size OK');
     }
 
@@ -373,19 +431,26 @@ async function checkAndStageUpdate(updateUrl, log = () => {}, notify = null) {
 
     // Solo aplica a bundles standalone (no-op si no hay server.js).
     patchServerJsForWindows(serverDir);
-    fs.writeFileSync(path.join(serverDir, 'view-version.json'), JSON.stringify({ buildNumber: remote, version: meta.version || String(remote) }));
 
-    // Guardar en views/<remote>/ (atómico-ish) y marcar pendiente.
+    // Staging ATÓMICO en dos saltos: primero a views/<n>.tmp (si esta copia
+    // desde %TEMP% se corta, el .tmp nunca parece una build válida y el prune
+    // lo limpia), y al final UN renameSync mismo-volumen a views/<n>. El
+    // view-version.json se escribe como ÚLTIMO paso del .tmp: una copia a
+    // medias jamás queda activable.
     fs.mkdirSync(viewsRoot(), { recursive: true });
     const dest = buildDir(remote);
+    const destTmp = dest + '.tmp';
     // Jamás borrar el directorio que Next está sirviendo en vivo (posible si el
     // estado se leyó mal): borrado parcial con locks de Windows = build corrupta.
     if (runningServerDir && path.resolve(dest) === path.resolve(runningServerDir)) {
       throw new Error(`views/${remote} es la build en uso; no se pisa en caliente`);
     }
+    rmrf(destTmp);
+    try { fs.renameSync(serverDir, destTmp); }
+    catch (_) { fs.cpSync(serverDir, destTmp, { recursive: true }); }
+    fs.writeFileSync(path.join(destTmp, 'view-version.json'), JSON.stringify({ buildNumber: remote, version: meta.version || String(remote) }));
     rmrf(dest);
-    try { fs.renameSync(serverDir, dest); }
-    catch (_) { fs.cpSync(serverDir, dest, { recursive: true }); }
+    fs.renameSync(destTmp, dest);
 
     const st = readState();
     writeState({ active: st.active, next: remote, skip: st.skip });
