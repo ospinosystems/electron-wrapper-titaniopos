@@ -72,10 +72,16 @@ function proxyToUpstream(req, res, upstreamBase, stripPrefix, spoof) {
     headers.origin = SPOOF_ORIGIN;
     headers.referer = SPOOF_ORIGIN + '/';
   }
-  // accept-encoding pasa TAL CUAL: el cuerpo se pipea intacto y content-encoding
-  // se copia en la respuesta, así que gzip/br viajan de punta a punta (backend y
-  // Electric comprimen → mucho menos tráfico en el sync con enlaces lentos).
-  // Antes se borraba "por las dudas" y todo viajaba sin comprimir.
+  // accept-encoding: para /__backend pasa TAL CUAL — el cuerpo se pipea intacto
+  // con su content-encoding y el navegador descomprime (verificado: cookies de
+  // Sanctum se reescriben igual, son headers; y prod SÍ comprime: login y API
+  // viajaban sin gzip por el delete "por las dudas" que había acá).
+  // Para /__electric se sigue quitando: Electric hoy NO comprime sus shapes
+  // (cero ganancia) y sus long-polls live son sensibles a latencia — si un CDN
+  // comprimiera con buffering, los updates en vivo llegarían tarde.
+  if (stripPrefix === ELECTRIC_PREFIX) {
+    delete headers['accept-encoding'];
+  }
 
   const options = {
     protocol: base.protocol,
