@@ -59,11 +59,15 @@ const DEFAULT_UI = {
 // Smart POS (Megasoft VPOS RESTService). Estos valores se escriben en
 // vpos-rest/conf/vposconf.ini antes de arrancar el servicio:
 //   [server] host/port  -> Merchant Server de Megasoft (adquiriente)
+//   [SSL]    active      -> conexión SSL caja-Merchant (producción la exige)
 //   [vtid]   vtid/id     -> identificador de la caja/afiliación
+// Defaults = ambiente de PRODUCCIÓN (correo Megasoft 2026-07-06); solo falta
+// cargar el vtid/id propio de cada caja cuando Megasoft los genere.
 const DEFAULT_MEGA_POS = {
   enabled: false,
-  serverHost: '',
-  serverPort: '',
+  serverHost: 'ssl.megasoftve.com',
+  serverPort: '4763',
+  ssl: true,
   vtid: '',
   id: '',
   lastConfigUpdate: '',
@@ -108,8 +112,11 @@ function normalizeMegaPos(raw) {
   const base = { ...DEFAULT_MEGA_POS, ...(raw || {}) };
   return {
     enabled: Boolean(base.enabled),
-    serverHost: String(base.serverHost ?? ''),
-    serverPort: String(base.serverPort ?? ''),
+    // Host/puerto vacíos (configs guardadas antes de tener defaults) caen al
+    // Merchant Server de producción.
+    serverHost: String(base.serverHost || DEFAULT_MEGA_POS.serverHost),
+    serverPort: String(base.serverPort || DEFAULT_MEGA_POS.serverPort),
+    ssl: base.ssl === undefined || base.ssl === null ? true : Boolean(base.ssl),
     vtid: String(base.vtid ?? ''),
     id: String(base.id ?? ''),
     lastConfigUpdate: String(base.lastConfigUpdate ?? ''),

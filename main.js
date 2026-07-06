@@ -3223,7 +3223,7 @@ app.whenReady().then(() => {
     }
   });
 
-  // Config Smart POS (host/port del Merchant Server + vtid/afiliación).
+  // Config Smart POS (host/port del Merchant Server + SSL + vtid/afiliación).
   // Se guarda en el settings unificado y se reescribe en vposconf.ini al reiniciar.
   ipcMain.handle('mega-pos-config-get', async () => {
     try {
@@ -3268,12 +3268,12 @@ app.whenReady().then(() => {
       const paths = {
         settings: settingsPath, // credenciales guardadas desde la UI
         runtime: runtimeDir, // distribución que ejecuta el VPOS
-        vposconf: iniPath, // archivo que reescribe la app: [server],[vtid],[pinpad-verifone]
+        vposconf: iniPath, // archivo que reescribe la app: [server],[SSL],[vtid],[pinpad],[pinpad-verifone]
         vposuniversal: path.join(runtimeDir, 'conf', 'vposuniversal.ini'), // [COMPRA_MEDIOS_PAGO]
       };
       if (!fs.existsSync(iniPath)) return { success: false, error: 'El VPOS aún no se ha inicializado en esta caja.', paths };
       const text = fs.readFileSync(iniPath, 'utf8');
-      const WANT = ['server', 'tpdu', 'vtid', 'pinpad-verifone', 'ssl'];
+      const WANT = ['server', 'tpdu', 'vtid', 'pinpad', 'pinpad-verifone', 'ssl'];
       const lines = text.split(/\r?\n/);
       const out = [];
       let section = null, keep = false;

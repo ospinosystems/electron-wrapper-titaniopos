@@ -52,14 +52,27 @@ const getVposRuntimeDir = (app) => {
   return path.join(base, 'vpos-rest');
 };
 
+/** Versión de la distribución VPOS ([versionVPos] de conf/vposconf.ini). */
+const readDistroVersion = (dir) => {
+  try {
+    const ini = fs.readFileSync(path.join(dir, 'conf', 'vposconf.ini'), 'utf8');
+    const m = ini.match(/\[versionVPos\][^[]*?version\s*=\s*([^\r\n]+)/i);
+    return m ? m[1].trim() : '0';
+  } catch (_) {
+    return '0';
+  }
+};
+
 /**
- * Copia la distribución a la carpeta escribible si falta o si la versión de la
- * app cambió (upgrade). Copia única de ~279MB en la primera ejecución.
+ * Copia la distribución a la carpeta escribible si falta, si la versión de la
+ * app cambió (upgrade) o si cambió la versión del propio VPOS empaquetado
+ * (p.ej. 3.15.10 -> 3.16.0). Copia única de ~270MB en la primera ejecución.
  */
 const ensureRuntimeCopy = (app) => {
   const source = getVposSourceDir();
   const runtime = getVposRuntimeDir(app);
-  const version = (app && app.getVersion && app.getVersion()) || '0';
+  const appVersion = (app && app.getVersion && app.getVersion()) || '0';
+  const version = `${appVersion}:vpos-${readDistroVersion(source)}`;
   const marker = path.join(runtime, '.installed-version');
 
   if (!fs.existsSync(source)) {
@@ -122,11 +135,11 @@ const buildClasspath = (dir) => {
 /**
  * Reescribe vposconf.ini con la config por tienda. Reemplaza SOLO las claves
  * dentro de su sección correcta:
- *   [server] host/port  y  [vtid] vtid/id
+ *   [server] host/port, [SSL] active y [vtid] vtid/id
  * Conserva el resto del archivo intacto. Si no hay config, no toca nada.
  */
 const applyConfigToIni = (runtimeDir, cfg) => {
-  if (!cfg || (!cfg.serverHost && !cfg.serverPort && !cfg.vtid && !cfg.id)) {
+  if (!cfg) {
     log('[MEGA_POS] Sin config megaPos; se usa vposconf.ini tal cual.');
     return;
   }
@@ -138,6 +151,8 @@ const applyConfigToIni = (runtimeDir, cfg) => {
 
   const overrides = {
     server: { host: cfg.serverHost, port: cfg.serverPort },
+    // Producción exige SSL (ssl.megasoftve.com:4763); `false` explícito lo apaga.
+    ssl: { active: cfg.ssl === false ? '0' : '1' },
     vtid: { vtid: cfg.vtid, id: cfg.id },
   };
 
@@ -196,50 +211,62 @@ const applyVposUniversalActivation = (runtimeDir) => {
 };
 
 /**
- * Asegura la sección [pinpad-verifone] en vposconf.ini con la config del P200
- * (ENGAGE por USB) que exige el ambiente de certificación de Megasoft.
- * Claves verificadas contra el jar del VPOS. Idempotente: actualiza las claves
- * si la sección existe, o la agrega completa si falta.
+ * Config del pinpad Verifone P200 (ENGAGE por USB) validada en la certificación
+ * de Megasoft. Esquema de VPOS 3.16.0: la marca, el tipo de puerto y la
+ * encriptación de data sensible ahora viven en [pinpad] (por el soporte
+ * multi-marca Verifone/Morefun); el modelo y los comandos siguen en
+ * [pinpad-verifone]. En 3.15.x todo iba en [pinpad-verifone].
+ * Idempotente: actualiza las claves si la sección existe, o la agrega si falta.
  */
-const PINPAD_VERIFONE = {
-  modelo: 'ENGAGE',
-  puerto: 'USB',
-  comandosNuevos: '1',
-  tipoPinblock: 'DUKPT',
-  dataSensibleEncriptada: '1',
+const PINPAD_SECTIONS = {
+  pinpad: {
+    marca: 'VERIFONE',
+    tipoPuerto: 'USB',
+    dataSensibleEncriptada: '1',
+  },
+  'pinpad-verifone': {
+    modelo: 'ENGAGE',
+    comandosNuevos: '1',
+    tipoPinblock: 'DUKPT',
+  },
+};
+/** Actualiza/inserta claves dentro de una sección exacta del ini (en memoria). */
+const upsertIniSection = (lines, sectionName, entries) => {
+  const header = new RegExp(`^\\s*\\[${sectionName.replace(/[-[\]]/g, '\\$&')}\\]\\s*$`, 'i');
+  let start = -1, end = lines.length;
+  for (let i = 0; i < lines.length; i++) {
+    if (header.test(lines[i])) {
+      start = i;
+      for (let j = i + 1; j < lines.length; j++) {
+        if (/^\s*\[[^\]]+\]\s*$/.test(lines[j])) { end = j; break; }
+      }
+      break;
+    }
+  }
+  if (start === -1) {
+    lines.push('', `[${sectionName}]`, ...Object.entries(entries).map(([k, v]) => `${k}=${v}`));
+    return;
+  }
+  const pending = { ...entries };
+  for (let i = start + 1; i < end; i++) {
+    const kv = lines[i].match(/^(\s*)([A-Za-z0-9_]+)\s*=.*$/);
+    if (kv && kv[2] in pending) { lines[i] = `${kv[1]}${kv[2]}=${pending[kv[2]]}`; delete pending[kv[2]]; }
+  }
+  const insert = Object.entries(pending).map(([k, v]) => `${k}=${v}`);
+  if (insert.length) lines.splice(end, 0, ...insert);
 };
 const applyPinpadVerifone = (runtimeDir) => {
   const iniPath = path.join(runtimeDir, 'conf', 'vposconf.ini');
   if (!fs.existsSync(iniPath)) return;
   try {
     const lines = fs.readFileSync(iniPath, 'utf8').split(/\r?\n/);
-    // Localizar [pinpad-verifone] y el final de su bloque.
-    let start = -1, end = lines.length;
-    for (let i = 0; i < lines.length; i++) {
-      if (/^\s*\[pinpad-verifone\]\s*$/i.test(lines[i])) { start = i;
-        for (let j = i + 1; j < lines.length; j++) { if (/^\s*\[[^\]]+\]\s*$/.test(lines[j])) { end = j; break; } }
-        break;
-      }
+    for (const [section, entries] of Object.entries(PINPAD_SECTIONS)) {
+      upsertIniSection(lines, section, entries);
     }
-    if (start === -1) {
-      // No existe: la agregamos al final.
-      const block = ['', '[pinpad-verifone]', ...Object.entries(PINPAD_VERIFONE).map(([k, v]) => `${k}=${v}`)];
-      fs.writeFileSync(iniPath, lines.concat(block).join('\n'), 'utf8');
-      log('[MEGA_POS] vposconf.ini: agregada sección [pinpad-verifone] (P200 ENGAGE/USB)');
-      return;
-    }
-    // Existe: actualizar/insertar cada clave dentro del bloque [start+1, end).
-    const pending = { ...PINPAD_VERIFONE };
-    for (let i = start + 1; i < end; i++) {
-      const kv = lines[i].match(/^(\s*)([A-Za-z0-9_]+)\s*=.*$/);
-      if (kv && kv[2] in pending) { lines[i] = `${kv[1]}${kv[2]}=${pending[kv[2]]}`; delete pending[kv[2]]; }
-    }
-    const insert = Object.entries(pending).map(([k, v]) => `${k}=${v}`);
-    if (insert.length) lines.splice(end, 0, ...insert);
     fs.writeFileSync(iniPath, lines.join('\n'), 'utf8');
-    log('[MEGA_POS] vposconf.ini: [pinpad-verifone] actualizado (P200 ENGAGE/USB)');
+    log('[MEGA_POS] vposconf.ini: [pinpad] + [pinpad-verifone] aplicados (P200 ENGAGE/USB)');
   } catch (e) {
-    logErr('[MEGA_POS] No se pudo aplicar [pinpad-verifone]:', e.message);
+    logErr('[MEGA_POS] No se pudo aplicar config del pinpad:', e.message);
   }
 };
 
