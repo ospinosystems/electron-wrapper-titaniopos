@@ -210,11 +210,11 @@ function registerMegaPosHandlers() {
     'precierre',
     'cierre',
     'ultimoCierre',
-    // Consulta del resultado de la última transacción procesada por el VPOS.
-    // Único mecanismo para saber si un cobro interrumpido (crash/timeout)
-    // llegó a aprobarse: el request de compra no admite id propio.
-    'ultimaTransaccion',
-    'ultimaTransaccionRealizada',
+    // ⚠️ ultimaTransaccion / ultimaTransaccionRealizada NO existen en el
+    // dispatcher del VposREST 1.0.7 (responden 99 "Metodo invalido" —
+    // verificado contra el servicio real). La consulta de la última
+    // transacción se hace leyendo los ARCHIVOS DE CONTROL del VPOS
+    // (mega-pos-last-tx, abajo), no por REST.
   ]);
   ipcMain.handle('mega-pos-task', async (event, requestBody = {}) => {
     try {
@@ -244,6 +244,101 @@ function registerMegaPosHandlers() {
         return { success: false, status: 408, error: error.message };
       }
       return { success: false, status: 500, error: error?.message || 'Error en el proxy VPOS' };
+    }
+  });
+
+  // -------- Última transacción (archivos de control del VPOS) --------
+  // El VPOS escribe en <voucherDir>\archivosControl\<VTID>Trx.txt la última
+  // transacción APROBADA (<TA>...</TA>) y la última PROCESADA (<TP>...</TP>)
+  // en formato pipe. Es la única fuente confiable para saber si un cobro
+  // interrumpido (corte de luz / crash) llegó a aprobarse — el REST 1.0.7 no
+  // tiene consulta de última transacción.
+  // Muestra real: 00|APROBADA|22|527|GTGUARA01|145|20260707|114418|
+  //   P-CaribeCredit|C:\voucher\vouchers\000222.txt|928|VES||5552…1771|Otros|
+  //   D|noCVM|000007|186763|0073497094|00001251|114|1|Master Debit
+  const VOUCHER_BASE = (process.env.TITANIOPOS_VPOS_VOUCHER_DIR || 'C:\\voucher').replace(/[\\/]+$/, '');
+
+  const parseControlEntry = (line) => {
+    const f = String(line || '').trim().split('|');
+    if (f.length < 19) return null;
+    return {
+      codRespuesta: f[0],
+      estado: f[1],
+      numSeq: f[2],
+      montoCents: parseInt(f[3], 10) || 0,
+      vtid: f[4],
+      fecha: f[6], // yyyymmdd
+      hora: f[7], // hhmmss
+      autorizador: f[8],
+      voucherPath: f[9],
+      moneda: f[11],
+      tarjeta: f[13],
+      tipo: f[15], // D/C
+      referencia: f[17],
+      aprobacion: f[18],
+      tid: f[19] || null,
+      afiliacion: f[20] || null,
+      tipoTarjeta: f[f.length - 1] || null,
+    };
+  };
+
+  const resolveVtid = () => {
+    try {
+      const { app } = require('electron');
+      const { readSettings } = require('./titaniopos-settings-file');
+      return String(readSettings(app)?.megaPos?.vtid || '').trim();
+    } catch (_) { return ''; }
+  };
+
+  ipcMain.handle('mega-pos-last-tx', async () => {
+    try {
+      const vtid = resolveVtid();
+      if (!vtid) return { success: false, error: 'Mega POS sin vtid configurado' };
+      const file = path.join(VOUCHER_BASE, 'archivosControl', `${vtid}Trx.txt`);
+      if (!fs.existsSync(file)) {
+        return { success: false, error: `Sin archivo de control (${file})` };
+      }
+      const raw = fs.readFileSync(file, 'utf8');
+      const grab = (tag) => {
+        const m = raw.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`));
+        return m ? parseControlEntry(m[1]) : null;
+      };
+      return {
+        success: true,
+        vtid,
+        file,
+        approved: grab('TA'), // última APROBADA
+        processed: grab('TP'), // última PROCESADA (puede ser rechazada)
+      };
+    } catch (error) {
+      return { success: false, error: error?.message || 'Error leyendo control del VPOS' };
+    }
+  });
+
+  // -------- Vouchers registrados por el VPOS (visor) --------
+  ipcMain.handle('mega-pos-vouchers', async (event, opts = {}) => {
+    try {
+      const limit = Math.min(Math.max(parseInt(opts.limit, 10) || 50, 1), 200);
+      const dir = path.join(VOUCHER_BASE, 'vouchers');
+      if (!fs.existsSync(dir)) return { success: true, dir, vouchers: [] };
+      const files = fs.readdirSync(dir)
+        .filter((n) => n.toLowerCase().endsWith('.txt'))
+        .map((n) => {
+          const p = path.join(dir, n);
+          let mtime = 0;
+          try { mtime = fs.statSync(p).mtimeMs; } catch (_) {}
+          return { name: n, path: p, mtime };
+        })
+        .sort((a, b) => b.mtime - a.mtime)
+        .slice(0, limit);
+      const vouchers = files.map((fEntry) => {
+        let content = '';
+        try { content = fs.readFileSync(fEntry.path, 'utf8'); } catch (_) {}
+        return { name: fEntry.name, mtime: fEntry.mtime, content };
+      });
+      return { success: true, dir, vouchers };
+    } catch (error) {
+      return { success: false, error: error?.message || 'Error leyendo vouchers' };
     }
   });
 

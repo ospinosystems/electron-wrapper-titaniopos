@@ -191,6 +191,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Tareas de caja: imprimeUltimoVoucher | imprimeUltimoVoucherP | precierre | cierre | ultimoCierre. */
   megaPosTask: (action) => ipcRenderer.invoke('mega-pos-task', { action }),
 
+  /** Última transacción del VPOS desde sus archivos de control:
+   *  { success, approved: <última APROBADA>, processed: <última PROCESADA> }
+   *  con { codRespuesta, estado, numSeq, montoCents, fecha, hora, referencia,
+   *  aprobacion, tarjeta, tipoTarjeta, voucherPath }. */
+  megaPosLastTx: () => ipcRenderer.invoke('mega-pos-last-tx'),
+
+  /** Vouchers registrados por el VPOS (más recientes primero): { success, dir,
+   *  vouchers: [{ name, mtime, content }] }. */
+  megaPosVouchers: (opts = {}) => ipcRenderer.invoke('mega-pos-vouchers', opts),
+
   /** Lee el texto del voucher/reporte que generó el VPOS (ruta de nombreVoucher). */
   megaPosReadVoucher: (filePath) => ipcRenderer.invoke('mega-pos-read-voucher', filePath),
 
