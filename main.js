@@ -139,6 +139,15 @@ const loadEnvFile = (envPath, logTag) => {
   }
 };
 
+// Preset de AMBIENTE para desarrollo: `npm run start:local` / `start:prod`
+// pasan --env=local|prod y acá se carga .env.local / .env.prod ANTES que todo
+// (gana el primero) → cambiar de ambiente es un comando, sin editar .env.
+const envFlag = (process.argv.find((a) => a.startsWith('--env=')) || '').slice(6).trim()
+  || String(process.env.TITANIOPOS_ENV || '').trim();
+if (/^[a-z0-9_-]+$/i.test(envFlag)) {
+  loadEnvFile(path.join(__dirname, `.env.${envFlag}`), `.env.${envFlag} (preset --env)`);
+}
+
 // .env EXTERNO (editable, en resources/ junto a la app) que SOBRESCRIBE al
 // horneado: permite reconfigurar la caja (backend / electric / updates entre
 // prod y local) SIN recompilar. Se carga PRIMERO porque loadEnvFile no pisa una

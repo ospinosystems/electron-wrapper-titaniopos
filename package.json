@@ -10,7 +10,9 @@
     "build": "npm run prebuild && npm run bundle:frontend && electron-builder --win --publish never",
     "build:portable": "npm run prebuild && npm run bundle:frontend && electron-builder --win portable --publish never",
     "release": "npm run prebuild && npm run bundle:frontend && electron-builder --win --publish always",
-    "publish": "npm run prebuild && npm run bundle:frontend && electron-builder --win --publish always"
+    "publish": "npm run prebuild && npm run bundle:frontend && electron-builder --win --publish always",
+    "start:local": "electron . --env=local",
+    "start:prod": "electron . --env=prod"
   },
   "author": "TitanioPOS",
   "license": "MIT",
