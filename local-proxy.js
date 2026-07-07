@@ -251,8 +251,12 @@ function startProxy(localPort, nextPort, host = '127.0.0.1', uiUpstream = null, 
     });
 
     // WebSocket (HMR del dev server en modo testing): pasar el upgrade al upstream.
+    // TODOS los sockets llevan handler de 'error': un ECONNRESET en un socket
+    // crudo sin handler es uncaught exception → crash del main process (pasaba
+    // con los reconnects del HMR).
     server.on('upgrade', (req, clientSocket, head) => {
       try {
+        clientSocket.on('error', () => { try { clientSocket.destroy(); } catch (_) {} });
         const base = new URL(uiUpstream || localUI);
         const upReq = http.request({
           host: base.hostname,
@@ -261,6 +265,7 @@ function startProxy(localPort, nextPort, host = '127.0.0.1', uiUpstream = null, 
           headers: { ...req.headers, host: base.host },
         });
         upReq.on('upgrade', (upRes, upSocket, upHead) => {
+          upSocket.on('error', () => { try { clientSocket.destroy(); } catch (_) {} });
           clientSocket.write(
             'HTTP/1.1 101 Switching Protocols\r\n' +
             Object.entries(upRes.headers).map(([k, v]) => `${k}: ${v}`).join('\r\n') +
@@ -269,10 +274,21 @@ function startProxy(localPort, nextPort, host = '127.0.0.1', uiUpstream = null, 
           if (upHead && upHead.length) upSocket.unshift(upHead);
           upSocket.pipe(clientSocket);
           clientSocket.pipe(upSocket);
+          clientSocket.on('close', () => { try { upSocket.destroy(); } catch (_) {} });
+          upSocket.on('close', () => { try { clientSocket.destroy(); } catch (_) {} });
         });
         upReq.on('error', () => { try { clientSocket.destroy(); } catch (_) {} });
         upReq.end();
       } catch (_) { try { clientSocket.destroy(); } catch (_) {} }
+    });
+
+    // Sockets HTTP entrantes con errores (resets del navegador al recargar):
+    // sin esto, un ECONNRESET fuera de un request activo tumba el proceso.
+    server.on('clientError', (err, socket) => {
+      try { socket.destroy(err); } catch (_) {}
+    });
+    server.on('connection', (socket) => {
+      socket.on('error', () => { try { socket.destroy(); } catch (_) {} });
     });
 
     server.on('error', reject);
