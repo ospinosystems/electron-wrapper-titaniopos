@@ -298,7 +298,9 @@ function registerMegaPosHandlers() {
       if (!fs.existsSync(file)) {
         return { success: false, error: `Sin archivo de control (${file})` };
       }
-      const raw = fs.readFileSync(file, 'utf8');
+      // latin1: el VPOS escribe Windows-1252 (igual que sus vouchers); utf8
+      // corrompía los campos de texto con acentos.
+      const raw = fs.readFileSync(file, 'latin1');
       const grab = (tag) => {
         const m = raw.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`));
         return m ? parseControlEntry(m[1]) : null;
