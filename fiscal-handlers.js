@@ -315,16 +315,59 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null) => {
     lines.push(barcodeLine);
   }
 
-  // Cierre de factura - tipo de pago
-  // 101 = Efectivo
-  // 102 = Débito
-  // 103 = Crédito
-  // 104 = Otros
-  // 199 = Sin pago (solo para cierres sin monto)
-  const paymentType = invoiceData.paymentType || '101';
-  lines.push(paymentType);
+  // Cierre de factura - forma(s) de pago.
+  // Códigos HKA: 01=Efectivo, 02=Débito, 03=Crédito, 04=Otros.
+  // 20-24 = DIVISA (moneda extranjera): la impresora calcula e imprime el
+  //         IGTF (3%) automáticamente al cerrar con uno de estos medios.
+  // El comando de cierre es '1' + código de 2 dígitos (ej. '101', '120').
+  for (const line of buildCloseLines(invoiceData)) {
+    lines.push(line);
+  }
 
   return lines;
+};
+
+// Construye la(s) línea(s) de cierre de una factura a partir de los pagos.
+//
+// Contrato con el frontend: invoiceData.payments = [{ code, amountBs }]
+//   - code: código HKA de 2 dígitos del medio de pago ('01' efectivo, '20' divisa, ...)
+//   - amountBs: monto de ESE pago en bolívares (para pagos mixtos). Opcional.
+//
+// Reglas:
+//   - Sin payments (o vacío): back-compat → una sola línea '1' + (paymentType || '01').
+//   - Un solo pago: cierre por total completo '1'+code (sin monto). Robusto: no
+//     depende de que el monto cuadre al céntimo con lo que calculó la impresora.
+//   - Varios pagos (mixto): una línea parcial por pago '1'+code+monto(12 díg, céntimos).
+//     El IGTF se dispara igual en las líneas con código de divisa (20-24).
+//
+// OJO HARDWARE: el formato de la línea parcial con monto (mixto) debe validarse
+// contra la máquina real en la pre-instalación. El caso de un solo pago (que es
+// el que valida SENIAT al pagar todo en divisa o todo en Bs) es el camino seguro.
+const buildCloseLines = (invoiceData) => {
+  const payments = Array.isArray(invoiceData.payments) ? invoiceData.payments : [];
+
+  const normCode = (c, fallback) => {
+    const digits = String(c ?? '').replace(/\D/g, '');
+    return digits.length ? digits.padStart(2, '0').slice(-2) : fallback;
+  };
+
+  if (payments.length === 0) {
+    // Compatibilidad con el flujo previo: paymentType podía venir ya como '101'.
+    const legacy = invoiceData.paymentType || '101';
+    return [String(legacy)];
+  }
+
+  if (payments.length === 1) {
+    return [`1${normCode(payments[0].code, '01')}`];
+  }
+
+  // Pago mixto: línea parcial por cada pago, con el monto en céntimos (12 díg).
+  return payments.map((p) => {
+    const code = normCode(p.code, '04'); // sin código claro → "otros"
+    const cents = Math.max(0, Math.round((parseFloat(p.amountBs) || 0) * 100));
+    const amountStr = cents.toString().padStart(12, '0');
+    return `1${code}${amountStr}`;
+  });
 };
 
 // Función auxiliar para limpiar texto (eliminar acentos y caracteres especiales)
@@ -433,10 +476,11 @@ const generateCreditNoteContent = (creditNoteData) => {
     }
   }
   
-  // Cierre
-  const paymentType = creditNoteData.paymentType || '101';
-  lines.push(paymentType);
-  
+  // Cierre (mismo contrato que la factura: reversa el IGTF si el pago era divisa)
+  for (const line of buildCloseLines(creditNoteData)) {
+    lines.push(line);
+  }
+
   return lines;
 };
 
@@ -508,10 +552,13 @@ const registerFiscalHandlers = (app) => {
         raw: config.barcodeRaw || null,
       };
 
-      // Enviar factura (pasando fiscalMode para agregar indicador si es prueba)
+      // Enviar factura (pasando fiscalMode para agregar indicador si es prueba).
+      // Para NOTA DE CRÉDITO, el serial de la máquina (iI*) sale de la config si
+      // el frontend no lo envió — es un dato fijo de la caja.
       const result = await sendFiscalInvoice(config.serverUrl, {
         ...invoiceData,
         cashRegisterNumber: invoiceData.cashRegisterNumber || config.cashRegisterNumber,
+        originalPrinterSerial: invoiceData.originalPrinterSerial || config.machineSerial || undefined,
       }, isFiscalMode, barcodeOpts);
 
       if (result.success) {

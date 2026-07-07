@@ -50,6 +50,20 @@ const DEFAULT_FISCAL = {
   // texto 0=sin número 1=con número). {code} = número de orden.
   // Default: barra al pie con el número debajo.
   barcodeRaw: 'j211{code}',
+  // Forzar máquina fiscal: cuando ON, cada venta procesada emite factura fiscal
+  // automáticamente y cada devolución emite su nota de crédito, sin depender de
+  // que el cajero pulse "Facturar". OFF por defecto (comportamiento manual).
+  forceFiscal: false,
+  // Código HKA del medio de pago en DIVISA que dispara el IGTF (3%). El protocolo
+  // The Factory HKA usa medios de pago 20-24 para divisa; 20 es el default.
+  // El cierre de una factura pagada en divisa se envía como '1'+este código
+  // (ej. '120') y la impresora calcula e imprime el IGTF sola.
+  // NOTA: validar contra la máquina real (modelo/firmware) en la pre-instalación.
+  igtfDivisaCode: '20',
+  // Serial de la impresora fiscal (ej. 'ZPA2000343'). Requerido en la NOTA DE
+  // CRÉDITO (campo iI*): identifica la máquina que emitió la factura original.
+  // Se configura una vez por caja en Ajustes → Caja.
+  machineSerial: '',
 };
 
 const DEFAULT_UI = {
@@ -104,7 +118,15 @@ function normalizeThermal(raw) {
 }
 
 function normalizeFiscal(raw) {
-  return { ...DEFAULT_FISCAL, ...raw };
+  const base = { ...DEFAULT_FISCAL, ...raw };
+  return {
+    ...base,
+    forceFiscal: Boolean(base.forceFiscal),
+    // Solo dígitos; si queda vacío cae al default (20 = divisa).
+    igtfDivisaCode: String(base.igtfDivisaCode ?? '').replace(/\D/g, '') || DEFAULT_FISCAL.igtfDivisaCode,
+    // Serial alfanumérico, en mayúsculas, sin espacios.
+    machineSerial: String(base.machineSerial ?? '').trim().toUpperCase(),
+  };
 }
 
 function normalizeUi(raw) {
