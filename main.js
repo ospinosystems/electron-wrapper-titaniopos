@@ -1,6 +1,52 @@
 const { app, BrowserWindow, ipcMain, Menu, dialog, nativeImage, Notification, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+
+// ── Carga de .env ANTES de cualquier require local ───────────────────────────
+// Varios módulos (local-proxy, etc.) leen TITANIOPOS_* en CONSTANTES al cargar
+// el módulo. Si el env se carga después de los requires, capturan los defaults
+// (prod) e ignoran .env/.env.local — el bug de "local apunta a prod". Orden de
+// prioridad (gana el primero; loadEnvFile no pisa lo ya seteado):
+//   1. preset --env=local|prod (npm run start:local / start:prod)
+//   2. resources/.env (externo editable de la caja instalada)
+//   3. .env de la raíz del repo
+const loadEnvFile = (envPath, logTag) => {
+  try {
+    if (!fs.existsSync(envPath)) return;
+    const content = fs.readFileSync(envPath, 'utf-8');
+    content.split(/\r?\n/).forEach((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) return;
+      const idx = trimmed.indexOf('=');
+      if (idx === -1) return;
+      const key = trimmed.slice(0, idx).trim();
+      let val = trimmed.slice(idx + 1).trim();
+      if (
+        (val.startsWith('"') && val.endsWith('"')) ||
+        (val.startsWith("'") && val.endsWith("'"))
+      ) {
+        val = val.slice(1, -1);
+      }
+      if (key && !(key in process.env)) {
+        process.env[key] = val;
+      }
+    });
+    if (logTag) console.log('[ENV] Loaded', logTag);
+  } catch (error) {
+    console.warn('[ENV] Could not load', envPath, error.message);
+  }
+};
+
+const envFlag = (process.argv.find((a) => a.startsWith('--env=')) || '').slice(6).trim()
+  || String(process.env.TITANIOPOS_ENV || '').trim();
+if (/^[a-z0-9_-]+$/i.test(envFlag)) {
+  loadEnvFile(path.join(__dirname, `.env.${envFlag}`), `.env.${envFlag} (preset --env)`);
+}
+if (process.resourcesPath) {
+  loadEnvFile(path.join(process.resourcesPath, '.env'), 'resources/.env (externo, editable)');
+}
+loadEnvFile(path.join(__dirname, '.env'), path.join(__dirname, '.env'));
+
 const {
   startFrontendServer,
   stopFrontendServer,
@@ -111,53 +157,8 @@ const {
   checkPythonInstalled
 } = require('./fiscal-server-manager');
 
-// Cargar .env de la raíz del proyecto antes de leer process.env (Electron no lo hace solo).
-const loadEnvFile = (envPath, logTag) => {
-  try {
-    if (!fs.existsSync(envPath)) return;
-    const content = fs.readFileSync(envPath, 'utf-8');
-    content.split(/\r?\n/).forEach((line) => {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) return;
-      const idx = trimmed.indexOf('=');
-      if (idx === -1) return;
-      const key = trimmed.slice(0, idx).trim();
-      let val = trimmed.slice(idx + 1).trim();
-      if (
-        (val.startsWith('"') && val.endsWith('"')) ||
-        (val.startsWith("'") && val.endsWith("'"))
-      ) {
-        val = val.slice(1, -1);
-      }
-      if (key && !(key in process.env)) {
-        process.env[key] = val;
-      }
-    });
-    if (logTag) console.log('[ENV] Loaded', logTag);
-  } catch (error) {
-    console.warn('[ENV] Could not load', envPath, error.message);
-  }
-};
-
-// Preset de AMBIENTE para desarrollo: `npm run start:local` / `start:prod`
-// pasan --env=local|prod y acá se carga .env.local / .env.prod ANTES que todo
-// (gana el primero) → cambiar de ambiente es un comando, sin editar .env.
-const envFlag = (process.argv.find((a) => a.startsWith('--env=')) || '').slice(6).trim()
-  || String(process.env.TITANIOPOS_ENV || '').trim();
-if (/^[a-z0-9_-]+$/i.test(envFlag)) {
-  loadEnvFile(path.join(__dirname, `.env.${envFlag}`), `.env.${envFlag} (preset --env)`);
-}
-
-// .env EXTERNO (editable, en resources/ junto a la app) que SOBRESCRIBE al
-// horneado: permite reconfigurar la caja (backend / electric / updates entre
-// prod y local) SIN recompilar. Se carga PRIMERO porque loadEnvFile no pisa una
-// var ya seteada (gana el primero). Queda como archivo suelto en resources/.
-if (process.resourcesPath) {
-  loadEnvFile(path.join(process.resourcesPath, '.env'), 'resources/.env (externo, editable)');
-}
-
-const ROOT_ENV_PATH = path.join(__dirname, '.env');
-loadEnvFile(ROOT_ENV_PATH, ROOT_ENV_PATH);
+// (La carga de .env vive al TOPE del archivo, antes de los requires locales —
+// ver comentario allá: módulos como local-proxy capturan env al cargarse.)
 
 // Secret key para JWT (legado) y HMAC (nuevo formato) — en producción debe venir por env.
 const JWT_SECRET = process.env.TITANIOPOS_JWT_SECRET || 'titaniopos-secure-key-2024-change-in-production';
