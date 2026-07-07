@@ -162,6 +162,11 @@ function registerMegaPosHandlers() {
           accion: 'tarjeta',
           montoTransaccion: formatMonto(amount),
           cedula: String(document || ''),
+          // Preselecciona el medio: sin esto el VPOS abre su DialogoMenuMediosPago
+          // y el cajero tiene que elegir a mano en la ventana Java. Verificado
+          // contra el servicio real: obtenerMediosPago → { MedioPagoTarjeta:
+          // "Medio Pago Tarjeta" } (único medio activo con nuestra config).
+          medioPago: 'MedioPagoTarjeta',
         };
       }
       if (terminalVirtual) payload.terminalVirtual = String(terminalVirtual);
