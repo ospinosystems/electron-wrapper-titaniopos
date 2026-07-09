@@ -1,0 +1,7 @@
+T002_CO_BOTON|T002_NU_ORDEN|T002_IN_ACTIVO|T002_DE_RUTA_IMAGEN|T002_DE_TEXTO|T002_NM_SECCION|T002_NM_PANTALLA|T002_NM_TECLA_ACCESO_RAPIDO|T002_IN_BOTON_FINALIZAR
+1|0|1|recarga_servicio.jpg|Recarga|Menu|PantallaRecarga|0|0
+2|1|1|carrito_servicios.jpg|Carrito de Servicios|Menu|PantallaCarrito|1|1
+3|2|1|procesar_transacciones.jpg|Procesar|Menu|PantallaCarritoFinalizar|2|1
+4|3|1|ultimo_voucher.jpg|Recibo|Menu|PantallaUltimoRecibo|U|1
+5|4|1|configuracion.jpg|Conf|Menu|PantallaConfiguracion|C|1
+5|5|1|finalizar.jpg|Finalizar|Menu|PantallaFinalizar|F|1

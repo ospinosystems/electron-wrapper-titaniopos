@@ -1,0 +1,282 @@
+
+* -----------------------------------------------------*
+* Metodo para Finalizar la ejecucion del Servicio      *
+* -----------------------------------------------------*
+Actividad: 	Finalizar ejecucion del servicio
+url : 		localhost:8085/vpos/metodo_terminate
+Metodo : 	metodoFinalizarEjecucion
+			GET
+Parametros: Ninguno
+
+* -----------------------------------------------------*
+* Metodos de Cards Procesos con Tarjeta Fisica         *
+*        Proceso : Canje de Puntos SUMA                *
+* -----------------------------------------------------*
+Actividad: 	lectura de tarjeta Cards por dispositivo
+url : 		localhost:8085/vpos/metodo_cards
+Metodo : 	leerTarjetaCards
+			POST
+Parametros: Ninguno
+Body:
+		{
+    		"accion":"leerTarjetaCards"
+		}
+			
+Actividad: 	Consulta de Puntos con Tarjeta Fisica
+url : 		localhost:8085/vpos/metodo_cards
+Metodo : 	consultaPuntosTFisica
+			POST
+Parametros: 
+	- Cedula
+	- Numero de Tarjeta leida en la actividad anterior
+Body:
+		{
+			"accion":"consultarPuntosTFisica",
+			"cedula":"cedula",
+			"numeroTarjeta":"numeroTarjeta"
+		}
+		
+Actividad: 	Canje de Puntos con Tarjeta Fisica
+url : 		localhost:8085/vpos/metodo_cards
+Metodo : 	canjePuntosTFisica
+			POST
+Parametros: 
+	- Cedula
+	- Numero de Tarjeta leida en la actividad anterior
+	- Cantidad de puntos a canjear
+Body:
+		{
+			"accion":"canjePuntosTFisica",
+			"cedula":"cedula",
+			"numeroTarjeta":"numeroTarjeta",
+			"puntosCanjear","puntosCanjear"
+		}	
+		
+Actividad: 	Acreditacion de Puntos con Tarjeta Fisica
+url : 		localhost:8085/vpos/metodo_cards
+Metodo : 	acreditarPuntosTFisica
+			POST
+Parametros: 
+	- Cedula
+	- Cantidad de puntos a acreditar
+Body:
+		{
+			"accion":"acreditarPuntosTFisica",
+			"cedula":"cedula",
+			"puntosAcreditar","puntosAcreditar"
+		}	
+		
+Actividad: 	Devolucion de Acreditacion de Puntos con Tarjeta Fisica
+url : 		localhost:8085/vpos/metodo_cards
+Metodo : 	devolucionPuntosTFisica
+			POST
+Parametros: 
+	- Cedula
+	- Cantidad de puntos a devolver
+Body:
+		{
+			"accion":"devolverPuntosTFisica",
+			"cedula":"cedula",
+			"puntosDevolver","puntosDevolver"
+		}		
+			
+* -----------------------------------------------------*
+* Metodos de Cards Procesos con Tarjeta Fisica         *
+*        Proceso : Compra Cards Prepago                *
+* -----------------------------------------------------*	
+Actividad: 	lectura de tarjeta Cards por dispositivo
+url : 		localhost:8085/vpos/metodo_cards
+Metodo : 	leerTarjetaCards
+			POST
+Parametros: Ninguno
+Body:
+		{
+    		"accion":"leerTarjetaCards"
+		}
+				
+Actividad: 	Consulta de Saldo 
+url : 		localhost:8085/vpos/metodo_cards
+Metodo : 	consultaSaldoTFisica
+			POST
+Parametros: 
+	- Cedula
+	- Numero de Tarjeta leida en la actividad anterior
+Body:
+		{
+    		"accion":"consultaSaldoTFisica",
+    		"cedula":"cedula",
+    		"numeroTarjeta":"numeroTarjeta"
+		}
+						
+Actividad: 	Compra Cards 
+url : 		localhost:8085/vpos/metodo_cards
+Metodo : 	compraCards
+			POST
+Parametros: 
+	- Cedula
+	- Numero de Tarjeta leida en la actividad anterior
+	- Saldo a Pagar
+Body:
+		{
+			"accion":"compraCards",
+			"cedula":"cedula",
+			"numeroTarjeta":"numeroTarjeta",
+			"saldoPagar":"saldoPagar"
+		}
+		
+* ----------------------------------------------------------*
+* Metodos de Cards Procesos con Tarjeta Desmaterializada    *
+*        Proceso : Canje de Puntos SUMA                     *
+* ----------------------------------------------------------*		
+Actividad: 	Consulta de Puntos con Tarjeta Desmaterializada
+url : 		localhost:8085/vpos/metodo_cards
+Metodo : 	consultaPuntosTVirtual
+			POST
+Parametros: 
+	- Cedula
+	- Numero de Tarjeta provista por la aplicacion cliente
+	- Fecha de Vencimiento de la tarjeta utilizada (YYMM)
+Body:
+		{
+		"accion":"consultarPuntosTVirtual",
+		"cedula":"cedula",
+		"numeroTarjeta":"numeroTarjeta",
+		"fechaVcmto":"fechaVcmto"		
+		}
+		
+Actividad: 	Canje de Puntos con Tarjeta Desmaterializada
+url : 		localhost:8085/vpos/metodo_cards
+Metodo : 	canjePuntosTVirtual
+			POST
+Parametros: 
+	- Cedula
+	- Numero de Tarjeta provista por la aplicacion cliente
+	- Cantidad de puntos a canjear
+Body:
+		{
+			"accion":"canjePuntosTVirtual",
+			"cedula":"cedula",
+			"numeroTarjeta":"numeroTarjeta",
+			"puntosCanjear","puntosCanjear"
+		}	
+						
+Actividad: 	Acreditacion de Puntos con Tarjeta Desmaterializada
+url : 		localhost:8085/vpos/metodo_cards
+Metodo : 	AcreditarPuntosTVirtual
+			POST
+Parametros: 
+	- Cedula
+	- Numero de Tarjeta provista por la aplicacion cliente
+	- Fecha de Vencimiento de la tarjeta utilizada (YYMM)	
+	- Cantidad de puntos a canjear
+Body:
+		{
+			"accion":"acreditarPuntosTVirtual",
+			"cedula":"cedula",
+			"numeroTarjeta":"numeroTarjeta",
+			"fechaVcmto":"fechaVcmto",
+			"puntosAcreditar":"puntosAcreditar"		
+		}	
+		
+Actividad: 	Devolucion de Acreditacion de Puntos con Tarjeta Desmaterializada
+url : 		localhost:8085/vpos/metodo_cards
+Metodo : 	devolucionPuntosTVirtual
+			POST
+Parametros: 
+	- Cedula
+	- Numero de Tarjeta provista por la aplicacion cliente
+	- Fecha de Vencimiento de la tarjeta utilizada (YYMM)		
+	- Cantidad de puntos a devolver
+Body:
+		{
+			"accion":"devolverPuntosTVirtual",
+			"cedula":"cedula",
+			"numeroTarjeta":"numeroTarjeta",
+			"fechaVcmto":"fechaVcmto",
+			"puntosDevolver","puntosDevolver"
+		}		
+				
+* ----------------------------------------------------------*
+* Metodos de Procesos Cards Mantenimiento de PIN            *
+*     para tarjetas de SUMA y Prepago                       *
+* ----------------------------------------------------------*	
+Actividad: Consulta de Lealtad con una tarjeta Cards 
+url : 		localhost:8085/vpos/metodo_cards
+			usando Tarjeta Fisica
+Metodo : 	mantenimientoPINTFisica
+			POST
+Parametros: 
+	- Cedula
+Body:
+		{
+			"accion":"mantenimientoPINTFisica",
+			"cedula":"cedula"
+		}
+		
+Actividad: 	Canje de Productos de lealtad Cards
+url : 		localhost:8085/vpos/metodo_cards
+Metodo : 	canjeProductoCards
+			POST
+Parametros: 
+	- vtId
+	- Cedula	
+Body:
+		{
+			"accion":"canjeProductoCards",
+			"vtId":"vtId",
+			"cedula":"cedula"
+		}
+		
+Actividad: 	Activacion de uan Tarjeta Cards
+url : 		localhost:8085/vpos/metodo_cards
+Metodo : 	canjeProductoCards
+			POST
+Parametros: 
+	- vtId
+Body:		
+		{
+			"accion":"activacionCards",
+			"vtId":"vtId",
+		}
+		
+Actividad: 	Cambio de PIN de uan Tarjeta Cards
+url : 		localhost:8085/vpos/metodo_cards
+Metodo : 	cambioPINCards
+			POST
+Parametros: 
+	- vtId
+	- Cedula	
+Body:		
+		{
+			"accion":"cambioPINCards",
+			"vtId":"vtId",
+			"cedula":"cedula"
+		}		
+		
+* ----------------------------------------------------------*
+* Metodos de Cards de Consulta                              *
+* ----------------------------------------------------------*	
+Actividad: 	Obtener el número de la tarjeta (PAN) leída 
+			por banda o chip.
+			El PAN se devuelve no enmascarado
+url : 		localhost:8085/vpos/metodo_cards
+Metodo : 	obtenerDatosDeLaBandaNoEnmascarado 
+			POST
+Parametros: 	
+
+Body:
+		{
+    		"accion":"obtenerDatosDeLaBandaNoEnmascarado"
+		}		
+		
+Actividad: 	Obtener el número de la tarjeta (PAN) leída 
+			por banda o chip.
+			El PAN se devuelve no enmascarado
+url : 		localhost:8085/vpos/metodo_cards
+Metodo : 	getDatosGiftcard 
+			POST
+Parametros: 	
+Body:
+		{
+    		"accion":"getDatosGiftcard"
+		}				

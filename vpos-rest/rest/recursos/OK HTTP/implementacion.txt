@@ -1,0 +1,22 @@
+//Invoca el método pre cierre de la VPOS Server REST
+
+public static void main(String[] args) {
+		OkHttpClient client = new OkHttpClient();
+
+		MediaType mediaType = MediaType.parse("application/json");
+		RequestBody body = RequestBody.create(mediaType, "{\r\n    \"accion\": \"precierre\"\r\n}");
+		Request request = new Request.Builder()
+		  .url("http://localhost:8085/vpos/metodo")
+		  .post(body)
+		  .addHeader("content-type", "application/json")
+		  .addHeader("cache-control", "no-cache")
+		  .build();
+
+		try {
+			Response response = client.newCall(request).execute();
+			System.out.println(response.body().string());
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+	}

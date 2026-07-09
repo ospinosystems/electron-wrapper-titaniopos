@@ -1,0 +1,1906 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+
+<protocol>
+
+ <spc-socket>          
+    <class-name>b2b.util.BinSocketHeader</class-name>
+    <class-param>0 </class-param>	
+ </spc-socket>
+         
+  <protocol-name>IsoFormatter</protocol-name>
+  <messages>
+    <hexHeader></hexHeader>      
+    <hexTrailer></hexTrailer>
+    <maxLen>20480</maxLen>
+
+    <message id='1'>
+      <msg-desc>0800</msg-desc>
+      <msg-type>0800</msg-type>
+      <msg-transId>SeqNum</msg-transId>
+      <bitmap-mask>E0000000000000000</bitmap-mask>
+      <msg-responseId>2</msg-responseId>
+      <msg-terminalId>VTID</msg-terminalId>
+      <table-id>TRM</table-id>
+      <kField>
+       <field-id>TPDU</field-id>
+        <field-value>60</field-value>
+      </kField>
+      <kField>
+       <field-id>Dest Add</field-id>
+        <field-value>0182</field-value>
+      </kField>
+      <kField>
+       <field-id>Org Add</field-id>
+        <field-value>0000</field-value>
+      </kField> 
+    </message>
+      
+	<message id='2'>
+      <msg-desc>0810</msg-desc>      
+      <msg-type>0810</msg-type>
+      <msg-transId>SeqNum</msg-transId>
+      <msg-terminalId>VTID</msg-terminalId>
+      <table-id>TRM_Response</table-id>    
+    </message>
+	  
+	<message id='3'>
+      <msg-desc>0200</msg-desc>
+      <msg-type>0200</msg-type>
+      <msg-transId>SeqNum</msg-transId>
+      <bitmap-mask>E0000000000000000</bitmap-mask>
+      <msg-responseId>4</msg-responseId>
+      <msg-terminalId>VTID</msg-terminalId>
+      <table-id>TRM</table-id>
+      <kField>
+       <field-id>TPDU</field-id>
+        <field-value>60</field-value>
+      </kField>
+      <kField>
+       <field-id>Dest Add</field-id>
+        <field-value>0182</field-value>
+      </kField>
+      <kField>
+       <field-id>Org Add</field-id>
+        <field-value>0000</field-value>
+      </kField>
+    </message>
+	  
+	 <message id='4'>
+      <msg-desc>0210</msg-desc>      
+      <msg-type>0210</msg-type>
+      <msg-transId>SeqNum</msg-transId>
+      <msg-terminalId>VTID</msg-terminalId>
+      <table-id>TRM_Response</table-id>    
+    </message>
+	  
+	 <message id='5'>
+      <msg-desc>0100</msg-desc>
+      <msg-type>0100</msg-type>
+      <msg-transId>SeqNum</msg-transId>
+      <bitmap-mask>E0000000000000000</bitmap-mask>
+      <msg-responseId>6</msg-responseId>
+      <msg-terminalId>VTID</msg-terminalId>
+      <table-id>TRM</table-id>
+      <kField>
+       <field-id>TPDU</field-id>
+        <field-value>60</field-value>
+      </kField>
+      <kField>
+       <field-id>Dest Add</field-id>
+        <field-value>0182</field-value>
+      </kField>
+      <kField>
+       <field-id>Org Add</field-id>
+        <field-value>0000</field-value>
+      </kField>
+    </message>
+	  
+	 <message id='6'>
+      <msg-desc>0110</msg-desc>      
+      <msg-type>0110</msg-type>
+      <msg-transId>SeqNum</msg-transId>
+      <msg-terminalId>VTID</msg-terminalId>
+      <table-id>TRM_Response</table-id>    
+    </message>
+	  
+	 <message id='7'>
+      <msg-desc>0400</msg-desc>
+      <msg-type>0400</msg-type>
+      <msg-transId>SeqNum</msg-transId>
+      <bitmap-mask>E0000000000000000</bitmap-mask>
+      <msg-responseId>8</msg-responseId>
+      <msg-terminalId>VTID</msg-terminalId>
+      <table-id>TRM</table-id>
+      <kField>
+       <field-id>TPDU</field-id>
+        <field-value>60</field-value>
+      </kField>
+      <kField>
+       <field-id>Dest Add</field-id>
+        <field-value>0182</field-value>
+      </kField>
+      <kField>
+       <field-id>Org Add</field-id>
+        <field-value>0000</field-value>
+      </kField>
+    </message>
+	  
+	 <message id='8'>
+      <msg-desc>0410</msg-desc>      
+      <msg-type>0410</msg-type>
+      <msg-transId>SeqNum</msg-transId>
+      <msg-terminalId>VTID</msg-terminalId>
+      <table-id>TRM_Response</table-id>    
+    </message>
+	  
+	 <message id='9'>
+      <msg-desc>0500</msg-desc>
+      <msg-type>0500</msg-type>
+      <msg-transId>SeqNum</msg-transId>
+      <bitmap-mask>E0000000000000000</bitmap-mask>
+      <msg-responseId>10</msg-responseId>
+      <msg-terminalId>VTID</msg-terminalId>
+      <table-id>TRM</table-id>
+      <kField>
+       <field-id>TPDU</field-id>
+        <field-value>60</field-value>
+      </kField>
+      <kField>
+       <field-id>Dest Add</field-id>
+        <field-value>0182</field-value>
+      </kField>
+      <kField>
+       <field-id>Org Add</field-id>
+        <field-value>0000</field-value>
+      </kField>
+    </message>
+	  
+	 <message id='10'>
+      <msg-desc>0510</msg-desc>      
+      <msg-type>0510</msg-type>
+      <msg-transId>SeqNum</msg-transId>
+      <msg-terminalId>VTID</msg-terminalId>
+      <table-id>TRM_Response</table-id>    
+    </message>
+    
+     <message id='11'>
+      <msg-desc>0600</msg-desc>
+      <msg-type>0600</msg-type>
+      <msg-transId>SeqNum</msg-transId>
+      <bitmap-mask>E0000000000000000</bitmap-mask>
+      <msg-responseId>12</msg-responseId>
+      <msg-terminalId>VTID</msg-terminalId>
+      <table-id>TRM</table-id>
+      <kField>
+       <field-id>TPDU</field-id>
+        <field-value>60</field-value>
+      </kField>
+      <kField>
+       <field-id>Dest Add</field-id>
+        <field-value>0182</field-value>
+      </kField>
+      <kField>
+       <field-id>Org Add</field-id>
+        <field-value>0000</field-value>
+      </kField>
+    </message>
+	  
+	 <message id='12'>
+      <msg-desc>0610</msg-desc>      
+      <msg-type>0610</msg-type>
+      <msg-transId>SeqNum</msg-transId>
+      <msg-terminalId>VTID</msg-terminalId>
+      <table-id>TRM_Response</table-id>    
+    </message>
+    
+     <message id='13'>
+      <msg-desc>Aviso</msg-desc>
+      <msg-type>0120</msg-type>
+      <msg-transId>SeqNum</msg-transId>
+      <msg-terminalId>VTID</msg-terminalId>
+	  <bitmap-mask>E0000000000000000</bitmap-mask>
+      <table-id>TRM</table-id>
+      <kField>
+       <field-id>TPDU</field-id>
+        <field-value>60</field-value>
+      </kField>
+      <kField>
+       <field-id>Dest Add</field-id>
+        <field-value>0182</field-value>
+      </kField>
+      <kField>
+       <field-id>Org Add</field-id>
+        <field-value>0000</field-value>
+      </kField> 
+    </message>
+	  
+     <message id='14'>
+      <msg-desc>Respuesta Aviso</msg-desc>      
+      <msg-type>0130</msg-type>
+      <msg-transId>SeqNum</msg-transId>
+      <msg-terminalId>VTID</msg-terminalId>
+	  <bitmap-mask>E0000000000000000</bitmap-mask>
+      <table-id>TRM_Response</table-id> 
+    </message>
+    
+    <message id='15'>
+      <msg-desc>Batch</msg-desc>
+      <msg-type>0320</msg-type>
+      <msg-transId>SeqNum</msg-transId>
+      <msg-terminalId>VTID</msg-terminalId>
+	  <bitmap-mask>E0000000000000000</bitmap-mask>
+      <table-id>TRM</table-id>
+      <kField>
+       <field-id>TPDU</field-id>
+        <field-value>60</field-value>
+      </kField>
+      <kField>
+       <field-id>Dest Add</field-id>
+        <field-value>0182</field-value>
+      </kField>
+      <kField>
+       <field-id>Org Add</field-id>
+        <field-value>0000</field-value>
+      </kField>  
+    </message>
+	  
+     <message id='16'>
+      <msg-desc>Respuesta Batch</msg-desc>      
+      <msg-type>0330</msg-type>
+      <msg-transId>SeqNum</msg-transId>
+      <msg-terminalId>VTID</msg-terminalId>
+	  <bitmap-mask>E0000000000000000</bitmap-mask>
+      <table-id>TRM_Response</table-id> 
+    </message>
+	  
+
+    
+    
+	  
+	
+	    
+	  
+  </messages>    
+
+  <trama>
+    <type-pos>5</type-pos>
+    <type-len>4</type-len>
+    <type-fmt>n</type-fmt> 
+    <hexField-separator></hexField-separator>
+    <bitmap-pos>7</bitmap-pos>  
+    <bitmap-len>16</bitmap-len> 
+    <bitmap-fmt>n</bitmap-fmt>
+    <bitmap-mask>E0000000000000000</bitmap-mask>
+    <data-pos>0</data-pos>
+  </trama>
+<tables>
+			<table id= 'TRM'>
+				<table-desc>Transaction Request Message</table-desc>     
+				<hexField-separator></hexField-separator>
+				<fields>
+				  <field id='1'>
+					<field-name>Settings</field-name>
+					<field-desc>Header Transaction</field-desc>
+					<table-id>TRM_Settings</table-id>
+					<table-bitmap>E</table-bitmap> 
+				  </field>
+					
+				  <field id='2'>
+					<field-name>IMsgType</field-name>
+					<field-desc>Tipo de mensaje</field-desc>
+					<field-attribute>n</field-attribute>
+					<field-maxsize>4</field-maxsize>
+				  </field>
+					
+				  <field id='3'>
+					<field-name>PrimaryBitMap</field-name>
+					<field-desc>Bitmap Primario</field-desc>
+					<field-attribute>n</field-attribute> 
+					<field-maxsize>16</field-maxsize>
+				  </field>
+					
+				  <field id='4'>
+					<field-name>SecondaryBitMap</field-name>
+					<field-desc>Bitmap Secundario</field-desc>
+					<field-attribute>ans</field-attribute> 
+					<field-maxsize>16</field-maxsize>
+				  </field>
+					
+				  <field id='5'>
+					<field-name>b001</field-name>
+					<field-desc>Bitmap extendido</field-desc>
+					<field-attribute>n</field-attribute> 
+					<field-maxsize>16</field-maxsize>
+				  </field>
+					
+				  <field id='6'>
+					<field-name>b002</field-name>
+					<field-desc>Numero de tarjeta (PAN)</field-desc>
+					<field-attribute>track</field-attribute> 
+					<field-maxsize>19</field-maxsize>
+					<field-indicator>2</field-indicator>
+				  </field>
+					
+				  <field id='7'>
+					<field-name>Ib003</field-name>
+					<field-desc>Codigo de Procesamiento</field-desc>
+					<field-attribute>n</field-attribute> 
+					<field-maxsize>6</field-maxsize>
+				  </field>
+					
+				  <field id='8'>
+					<field-name>b004</field-name>
+					<field-desc>Monto de la transaccion</field-desc>
+					<field-attribute>n</field-attribute> 
+					<field-maxsize>12</field-maxsize>
+				  </field>
+					
+				  <field id='9'></field>
+		          <field id='10'></field>
+				  <field id='11'></field>
+				  <field id='12'></field>
+				  <field id='13'></field>
+				  <field id='14'></field>
+					
+				  <field id='15'>
+					<field-name>SeqNum</field-name>
+					<field-desc>Numero de secuencia</field-desc>
+					<field-attribute>n</field-attribute> 
+					<field-maxsize>6</field-maxsize>
+				  </field>
+					
+				  <field id='16'>
+					<field-name>b012</field-name>
+					<field-desc>Hora local de la transaccion</field-desc>
+					<field-attribute>n</field-attribute> 
+					<field-maxsize>6</field-maxsize>
+				  </field>
+					
+				  <field id='17'>
+					<field-name>b013</field-name>
+					<field-desc>Fecha de la transaccion</field-desc>
+					<field-attribute>n</field-attribute> 
+					<field-maxsize>4</field-maxsize>
+				  </field>
+					
+				  <field id='18'>
+					<field-name>b014</field-name>
+					<field-desc>Fecha de Vencimiento (AAMM)</field-desc>
+					<field-attribute>n</field-attribute> 
+					<field-maxsize>4</field-maxsize>
+				  </field>
+					
+				  <field id='19'></field>
+				  <field id='20'></field>
+				  <field id='21'></field>
+				  <field id='22'></field>
+				  <field id='23'></field>
+				  <field id='24'></field>
+				  <field id='25'></field>
+					
+				  <field id='26'>
+					<field-name>Ib022</field-name>
+					<field-desc>Modo de ingreso en el POS</field-desc>
+					<field-attribute>n</field-attribute> 
+					<field-maxsize>4</field-maxsize>
+				  </field>
+					
+				  <field id='27'>
+					<field-name>b023</field-name>
+					<field-desc>Card Sequence Number</field-desc>
+					<field-attribute>n</field-attribute> 
+					<field-maxsize>2</field-maxsize>
+				  </field>
+				  
+				  <field id='28'></field>
+				  <field id='29'></field>
+				  <field id='30'></field>
+				  <field id='31'></field>
+				  <field id='32'></field>
+				  <field id='33'></field>
+				  <field id='34'></field>
+				  <field id='35'></field>
+					
+		           <field id='36'>
+					<field-name>AcqCode</field-name>
+					<field-desc>Campo 32 Codigo de Adquiriente</field-desc>
+					<field-attribute>n</field-attribute> 
+					<field-maxsize>11</field-maxsize>
+					<field-indicator>2</field-indicator>
+					<indicator-attribute>n</indicator-attribute>
+				  </field>
+					
+				   <field id='37'>
+					<field-name>IssuerCode</field-name>
+					<field-desc>Campo 32 Codigo de Emisor</field-desc>
+					<field-attribute>n</field-attribute> 
+					<field-maxsize>11</field-maxsize>
+					<field-indicator>2</field-indicator>
+					<indicator-attribute>n</indicator-attribute>
+				  </field>
+				  
+				  <field id='38'></field>
+					
+				  <field id='39'>
+					<field-name>b035</field-name>
+					<field-desc>Datos del track 2</field-desc>
+					<field-attribute>track</field-attribute> 
+					<field-maxsize>37</field-maxsize>
+					<field-indicator>2</field-indicator>
+				  </field>
+					
+				  <field id='40'>
+					<field-name>Track2Cifrado</field-name>
+					<field-desc>Track 2 cifrado</field-desc>
+					<field-attribute>ans</field-attribute> 
+					<field-maxsize>100</field-maxsize>
+					<field-indicator>4</field-indicator>
+					<indicator-attribute>n</indicator-attribute>
+				  </field>
+					
+				  <field id='41'>
+					<field-name>b037</field-name>
+					<field-desc>Retrieval Reference Number (RRN)</field-desc>
+					<field-attribute>an</field-attribute> 
+					<field-maxsize>12</field-maxsize>
+				  </field>
+					
+				  <field id='42'>
+					<field-name>b038</field-name>
+					<field-desc>Codigo de autorizacion</field-desc>
+					<field-attribute>an</field-attribute> 
+					<field-maxsize>6</field-maxsize>
+				  </field>
+					
+				  <field id='43'>
+					<field-name>b039</field-name>
+					<field-desc>Codigo de Respuesta</field-desc>
+					<field-attribute>an</field-attribute> 
+					<field-maxsize>2</field-maxsize>
+				  </field>
+					
+				  <field id='44'></field>
+					
+				  <field id='45'>
+					<field-name>VTID</field-name>
+					<field-desc>Virtual Terminal ID</field-desc>
+					<field-attribute>ans</field-attribute> 
+					<field-maxsize>20</field-maxsize>
+				  </field>
+					
+				  <field id='46'>
+					<field-name>b042</field-name>
+					<field-desc>Identificador del Comercio (MID)</field-desc>
+					<field-attribute>ans</field-attribute> 
+					<field-maxsize>15</field-maxsize>
+				  </field>
+					
+				  <field id='47'></field>
+				  <field id='48'></field>  
+					    
+				  <field id='49'>
+					<field-name>b045</field-name>
+					<field-desc>Datos del Track 1</field-desc>
+					<field-attribute>ans</field-attribute> 
+					<field-maxsize>76</field-maxsize>
+					<field-indicator>4</field-indicator>
+					<indicator-attribute>n</indicator-attribute>
+				  </field>
+					
+				  <field id='50'>
+					<field-name>DataSensibleCifrada</field-name>
+					<field-desc>Data sensible cifrada</field-desc>
+					<field-attribute>ans</field-attribute> 
+					<field-maxsize>500</field-maxsize>
+					<field-indicator>4</field-indicator>
+					<indicator-attribute>n</indicator-attribute>
+				  </field>
+				  
+				  <field id='51'>
+					<field-name>version_app</field-name>
+					<field-desc>Version Aplicacion</field-desc>
+					<field-attribute>an</field-attribute> 
+					<field-maxsize>13</field-maxsize>
+					<field-indicator>4</field-indicator>
+					<indicator-attribute>n</indicator-attribute>
+				  </field>
+					
+				  
+				  <field id='52'></field>
+				  	
+				  <field id='53'>
+		            <field-name>b049</field-name>
+		            <field-desc>Currency Code, Transaction</field-desc>
+		            <field-attribute>n</field-attribute> 
+		            <field-maxsize>3</field-maxsize>
+		          </field>	
+		          
+				  <field id='54'></field>
+				  <field id='55'></field>
+					
+				  <field id='56'>
+					<field-name>b052</field-name>
+					<field-desc>PIN Block</field-desc>
+					<field-attribute>ans</field-attribute> 
+					<field-maxsize>16</field-maxsize>
+				  </field>
+					
+				  <field id='57'>
+					<field-name>b053</field-name>
+					<field-desc>PIN Block</field-desc>
+					<field-attribute>ans</field-attribute> 
+					<field-maxsize>16</field-maxsize>
+				  </field>
+				  
+		        <field id='58'>
+				   <field-name>b054</field-name>
+				   <field-desc>Additional Amounts</field-desc>
+				   <field-attribute>ans</field-attribute> 
+				   <field-maxsize>12</field-maxsize>
+				   <field-indicator>2</field-indicator>
+			    </field>
+					
+				  <field id='59'>
+				   <field-name>b055</field-name>
+				   <field-desc>EMV</field-desc>
+				   <field-attribute>n</field-attribute> 
+				   <field-maxsize>999</field-maxsize>
+				   <field-indicator>4</field-indicator>
+				   <indicator-attribute>nj</indicator-attribute>
+			    </field>
+			    
+				 <field id='60'>
+				  <field-name>b056</field-name>
+				   <field-desc>Llave publica EMV</field-desc>
+				   <table-id>campo_b056</table-id>
+				   <table-bitmap>FFE</table-bitmap> 
+				   <field-indicator>4</field-indicator>
+				   <indicator-attribute>n</indicator-attribute>
+				</field>
+				  		  
+				  <field id='61'></field>
+				  
+				  <field id='62'>
+					<field-name>b058</field-name>
+					<field-desc>Campo 58 protocolo ISO Merchant</field-desc>
+					<table-id>campo_b058</table-id>
+					<table-type>dynamic</table-type>
+					<field-indicator>4</field-indicator>
+					<indicator-attribute>n</indicator-attribute>
+					<table-bitmap></table-bitmap>
+					<encode-name>requestPrivateBmp2</encode-name>
+					<decode-name>responsePrivateBmp2</decode-name>
+				  </field>
+				  
+				  <field id='63'></field>
+
+				  <field id='64'>
+					<field-name>QrUrl</field-name>
+					<field-desc>QR URL</field-desc>
+					<field-attribute>ans</field-attribute> 
+			        <field-maxsize>999</field-maxsize> 
+					<field-indicator>4</field-indicator>
+					<indicator-attribute>n</indicator-attribute>
+				  </field>		
+				  	
+				  <field id='65'>
+					<field-name>Voucher</field-name>
+					<field-desc>Voucher</field-desc>
+					<field-attribute>ans</field-attribute> 
+			        <field-maxsize>999</field-maxsize> 
+					<field-indicator>4</field-indicator>
+					<indicator-attribute>n</indicator-attribute>
+				  </field>	 
+					
+				  <field id='66'>
+					<field-name>b062</field-name>
+					<field-desc>SubCampo 62 protocolo ISO Merchant</field-desc>
+					<table-id>campo_b062</table-id>
+					<table-type>dynamic</table-type>
+					<field-indicator>4</field-indicator>
+					<indicator-attribute>n</indicator-attribute>
+					<table-bitmap></table-bitmap>
+					<encode-name>requestPrivateBmp</encode-name>
+					<decode-name>responsePrivateBmp</decode-name>
+
+  
+				  </field>	
+					
+				  <field id='67'>
+					<field-name>VoucherAdicional</field-name>
+					<field-desc>Voucher alternativo para la transaccion</field-desc>
+					<field-attribute>ans</field-attribute> 
+			        <field-maxsize>999</field-maxsize> 
+					<field-indicator>4</field-indicator>
+					<indicator-attribute>n</indicator-attribute>
+				  </field>	
+				  
+				  <field id='68'>
+					<field-name>DataCierre</field-name>
+					<field-desc>Data para el cierre</field-desc>
+					<field-attribute>ans</field-attribute> 
+			        <field-maxsize>99999</field-maxsize> 
+					<field-indicator>6</field-indicator>
+					<indicator-attribute>n</indicator-attribute>
+				  </field>
+					
+				</fields>
+			</table>
+	  
+	  <table id= 'TRM_Response'>
+				<table-desc>Transaction Request Message</table-desc>     
+				<hexField-separator></hexField-separator>
+				<fields>
+				  <field id='1'>
+					<field-name>Settings</field-name>
+					<field-desc>Header Transaction</field-desc>
+					<table-id>TRM_Settings</table-id>
+					<table-bitmap>E</table-bitmap> 
+				  </field>
+					
+				  <field id='2'>
+					<field-name>IMsgType</field-name>
+					<field-desc>Tipo de mensaje</field-desc>
+					<field-attribute>n</field-attribute>
+					<field-maxsize>4</field-maxsize>
+				  </field>
+					
+				  <field id='3'>
+					<field-name>PrimaryBitMap</field-name>
+					<field-desc>Bitmap Primario</field-desc>
+					<field-attribute>n</field-attribute> 
+					<field-maxsize>16</field-maxsize>
+				  </field>
+					
+				  <field id='4'>
+					<field-name>SecondaryBitMap</field-name>
+					<field-desc>Bitmap Secundario</field-desc>
+					<field-attribute>ans</field-attribute> 
+					<field-maxsize>16</field-maxsize>
+				  </field>
+					
+				  <field id='5'>
+					<field-name>b001</field-name>
+					<field-desc>Bitmap extendido</field-desc>
+					<field-attribute>n</field-attribute> 
+					<field-maxsize>16</field-maxsize>
+				  </field>
+					
+				  <field id='6'>
+					<field-name>b002</field-name>
+					<field-desc>Numero de tarjeta (PAN)</field-desc>
+					<field-attribute>track</field-attribute> 
+					<field-maxsize>19</field-maxsize>
+					<field-indicator>2</field-indicator>
+				  </field>
+					
+				  <field id='7'>
+					<field-name>Ib003</field-name>
+					<field-desc>Codigo de Procesamiento</field-desc>
+					<field-attribute>n</field-attribute> 
+					<field-maxsize>6</field-maxsize>
+				  </field>
+					
+				  <field id='8'>
+					<field-name>b004</field-name>
+					<field-desc>Monto de la transaccion</field-desc>
+					<field-attribute>n</field-attribute> 
+					<field-maxsize>12</field-maxsize>
+				  </field>
+					
+				  <field id='9'></field>
+		          <field id='10'></field>
+				  <field id='11'></field>
+				  <field id='12'></field>
+				  <field id='13'></field>
+				  <field id='14'></field>
+					
+				  <field id='15'>
+					<field-name>SeqNum</field-name>
+					<field-desc>Numero de secuencia</field-desc>
+					<field-attribute>n</field-attribute> 
+					<field-maxsize>6</field-maxsize>
+				  </field>
+					
+				  <field id='16'>
+					<field-name>b012</field-name>
+					<field-desc>Hora local de la transaccion</field-desc>
+					<field-attribute>n</field-attribute> 
+					<field-maxsize>6</field-maxsize>
+				  </field>
+					
+				  <field id='17'>
+					<field-name>b013</field-name>
+					<field-desc>Fecha de la transaccion</field-desc>
+					<field-attribute>n</field-attribute> 
+					<field-maxsize>4</field-maxsize>
+				  </field>
+					
+				  <field id='18'>
+					<field-name>b014</field-name>
+					<field-desc>Fecha de Vencimiento (AAMM)</field-desc>
+					<field-attribute>n</field-attribute> 
+					<field-maxsize>4</field-maxsize>
+				  </field>
+					
+				  <field id='19'></field>
+				  <field id='20'></field>
+				  <field id='21'></field>
+				  <field id='22'></field>
+				  <field id='23'></field>
+				  <field id='24'></field>
+				  <field id='25'></field>
+					
+				  <field id='26'>
+					<field-name>Ib022</field-name>
+					<field-desc>Modo de ingreso en el POS</field-desc>
+					<field-attribute>n</field-attribute> 
+					<field-maxsize>4</field-maxsize>
+				  </field>
+					
+				  <field id='27'>
+					<field-name>b023</field-name>
+					<field-desc>Card Sequence Number</field-desc>
+					<field-attribute>n</field-attribute> 
+					<field-maxsize>2</field-maxsize>
+				  </field>
+				  
+				  <field id='28'></field>
+				  <field id='29'></field>
+				  <field id='30'></field>
+				  <field id='31'></field>
+				  <field id='32'></field>
+				  <field id='33'></field>
+				  <field id='34'></field>
+				  <field id='35'></field>
+					
+		           <field id='36'>
+					<field-name>AcqCode</field-name>
+					<field-desc>Campo 32 Codigo de Adquiriente</field-desc>
+					<field-attribute>n</field-attribute> 
+					<field-maxsize>11</field-maxsize>
+					<field-indicator>2</field-indicator>
+					<indicator-attribute>n</indicator-attribute>
+				  </field>
+					
+				  <field id='37'></field>
+				  <field id='38'></field>
+					
+				  <field id='39'>
+					<field-name>b035</field-name>
+					<field-desc>Datos del track 2</field-desc>
+					<field-attribute>track</field-attribute> 
+					<field-maxsize>37</field-maxsize>
+					<field-indicator>2</field-indicator>
+				  </field>
+					
+				  <field id='40'></field>
+					
+				  <field id='41'>
+					<field-name>b037</field-name>
+					<field-desc>Retrieval Reference Number (RRN)</field-desc>
+					<field-attribute>an</field-attribute> 
+					<field-maxsize>12</field-maxsize>
+				  </field>
+					
+				  <field id='42'>
+					<field-name>b038</field-name>
+					<field-desc>Codigo de autorizacion</field-desc>
+					<field-attribute>an</field-attribute> 
+					<field-maxsize>6</field-maxsize>
+				  </field>
+					
+				  <field id='43'>
+					<field-name>b039</field-name>
+					<field-desc>Codigo de Respuesta</field-desc>
+					<field-attribute>an</field-attribute> 
+					<field-maxsize>2</field-maxsize>
+				  </field>
+					
+				  <field id='44'></field>
+					
+				  <field id='45'>
+					<field-name>VTID</field-name>
+					<field-desc>Virtual Terminal ID</field-desc>
+					<field-attribute>ans</field-attribute> 
+					<field-maxsize>20</field-maxsize>
+				  </field>
+					
+				  <field id='46'>
+					<field-name>b042</field-name>
+					<field-desc>Identificador del Comercio (MID)</field-desc>
+					<field-attribute>ans</field-attribute> 
+					<field-maxsize>15</field-maxsize>
+				  </field>
+					
+				  <field id='47'></field>
+				  <field id='48'></field>  
+					    
+				  <field id='49'>
+					<field-name>b045</field-name>
+					<field-desc>Datos del Track 1</field-desc>
+					<field-attribute>ans</field-attribute> 
+					<field-maxsize>76</field-maxsize>
+					<field-indicator>4</field-indicator>
+					<indicator-attribute>n</indicator-attribute>
+				  </field>
+					
+				  <field id='50'></field>
+				  
+				  <field id='51'>
+					<field-name>version_app</field-name>
+					<field-desc>Version Aplicacion</field-desc>
+					<field-attribute>an</field-attribute> 
+					<field-maxsize>13</field-maxsize>
+					<field-indicator>4</field-indicator>
+					<indicator-attribute>n</indicator-attribute>
+				  </field>
+					
+				  
+				  <field id='52'></field>	
+				  
+				  <field id='53'>
+		            <field-name>b049</field-name>
+		            <field-desc>Currency Code, Transaction</field-desc>
+		            <field-attribute>n</field-attribute> 
+		            <field-maxsize>3</field-maxsize>
+		          </field>
+		          
+				  <field id='54'></field>
+				  <field id='55'></field>
+					
+				  <field id='56'>
+					<field-name>b052</field-name>
+					<field-desc>PinBlock</field-desc>
+					<field-attribute>ans</field-attribute> 
+					<field-maxsize>16</field-maxsize>
+				  </field>
+                  
+                  <field id='57'>
+					<field-name>WK</field-name>
+					<field-desc>WorkingKey</field-desc>
+					<field-attribute>ans</field-attribute> 
+					<field-maxsize>64</field-maxsize>
+                    <field-indicator>4</field-indicator>
+					<indicator-attribute>n</indicator-attribute>
+				  </field>
+							  
+		        <field id='58'>
+				   <field-name>SaldoDisp</field-name>
+				   <field-desc>Additional Amounts</field-desc>
+				   <field-attribute>ans</field-attribute> 
+				   <field-maxsize>12</field-maxsize>
+				   <field-indicator>2</field-indicator>
+			    </field>
+					
+		         <field id='59'>
+				   <field-name>b055</field-name>
+				   <field-desc>EMV</field-desc>
+				   <field-attribute>n</field-attribute> 
+				   <field-maxsize>999</field-maxsize>
+				   <field-indicator>4</field-indicator>
+				   <indicator-attribute>nj</indicator-attribute>				    
+			    </field>
+			    
+				<field id='60'>
+				  <field-name>b056</field-name>
+				   <field-desc>Llave publica EMV</field-desc>
+				   <table-id>campo_b056</table-id>
+				   <table-bitmap>FFE</table-bitmap> 
+				   <field-indicator>4</field-indicator>
+				   <indicator-attribute>n</indicator-attribute>
+				</field>
+				
+				  <field id='61'></field>
+				  
+				<field id='62'>
+					<field-name>b058</field-name>
+					<field-desc>Campo 58 protocolo ISO Merchant</field-desc>
+					<table-id>campo_b058</table-id>
+					<table-type>dynamic</table-type>
+					<field-indicator>4</field-indicator>
+					<indicator-attribute>n</indicator-attribute>
+					<table-bitmap></table-bitmap>
+					<encode-name>requestPrivateBmp2</encode-name>
+					<decode-name>responsePrivateBmp2</decode-name>
+				  </field>
+					
+				 <field id='63'>
+					<field-name>productos_disponibles</field-name>
+					<field-desc>Productos Disponibles</field-desc>
+					<field-attribute>ans</field-attribute> 
+			        <field-maxsize>500</field-maxsize> 
+				  </field>	 
+				 
+				  <field id='64'>
+					<field-name>QrUrl</field-name>
+					<field-desc>QR URL</field-desc>
+					<field-attribute>ans</field-attribute> 
+			        <field-maxsize>999</field-maxsize> 
+					<field-indicator>4</field-indicator>
+					<indicator-attribute>n</indicator-attribute>
+				  </field>	
+					
+				  <field id='65'>
+					<field-name>Voucher</field-name>
+					<field-desc>Voucher</field-desc>
+					<field-attribute>ans</field-attribute> 
+			        <field-maxsize>999</field-maxsize> 
+					<field-indicator>4</field-indicator>
+					<indicator-attribute>n</indicator-attribute>
+				  </field>	 
+					
+				  <field id='66'>
+					<field-name>b062</field-name>
+					<field-desc>SubCampo 62 protocolo ISO Merchant</field-desc>
+					<table-id>campo_b062</table-id>
+					<table-type>dynamic</table-type>
+					<field-indicator>4</field-indicator>
+					<indicator-attribute>n</indicator-attribute>
+					<table-bitmap></table-bitmap>
+					<encode-name>requestPrivateBmp</encode-name>
+					<decode-name>responsePrivateBmp</decode-name>
+
+  
+				  </field>	
+					
+				   <field id='67'>
+					<field-name>VoucherAdicional</field-name>
+					<field-desc>Voucher alternativo para la transaccion</field-desc>
+					<field-attribute>ans</field-attribute> 
+			        <field-maxsize>999</field-maxsize> 
+					<field-indicator>4</field-indicator>
+					<indicator-attribute>n</indicator-attribute>
+				  </field>	
+				  
+				  <field id='68'>
+					<field-name>DataCierre</field-name>
+					<field-desc>Data para el cierre</field-desc>
+					<field-attribute>ans</field-attribute> 
+			        <field-maxsize>99999</field-maxsize> 
+					<field-indicator>6</field-indicator>
+					<indicator-attribute>n</indicator-attribute>
+				  </field>
+					
+				</fields>
+			</table> 
+
+        <!-- Campo b062 ISO-Merchant -->
+    <table id= 'campo_b062'>
+
+		<table-name>tabla62</table-name>     
+        <field-separator></field-separator>
+        <fields>
+			
+		  <field id='1'>
+            <field-name>b041</field-name>
+            <field-desc>TID</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>8</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>  	     
+		  </field>
+       
+		  <field id='2'>
+            <field-name>SeqNumX</field-name>
+            <field-desc>SeqNumX</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>6</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>  	     
+		  </field>
+			
+          <field id='3'>
+            <field-name>Authname</field-name>
+            <field-desc>Authname</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>20</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>  	     
+		  </field>
+			
+		  <field id='4'>
+            <field-name>BatchNum</field-name>
+            <field-desc>BatchNum</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>6</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+          </field>
+			
+		  <field id='5'>
+            <field-name>CardName</field-name>
+            <field-desc>CardName</field-desc>
+            <field-attribute>an</field-attribute>
+            <field-maxsize>20</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+          </field>
+			
+		  <field id='6'>
+            <field-name>CheckNum</field-name>
+            <field-desc>Numero de Cheque</field-desc>
+            <field-attribute>an</field-attribute>
+            <field-maxsize>20</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+          </field>
+			
+		  <field id='7'>
+            <field-name>CID</field-name>
+            <field-desc>Cedula de Identidad</field-desc>
+            <field-attribute>an</field-attribute>
+            <field-maxsize>13</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+          </field>
+			
+		  <field id='8'>
+            <field-name>CVV2</field-name>
+            <field-desc>CVV2</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>4</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+          </field>
+			
+		   <field id='9'>
+            <field-name>TerminalFee</field-name>
+            <field-desc>TerminalFee</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>12</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+          </field>
+			
+		   <field id='10'>
+            <field-name>Porc_Desc</field-name>
+            <field-desc>Porcentaje Descuento</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>3</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+          </field>
+			
+		  <field id='11'>
+            <field-name>PinPadIdx</field-name>
+            <field-desc>Posicion de la Llave del PinPad</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>1</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+          </field>
+			
+		  <field id='12'>
+            <field-name>CIDType</field-name>
+            <field-desc>Tipo de identificacion del cliente</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>1</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+          </field>
+			
+		  <field id='13'>
+            <field-name>NroFirmas</field-name>
+            <field-desc>Numero de Firmas del Cheque</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>1</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+          </field>
+			
+		<field id='14'>
+            <field-name>CodigoControl</field-name>
+            <field-desc>Codigo de Control del Cheque</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>16</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+			
+	    <field id='15'>
+            <field-name>MedioPago</field-name>
+            <field-desc>Medio de Pago</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>2</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+			
+		<field id='16'>
+            <field-name>b011</field-name>
+            <field-desc>STN del banco</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>6</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+			
+	
+		 <field id='17'>
+            <field-name>InvoiceNum</field-name>
+            <field-desc>Numero de Factura</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>5</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+			
+		  <field id='18'>
+            <field-name>PaymentRespCode</field-name>
+            <field-desc>Descripcion del codigo de respuesta</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>60</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>			
+						
+		  <field id='19'>
+            <field-name>SeqRemesa</field-name>
+            <field-desc>Secuencia Remesa</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>4</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+			
+		 <field id='20'>
+            <field-name>SeqFactura</field-name>
+            <field-desc>Secuencia Factura</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>4</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field> 				
+	    	
+		  <field id='21'>
+            <field-name>saldo_puntos</field-name>
+            <field-desc>Puntos Disponibles</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>13</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+			
+		  <field id='22'>
+            <field-name>puntos_usados</field-name>
+            <field-desc>Puntos Usados</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>13</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+			
+		 <field id='23'>
+            <field-name>monto_dif</field-name>
+            <field-desc>Monto Diferencia</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>12</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+			
+		<field id='24'>
+            <field-name>monto_descuento</field-name>
+            <field-desc>Monto Descuento</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>12</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>	 					
+		
+		<field id='25'>
+            <field-name>cid_operador</field-name>
+            <field-desc>Cedula del operador</field-desc>
+            <field-attribute>an</field-attribute>
+            <field-maxsize>13</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+			
+		<field id='26'>
+            <field-name>tipo_promocion</field-name>
+            <field-desc>Tipo de promocion Juntos</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>3</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+				
+		<field id='27'>
+            <field-name>monto_puntos_usados</field-name>
+            <field-desc>Monto Puntos</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>12</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+					
+		<field id='28'>
+            <field-name>TipoTrx</field-name>
+            <field-desc>Tipo de Recarga</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>2</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+			
+		<field id='29'>
+            <field-name>IdTrx</field-name>
+            <field-desc>Identificacion Recarga</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>20</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field> 
+			
+		<field id='30'>
+            <field-name>Producto</field-name>
+            <field-desc>Producto Recarga</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>4</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+			
+		<field id='31'>
+            <field-name>Proveedor</field-name>
+            <field-desc>Proveedor Recarga</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>1</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+			
+		<field id='32'>
+            <field-name>Ref</field-name>
+            <field-desc>Referencia</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>50</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+			
+		 <field id='33'>
+            <field-name>FechaAdicional</field-name>
+            <field-desc>Fecha Adicional</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>10</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+			
+		 <field id='34'>
+            <field-name>SourceAccount</field-name>
+            <field-desc>Cuenta Corriente</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>20</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+			
+		<field id='35'>
+            <field-name>codigo_producto</field-name>
+            <field-desc>Codigo Producto</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>8</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+			
+		<field id='36'>
+            <field-name>cantidad_productos</field-name>
+            <field-desc>Cantidad Producto</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>10</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+			
+		<field id='37'>
+            <field-name>codigo_corporacion</field-name>
+            <field-desc>Codigo Corporacion</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>10</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+			
+		<field id='38'>
+            <field-name>flag_cuenta</field-name>
+            <field-desc>Flag Creacion Cuenta</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>1</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+			
+		<field id='39'>
+            <field-name>factor_acreditacion</field-name>
+            <field-desc>Factor Acreditacion</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>12</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+        </field>
+			
+		<field id='40'>
+            <field-name>factor_canje</field-name>
+            <field-desc>Factor Canje</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>12</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+        </field>
+        
+        <field id='41'>
+            <field-name>cuotas_consulta</field-name>
+            <field-desc>Cuotas y Montos Banco de Vzla</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>70</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+        </field>
+        
+        <field id='42'>
+            <field-name>forcedlogon</field-name>
+            <field-desc>Flag para forzar el Logon</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>1</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+        </field>
+        
+        <field id='43'>
+            <field-name>SerialElectronico</field-name>
+            <field-desc>Serial Electronico POS/PinPad</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>14</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+        </field>
+        
+        <field id='44'>
+            <field-name>versionAppPOS</field-name>
+            <field-desc>Version de la aplicacion</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>25</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+        </field>
+        
+          <field id='45'>
+            <field-name>MarcaPOS</field-name>
+            <field-desc>Marca del POS</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>2</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+        </field>
+        
+        <field id='46'>
+            <field-name>ModeloPOS</field-name>
+            <field-desc>Modelo pos pinpad</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>30</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+        </field>
+        
+         <field id='47'>
+            <field-name>VersionSO</field-name>
+            <field-desc>Version del Sistema Operativo</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>25</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+        </field>
+        
+        <field id='48'>
+            <field-name>VersionKernel</field-name>
+            <field-desc>Version del Kernel</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>25</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+        </field>
+        
+        <field id='49'>
+            <field-name>CodigoVerificador</field-name>
+            <field-desc>Codigo Verificador del Cierre Platco</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>234</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+        </field>
+        
+        <field id='50'>
+            <field-name>VTIDX</field-name>
+            <field-desc>VTID Solicitado</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>20</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+        </field>
+        
+        <field id='51'>
+            <field-name>CantidadTrx</field-name>
+            <field-desc>Cantidad Transacciones</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>4</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+        </field>
+        
+        <field id='52'>
+            <field-name>FinBatchDownload</field-name>
+            <field-desc>Indicador de fin del Batch Download </field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>1</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+        </field>
+        
+        <field id='53'>
+            <field-name>OriginalIb003</field-name>
+            <field-desc>Codigo de procesamiento de transaccion original </field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>6</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+        </field>
+        
+       <field id='54'>
+            <field-name>CodigoCriptomoneda</field-name>
+            <field-desc>Codigo Criptomoneda</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>500</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+        </field>
+        
+        <field id='55'>
+            <field-name>MontoCriptomoneda</field-name>
+            <field-desc>Monto Criptomoneda</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>20</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+        </field>
+        
+        <field id='56'>
+            <field-name>NombreCliente</field-name>
+            <field-desc>Nombre del cliente</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>30</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+        </field>
+        
+        <field id='57'>
+            <field-name>NombreBanco</field-name>
+            <field-desc>Nombre del banco</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>25</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+        </field>
+        
+        <field id='58'>
+            <field-name>TipoComunicacion</field-name>
+            <field-desc>Tipo de Comunicacion</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>2</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+        </field>
+                
+        <field id='59'>
+            <field-name>TelefonoComercio</field-name>
+            <field-desc>Telefono Comercio</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>22</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>  	     
+		  </field>
+        
+        <field id='60'>
+            <field-name>IndicadorSoloCopia</field-name>
+            <field-desc>Indicador de que solo se debe imprimir la copia del voucher</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>1</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+          </field>
+          
+          <field id='61'>
+            <field-name>IndicadorRetornaBkWK</field-name>
+            <field-desc>Indicador que se debe retornar la BkWK</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>1</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+          </field>
+          
+          <field id='62'>
+            <field-name>Email</field-name>
+            <field-desc>Correo Electronico</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>100</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>  	     
+		  </field>
+		  
+		  <field id='63'>
+            <field-name>Telefono</field-name>
+            <field-desc>Telefono</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>22</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>  	     
+		  </field>
+		  
+		  <field id='64'>
+            <field-name>TipoAccionAdmon</field-name>
+            <field-desc>Tipo de Accion Administrativa</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>2</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+        </field>
+		
+	    </fields>
+    </table>
+    
+       <!-- Campo b056 Llave publica EMV -->
+    <table id= 'campo_b056'>
+
+		<table-name>tabla56</table-name>     
+        <field-separator></field-separator>
+        <fields>
+			
+		  <field id='1'>
+            <field-name>keyIndex</field-name>
+            <field-desc>keyIndex</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>2</field-maxsize>
+		  </field>
+       
+		  <field id='2'>
+            <field-name>keyRid</field-name>
+            <field-desc>keyRid</field-desc>
+            <field-attribute>n</field-attribute>
+            <field-maxsize>10</field-maxsize>   
+		  </field>
+			
+          <field id='3'>
+            <field-name>keyExponent</field-name>
+            <field-desc>keyExponent</field-desc>
+            <field-attribute>n</field-attribute>
+            <field-maxsize>2</field-maxsize>    
+		  </field>
+			
+		  <field id='4'>
+            <field-name>keyExpDate</field-name>
+            <field-desc>keyExpDate</field-desc>
+            <field-attribute>n</field-attribute>
+            <field-maxsize>6</field-maxsize>
+          </field>
+          
+          <field id='5'>
+            <field-name>hash</field-name>
+            <field-desc>hash</field-desc>
+            <field-attribute>n</field-attribute>
+            <field-maxsize>40</field-maxsize>
+          </field>
+			
+		  <field id='6'>
+            <field-name>indLlaveCompuesta</field-name>
+            <field-desc>indLlaveCompuesta</field-desc>
+            <field-attribute>n</field-attribute>
+            <field-maxsize>2</field-maxsize>
+          </field>
+			
+		   <field id='7'>
+            <field-name>keyValueEMV</field-name>
+            <field-desc>keyValueEMV</field-desc>
+            <field-attribute>n</field-attribute>
+            <field-maxsize>512</field-maxsize>
+            <field-indicator>4</field-indicator>
+			<indicator-attribute>nj</indicator-attribute>
+          </field>
+          
+          <field id='8'>
+            <field-name>LimitePisoCtless</field-name>
+            <field-desc>Limite piso contactless</field-desc>
+            <field-attribute>n</field-attribute>
+            <field-maxsize>12</field-maxsize>
+          </field>
+          
+          <field id='9'>
+            <field-name>LimiteCVM</field-name>
+            <field-desc>Limite de CVM</field-desc>
+            <field-attribute>n</field-attribute>
+            <field-maxsize>12</field-maxsize>
+          </field>
+          
+          <field id='10'>
+            <field-name>LimiteTrxCtless</field-name>
+            <field-desc>Limite transaccion contactless</field-desc>
+            <field-attribute>n</field-attribute>
+            <field-maxsize>12</field-maxsize>
+          </field>
+          
+          <field id='11'>
+            <field-name>LimiteCDCVM</field-name>
+            <field-desc>Limite de CDCCVM</field-desc>
+            <field-attribute>n</field-attribute>
+            <field-maxsize>12</field-maxsize>
+          </field>
+
+        </fields>
+   </table>
+    
+    <table id= 'TRM_Settings'>
+        <table-name></table-name>     
+        <field-separator></field-separator>
+        <fields>
+          <field id='1'>
+            <field-name>TPDU</field-name>
+            <field-desc>TPDU</field-desc>
+            <field-attribute>n</field-attribute>
+            <field-maxsize>2</field-maxsize>
+          </field>
+          <field id='2'>
+            <field-name>Dest Add</field-name>
+            <field-desc>Dest Add</field-desc>
+            <field-attribute>n</field-attribute>
+            <field-maxsize>4</field-maxsize>
+          </field>
+          <field id='3'>
+            <field-name>Org Add</field-name>
+            <field-desc>Org Add</field-desc>
+            <field-attribute>n</field-attribute>
+            <field-maxsize>4</field-maxsize>
+          </field>
+         </fields>
+    </table> 
+    
+    <table id= 'campo_b058'>
+		<table-name>tabla58</table-name>     
+        <field-separator></field-separator>
+        <fields>
+			
+		    <field id='1'>
+            <field-name>KSNPinblock</field-name>
+            <field-desc>KSN del Pinblock</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>20</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>  	     
+		  </field>
+		  
+		  <field id='2'>
+            <field-name>KSNTrack2</field-name>
+            <field-desc>KSN del Track2</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>20</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>  	     
+		  </field>
+		  
+		  <field id='3'>
+            <field-name>MontoComision</field-name>
+            <field-desc>Comision del Banco</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>12</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>  	     
+		  </field>
+		  
+		  <field id='4'>
+            <field-name>MontoDonacion</field-name>
+            <field-desc>Monto Donacion</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>12</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>  	     
+		  </field>
+		  
+		  <field id='5'>
+            <field-name>MontoDivisa</field-name>
+            <field-desc>Monto Divisa</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>12</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>  	     
+		  </field>
+		  
+		  <field id='6'>
+            <field-name>KSNDataSensible</field-name>
+            <field-desc>KSN Data Sensible</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>20</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>  	     
+		  </field>
+		  
+		  <field id='7'>
+            <field-name>VectorDataSensible</field-name>
+            <field-desc>Vector para Descifrar Data Sensible</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>16</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>  	     
+		  </field>
+		  
+		  <field id='8'>
+            <field-name>CuentaComercio</field-name>
+            <field-desc>Cuenta Comercio</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>20</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+         
+         <field id='9'>
+            <field-name>Configuraciones</field-name>
+            <field-desc>Parametros de configuracion</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>200</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+         
+         <field id='10'>
+            <field-name>OtrosMontos</field-name>
+            <field-desc>Otros Montos</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>12</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>  	     
+		  </field>
+		  
+		  <field id='11'>
+            <field-name>OtrosMontosDivisa</field-name>
+            <field-desc>Otros Montos en Divisa</field-desc>
+            <field-attribute>nx</field-attribute>
+            <field-maxsize>12</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>  	     
+		  </field>
+		  
+		  <field id='12'>
+            <field-name>MontosRIDContactless</field-name>
+            <field-desc>Montos Contactless</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>500</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>  	     
+		  </field>
+		  
+		  <field id='13'>
+            <field-name>IPEKPinblock</field-name>
+            <field-desc>Llave Dukpt Pinblock</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>64</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>  	     
+		  </field>
+		  
+		  <field id='14'>
+            <field-name>IPEKDataSensible</field-name>
+            <field-desc>Llave Data Sensible Track2</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>64</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>  	     
+		  </field>
+		  
+		  <field id='15'>
+            <field-name>Datos3DS</field-name>
+            <field-desc>Campos para 3DSecure</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>500</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+         
+         <field id='16'>
+            <field-name>DatosAdicionales</field-name>
+            <field-desc>Campo utilitario</field-desc>
+            <field-attribute>ans</field-attribute>
+            <field-maxsize>200</field-maxsize>
+			<field-indicator>4</field-indicator>
+			<indicator-attribute>n</indicator-attribute>
+			<field-type>dynamic</field-type>    
+         </field>
+		  
+		 </fields>
+      </table>
+         
+    
+                    
+                
+  </tables>
+
+</protocol>

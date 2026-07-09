@@ -51,10 +51,11 @@ temp/
 # Driver Verifone (P200) — se bundlea para instalarlo desde la app (Smart POS).
 !drivers/verifone/**
 
-# vpos-rest/ = distribución completa de Megasoft VPOS RESTService (~279MB con
-# JRE embebido). NO se versiona por tamaño; debe colocarse en el repo antes de
-# `electron-builder` (extraResources la copia al bundle). Ver README/smart-pos-manager.js.
-vpos-rest/
+# vpos-rest/ = distribución completa de Megasoft VPOS RESTService (~268MB con
+# JRE embebido). SÍ se versiona: `extraResources` la copia al bundle y el runner
+# de CI solo tiene lo que está en git — sin ella el instalador sale sin VPOS y
+# la caja falla con "Distribución VPOS no encontrada". La negación va al FINAL
+# del archivo, para ganarle a los patrones globales (*.exe, *.log, .env*).
 
 # Logs
 npm-debug.log*
@@ -84,3 +85,6 @@ Thumbs.db
 dist-standalone/
 !.env.local
 !.env.prod
+
+# Distribución VPOS: gana a los ignores globales de arriba (*.exe, *.log, .env*).
+!vpos-rest/**

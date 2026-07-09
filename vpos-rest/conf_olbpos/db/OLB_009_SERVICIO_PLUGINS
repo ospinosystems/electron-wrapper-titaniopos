@@ -1,0 +1,11 @@
+T009_CO_PLUGINS|T009_NM_CLASE|T009_TX_DESCRIPCION|T009_NU_ORDEN|T009_CO_ESTATUS|T007_CO_SERVICIO|
+1|ve.com.megasoft.olbpos_plugins.validacion.ValidacionMontoPrefijos|Validación de monto mínimos, montos máximos, intervalos y prefijos|0|1|1| 
+2|ve.com.megasoft.olbpos_plugins.validacion.ValidacionMontoPrefijos|Validación de monto mínimos, montos máximos, intervalos y prefijos|0|1|2|
+3|ve.com.megasoft.olbpos_plugins.validacion.ValidacionMontoPrefijos|Validación de monto mínimos, montos máximos, intervalos y prefijos|0|1|3|
+4|ve.com.megasoft.olbpos_plugins.validacion.ValidacionMontoPrefijos|Validación de monto mínimos, montos máximos, intervalos y prefijos|0|1|4|
+5|ve.com.megasoft.olbpos_plugins.validacion.ValidacionMontoPrefijos|Validación de monto mínimos, montos máximos, intervalos y prefijos|0|1|5|
+6|ve.com.megasoft.olbpos.plugins.ValidacionMontosFijos|Validación de monto fijos|1|1|5|
+7|ve.com.megasoft.olbpos_plugins.validacion.ValidacionMontoPrefijos|Validación de monto mínimos, montos máximos, intervalos y prefijos|0|1|6|
+8|ve.com.megasoft.olbpos_plugins.validacion.ValidacionMontoPrefijos|Validación de monto mínimos, montos máximos, intervalos y prefijos|0|1|7|
+9|ve.com.megasoft.olbpos_plugins.validacion.ValidacionMontoPrefijos|Validación de monto mínimos, montos máximos, intervalos y prefijos|0|1|8|
+10|ve.com.megasoft.olbpos_plugins.validacion.ValidacionMontoPrefijos|Validación de monto mínimos, montos máximos, intervalos y prefijos|0|1|9|

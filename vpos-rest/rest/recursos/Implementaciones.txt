@@ -1,0 +1,65 @@
+--AJAX
+var settings = {
+			  "async": true,
+			  "crossDomain": true,
+			  "url": "http://localhost:8085/vpos/metodo",
+			  "method": "POST",
+			  "headers": {
+			    "content-type": "application/json"
+			  },
+			  "processData": false,
+			  "data": "{\r\n    \"accion\": \"precierre\"\r\n}"
+			}
+
+			$.ajax(settings).done(function (response) {
+			  console.log(response);
+			});
+	
+	
+--OK HTTP
+//Invoca el método pre cierre de la VPOS Server REST
+
+
+public static void main(String[] args) {
+		OkHttpClient client = new OkHttpClient();
+
+		MediaType mediaType = MediaType.parse("application/json");
+		RequestBody body = RequestBody.create(mediaType, "{\r\n    \"accion\": \"precierre\"\r\n}");
+		Request request = new Request.Builder()
+		  .url("http://localhost:8085/vpos/metodo")
+		  .post(body)
+		  .addHeader("content-type", "application/json")
+		  .addHeader("cache-control", "no-cache")
+		  .build();
+
+		try {
+			Response response = client.newCall(request).execute();
+			System.out.println(response.body().string());
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+	}
+	
+--	C(LibcUrls)
+CURL *hnd = curl_easy_init();
+
+curl_easy_setopt(hnd, CURLOPT_CUSTOMREQUEST, "POST");
+curl_easy_setopt(hnd, CURLOPT_URL, "http://localhost:8085/vpos/metodo");
+
+struct curl_slist *headers = NULL;
+headers = curl_slist_append(headers, "cache-control: no-cache");
+headers = curl_slist_append(headers, "content-type: application/json");
+curl_easy_setopt(hnd, CURLOPT_HTTPHEADER, headers);
+
+curl_easy_setopt(hnd, CURLOPT_POSTFIELDS, "{\r\n    \"accion\": \"precierre\"\r\n}");
+
+CURLcode ret = curl_easy_perform(hnd);
+
+--C#(RestSharp)
+var client = new RestClient("http://localhost:8085/vpos/metodo");
+var request = new RestRequest(Method.POST);
+request.AddHeader("cache-control", "no-cache");
+request.AddHeader("content-type", "application/json");
+request.AddParameter("application/json", "{\r\n    \"accion\": \"precierre\"\r\n}", ParameterType.RequestBody);
+IRestResponse response = client.Execute(request);

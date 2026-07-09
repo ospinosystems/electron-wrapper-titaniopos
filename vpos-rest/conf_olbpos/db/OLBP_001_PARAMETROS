@@ -1,0 +1,35 @@
+T001_CO_PARAMETRO|T001_DE_VALOR|T001_DE_DESCRIPCION|T001_DE_CAMPO|
+MAXIMO_RECARGAS|4|Máximo de recargas que se pueden realizar por transacción.|Máximo de recargas|
+TECLADO_VIRTUAL|0|Indica si se activa el teclado virtual.|Teclado Virtual|
+COMPANIA|farmatodo|Código de la compañia|Compañia|
+ADQUIRIENTE|farmatodo|Código del adquiriente|Adquiriente|
+RIF_ENTIDAD|J-00020200-1|Rif de la entidad.|Rif de la entidad|
+SERVER_PROTOCOLO|https|Protocolo de comunicacion con el servicio|Protocolo|
+SERVER_HOST|192.168.3.172|Dirección ip del servidor olb .|Ip del OLB SERVER|
+SERVER_PORT|30000|Puerto de escucha.|Puerto OLB SERVER|
+SERVER_REST_SERVICE|/webapi/olb/transaction|Dirección del servicio rest del olb.|Ruta Servicio|
+SERVER_TIMEOUT|35000|Tiempo de desconexión si no se recibe respuesta.|Tiempo de espera|
+COLUMNAS_RECIBO|32|Máximo de columnas para la impresión del recibo.|Cantidad máxima de columnas del recibo|
+RUTA_RECIBO|.\voucher\vouchersServicios\voucher%s%v.txt|Ruta donde se debe generar el recibo final de transacciones. %s (secuencia) %v(vtid).|Ruta voucher|
+RUTA_RECIBO_CIERRE|.\voucher\vouchersServicios\cierre_caja%f%v.txt|Ruta donde se debe generar el recibo de cierre de caja. %f (fecha) %v(vtid).|Ruta voucher|
+INTEGRADA|1|Indica si la aplicación debe comportarse como un componente integrado o como una aplicación de escritorio. 1=si, 0=no.|Integrado|
+IMPRIMIR_RECIBO|1|Indica si se desea generar el archivo de recibo 1=si, 0=no.|¿Generar Recibo?|
+MAXIMO_COLUMNAS|3|Indica el máximo de columnas a mostrar en el menú principal.|Columnas del menú|
+TRANSACCION_CANAL|06|Indica el canal por donde se origina la operación. Los posibles valores son: 01 = IVR Institución, 03 = ATM, 04 = Internet 05 = IVR Movistar 06 = Punto de Venta 07 = Taquilla.|Código de canal|
+TRANSACCION_TIPO|OLB_PAYMENT|Indica el tipo de transacción. Es una constante.|Transacción de recarga|
+TRANSACCION_CONSULTA|OLB_BALANCE|Indica el tipo de transacción de consulta. Es una constante.|Transacción de consulta|
+TRANSACCION_REVERSO|OLB_REVERSE_A|Indica el tipo de transacción de reverso. Es una constante.|Transacción de reverso|
+TRANSACCION_ANULACION|OLB_ANNULMENT|Indica el tipo de transacción de anulación. Es una constante.|Transacción de anulación|
+TIPOS_PERSONAS|V,E,J,G|Tipos de personas para la inclusión de la cédula.|Tipo de personas disponibles|
+TIPOS_CUENTAS|00=Efectivo,10=Cuenta Ahorro,20=Cuenta Corriente,30=Cuenta Crédito|Tipos de cuentas disponibles.|Tipos de cuentas disponibles|
+TIEMPO_ESPERA|0|Tiempo máximo de espera expresado en milisegundos antes de cerrar una pantalla, si el usuario no oprime un botón.  0 para indefinido.|Tiempo de espera|
+NOMBRE_IMPRESORA||Nombre de la impresora|Nombre de la impresora|
+CLASE_IMPRESORA||Clase de la impresora|Clase de la impresora|
+PUERTO_IMPRESORA||Puerto de la impresora|Puerto de la impresora|
+TIPO_IMPRESORA||Tipo de la impresora|Tipo de la impresora|
+ESTADO_IMPRESORA||Estado de la impresora|Estado de la impresora|
+UBICACION_IMPRESORA||Ubicación de la impresora|Ubicación de la impresora|
+EJEX|10|Coordenada eje x de donde desplegar la pantalla principal|Coordenada X de posición|
+EJEY|10|Coordenada eje y de donde desplegar la pantalla principal|Coordenada Y de posición|
+MINUTOS_ACTUALIZACION|5|Minutos requeridos antes de realizar una nueva consulta|Minutos de consulta|
+ACQ_INICIO_FIN|2,5|Marca el inicio y el fin del identificador de oficina o sucursal que se debe tomar del vtid|Identificador de oficina inicio,fin| 

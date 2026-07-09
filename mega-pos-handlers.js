@@ -28,6 +28,10 @@ const DEFAULT_VPOS_HOST = '127.0.0.1';
 const DEFAULT_VPOS_PORT = 8085;
 // Una compra con tarjeta puede tomar tiempo (inserción de chip, PIN, banco).
 const DEFAULT_TIMEOUT_MS = 120000;
+
+// Transacciones enviadas desde que abrió la app. Solo para diagnóstico: la
+// primera es la que se sospecha lenta (handshake del VPOS con Megasoft).
+let megaPosTxCount = 0;
 const PING_TIMEOUT_MS = 4000;
 
 const APPROVED_CODE = '00';
@@ -74,6 +78,14 @@ function postToVpos({ host, port, path, payload, timeoutMs }) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify(payload);
 
+    // Cronometría de la llamada. Separar el TCP local del tiempo que el VPOS
+    // tarda en contestar es lo único que dice si la demora de la PRIMERA
+    // transacción es nuestra o suya: sobre 127.0.0.1 el connect es ~0 ms, así
+    // que todo lo que aparezca en `ttfb` ocurre DENTRO del Java (handshake con
+    // el Merchant Server, apertura del pinpad, etc.).
+    const t0 = Date.now();
+    let tConnect = null;
+
     const req = http.request(
       {
         hostname: host,
@@ -88,12 +100,17 @@ function postToVpos({ host, port, path, payload, timeoutMs }) {
         },
       },
       (res) => {
+        const ttfb = Date.now() - t0;
         let raw = '';
         res.setEncoding('utf8');
         res.on('data', (chunk) => {
           raw += chunk;
         });
         res.on('end', () => {
+          const total = Date.now() - t0;
+          console.log(
+            `[MEGA_POS][timing] ${path} connect=${tConnect === null ? '?' : tConnect}ms ttfb=${ttfb}ms total=${total}ms`
+          );
           resolve({
             status: res.statusCode || 500,
             data: parseJson(raw),
@@ -101,6 +118,11 @@ function postToVpos({ host, port, path, payload, timeoutMs }) {
         });
       }
     );
+
+    req.on('socket', (socket) => {
+      if (socket.connecting) socket.once('connect', () => { tConnect = Date.now() - t0; });
+      else tConnect = 0;
+    });
 
     req.setTimeout(timeoutMs, () => {
       const timeoutError = new Error(`VPOS request timeout (${Math.round(timeoutMs / 1000)}s)`);
@@ -171,8 +193,10 @@ function registerMegaPosHandlers() {
       }
       if (terminalVirtual) payload.terminalVirtual = String(terminalVirtual);
 
-      console.log('[MEGA_POS] ->', `${host}:${port}/vpos/metodo`, payload);
+      const nth = ++megaPosTxCount;
+      console.log(`[MEGA_POS] -> (tx #${nth}${nth === 1 ? ', PRIMERA de la sesión' : ''})`, `${host}:${port}/vpos/metodo`, payload);
 
+      const tStart = Date.now();
       const response = await postToVpos({
         host,
         port,
@@ -181,7 +205,9 @@ function registerMegaPosHandlers() {
         timeoutMs: DEFAULT_TIMEOUT_MS,
       });
 
-      console.log('[MEGA_POS] <-', response.status, response.data && response.data.codRespuesta);
+      console.log(
+        `[MEGA_POS] <- (tx #${nth}) ${response.status} cod=${response.data && response.data.codRespuesta} en ${Date.now() - tStart}ms`
+      );
 
       return {
         success: isApproved(response.data),

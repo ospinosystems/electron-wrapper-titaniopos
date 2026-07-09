@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<Configuration>
+
+	<Properties>
+        <Property name="LOG_PATTERN">%d{yyyy-MM-dd'T'HH:mm:ss.SSSZ} %p %m%n</Property>
+        <Property name="APP_LOG_ROOT">logs</Property>
+    </Properties>
+	
+	<Appenders>
+        <Console name="consola" target="SYSTEM_OUT">
+            <PatternLayout pattern="%l - %m%n"/>
+        </Console>
+        <RollingFile name="archivo" fileName="${APP_LOG_ROOT}/olbpos.log"
+                    filePattern="${APP_LOG_ROOT}/olbpos.log.%i">
+			<PatternLayout>
+				<Pattern>%d %l - %m%n</Pattern>
+			</PatternLayout>
+			<Policies>
+				<SizeBasedTriggeringPolicy size="2 MB"/>
+			</Policies>
+			<DefaultRolloverStrategy min="1" max="4" fileIndex="min" />  
+		</RollingFile>
+		
+		<RollingFile name="errores" fileName="${APP_LOG_ROOT}/olbposerr.log"
+                    filePattern="${APP_LOG_ROOT}/olbposerr.log.%i">
+			<LevelRangeFilter maxLevel="WARN" minLevel="FATAL"/>
+			<PatternLayout>
+				<Pattern>%d %l - %m%n</Pattern>
+			</PatternLayout>
+			<Policies>
+				<SizeBasedTriggeringPolicy size="1 MB"/>
+			</Policies>
+			<DefaultRolloverStrategy min="1" max="4" fileIndex="min" />  
+		</RollingFile>
+
+    </Appenders>
+	
+	<Loggers>
+		 <Logger name="ve.com.megasoft.util.IniFile" additivity="false" level="warn">
+            <AppenderRef ref="archivo" />
+            <AppenderRef ref="errores" />
+        </Logger>
+		 <Logger name="b2b.platform.interfaces.Interface" additivity="false" level="warn">
+            <AppenderRef ref="errores" />
+        </Logger>
+		 <Logger name="ve.com.megasoft.universal.util" additivity="false" level="off">
+            <AppenderRef ref="errores" />
+        </Logger>
+		 <Logger name="ve.com.megasoft.bean.TimeTracker" additivity="false" level="off">
+            <AppenderRef ref="errores" />
+        </Logger>
+		 <Logger name="ve.com.megasoft.util.CustomizeWindows" additivity="false" level="warn">
+            <AppenderRef ref="errores" />
+        </Logger>
+		 <Logger name="b2b.formatters.hibrido" additivity="false" level="off">
+            <AppenderRef ref="archivo" />
+            <AppenderRef ref="errores" />
+        </Logger>
+		<Logger name="ve.com.megasoft.olbpos.dao.ParametrosArchivoDao" additivity="false" level="off">
+            <AppenderRef ref="archivo" />
+            <AppenderRef ref="errores" />
+        </Logger>
+        <Root level="info">
+            <AppenderRef ref="consola"/>
+			<AppenderRef ref="archivo"/>
+			<AppenderRef ref="errores"/>
+        </Root>
+		
+		 
+	</Loggers>
+</Configuration>

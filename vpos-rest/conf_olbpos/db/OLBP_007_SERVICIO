@@ -1,0 +1,12 @@
+T007_CO_SERVICIO|T006_CO_REGISTRO|T007_DE_NOMBRE|T007_DE_DESCRIPCION|T007_NM_CLASE|T007_CO_ACTIVO|T007_IN_CONSULTA|T007_IN_REVERSO|
+1|1|Movistar Celular Prepago|Movistar - Celular - Prepago|ve.com.megasoft.olbpos.transacciones.TransaccionGenerica|1|1|1|
+2|1|Movistar Internet Prepago|Movistar - Internet - Prepago|ve.com.megasoft.olbpos.transacciones.TransaccionGenerica|1|1|1|
+3|1|Movistar Fijo Prepago |Movistar - Fijo - Prepago|ve.com.megasoft.olbpos.transacciones.TransaccionGenerica|1|1|1|
+4|1|Movistar TV Prepago |Movistar - TV - Prepago|ve.com.megasoft.olbpos.transacciones.TransaccionGenerica|1|1|1|
+5|2|Larga Distancia Internacional|Larga Distancia Internacional|ve.com.megasoft.olbpos.transacciones.TransaccionGenerica|1|1|0|
+6|3|Digitel Móvil Prepago|Digitel Móvil Prepago|ve.com.megasoft.olbpos.transacciones.TransaccionGenerica|1|1|0|
+7|3|Digitel Fijo Prepago|Digitel Fijo Prepago|ve.com.megasoft.olbpos.transacciones.TransaccionGenerica|1|1|0|
+8|3|Digitel Internet Prepago|Digitel Internet Prepago|ve.com.megasoft.olbpos.transacciones.TransaccionGenerica|1|1|0|
+9|4|DIRECTV Prepago|DirecTV Prepago|ve.com.megasoft.olbpos.transacciones.TransaccionGenerica|1|1|0|
+10|4|DIRECTV Previo Pago|DIRECTV Previo Pago|ve.com.megasoft.olbpos.transacciones.TransaccionPrevioPago|1|1|0|
+11|3|Digitel Postpago|Digitel Postpago|ve.com.megasoft.olbpos.transacciones.facturador.TransaccionPostpagoDigitel|1|1|0|

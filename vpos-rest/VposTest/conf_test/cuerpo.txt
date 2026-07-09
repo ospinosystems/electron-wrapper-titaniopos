@@ -1,0 +1,16 @@
+Correo automático del cliente @ipmaquina@, el test de conectividad VPOS ha fallado.
+
+Se agradece la verificación inmediata de la plataforma, ya que es posible que alguno de los servicios esté fallando, ocasionando problemas en el procesamiento de las transacciones.
+
+En caso de tener inconvenientes de acceso a alguno de los servidores, contacte inmediatamente al Departamento de Infraestructura de Mega Soft Computación C.A., o al personal correspondiente en el Comercio que administre dicho servidor.
+
+Fecha Reporte: @warndate@
+
+Origen
+Ip Cliente: @ipmaquina@
+Nombre Cliente: @nombremaquina@
+
+VPOS
+URL: @testurl@
+
+

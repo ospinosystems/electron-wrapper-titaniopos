@@ -1,0 +1,16 @@
+Fecha Reporte: 2022/02/16 02:30:52
+Origen 
+Ip Cliente: 172.16.10.170
+Nombre Cliente: LCHCKKS2M1
+VPOS 
+URL: http://localhost:8085
+Respuestas Test: 
+[codigo=99, descripcion=Prueba Fallida, vtid=desconocido, fecha=2022/02/16 02:29:08]
+[codigo=99, descripcion=Prueba Fallida, vtid=desconocido, fecha=2022/02/16 02:29:25]
+[codigo=99, descripcion=Prueba Fallida, vtid=desconocido, fecha=2022/02/16 02:29:37]
+[codigo=99, descripcion=Prueba Fallida, vtid=desconocido, fecha=2022/02/16 02:29:56]
+[codigo=99, descripcion=Prueba Fallida, vtid=desconocido, fecha=2022/02/16 02:30:04]
+[codigo=99, descripcion=Prueba Fallida, vtid=desconocido, fecha=2022/02/16 02:30:12]
+[codigo=99, descripcion=Prueba Fallida, vtid=desconocido, fecha=2022/02/16 02:30:34]
+[codigo=99, descripcion=Prueba Fallida, vtid=desconocido, fecha=2022/02/16 02:30:42]
+[codigo=99, descripcion=Prueba Fallida, vtid=desconocido, fecha=2022/02/16 02:30:50]

@@ -1,0 +1,102 @@
+T008_CO_PROPIEDAD|T008_DE_NOMBRE|T008_DE_VALOR|T008_DE_DESCRIPCION|T007_CO_SERVICIO|T008_DE_AYUDA|T008_CO_AYUDA_ACTIVA|
+1|MTO_MINIMO|200|Monto mínimo a recargar|1|Monto Mínimo Bs.|1|
+2|MTO_INTERVALO|50|Intérvalo de incremento en el monto a recargar|1|Intervalo Bs.|1|
+3|MTO_MAXIMO|15000|Monto máximo permitido en la recarga|1|Monto Máximo Bs.|1|
+4|PREFIJOS_VALIDOS|0414,0424|Códigos de áreas posibles|1|Prefijos Válidos|0|
+5|LONGITUD_MINIMA|11|Longitud que debe tener el número de servicio|1||0|
+6|LONGITUD_MAXIMA|11|Longitud máxima que debe tener el número de servicio|1||0|
+7|TIPO_DATO_SERVICIO|ALFANUMERICO|Tipo de servicio NUMERICO o ALFANUMERICO|1||0|
+8|SERVICIO_PROVEEDOR_CONSULTA|Prepago-Celular-Consulta|servicio de consulta|1||0|
+9|SERVICIO_PROVEEDOR_PAGO|Prepago-Celular-Recarga|servicio de pago|1||0|
+10|SERVICIO_PROVEEDOR_REVERSO|Prepago-Celular-Reverso|servicio de reverso|1||0|
+11|MTO_MINIMO|200|Monto mínimo a recargar|2|Monto Mínimo Bs.|1|
+12|MTO_INTERVALO|50|Intérvalo de incremento en el monto a recargar|2|Intervalo Bs.|1|
+13|MTO_MAXIMO|15000|Monto máximo permitido en la recarga|2|Monto Máximo Bs.|1|
+14|LONGITUD_MINIMA|9|Longitud que debe tener el número de servicio|2||0|
+15|SERVICIO_PROVEEDOR_CONSULTA|Prepago-Internet-Consulta|servicio de consulta|2||0|
+16|SERVICIO_PROVEEDOR_PAGO|Prepago-Internet-Recarga|servicio de pago|2||0|
+17|SERVICIO_PROVEEDOR_REVERSO|Prepago-Internet-Reverso|servicio de reverso|2||0|
+18|MTO_MINIMO|200|Monto mínimo a recargar|3|Monto Mínimo Bs.|1|
+19|MTO_INTERVALO|50|Intérvalo de incremento en el monto a recargar|3|Intervalo Bs.|1|
+20|MTO_MAXIMO|15000|Monto máximo permitido en la recarga|3|Monto Máximo Bs.|1|
+21|LONGITUD_MINIMA|11|Longitud que debe tener el número de servicio|3||0|
+22|SERVICIO_PROVEEDOR_CONSULTA|Prepago-Fijo-Consulta|servicio de consulta|3||0|
+23|SERVICIO_PROVEEDOR_PAGO|Prepago-Fijo-Recarga|servicio de pago|3||0|
+24|SERVICIO_PROVEEDOR_REVERSO|Prepago-Fijo-Reverso|servicio de reverso|3||0|
+25|MTO_MINIMO|200|Monto mínimo a recargar|4|Monto Mínimo Bs.|1|
+26|MTO_INTERVALO|50|Intérvalo de incremento en el monto a recargar|4|Intervalo Bs.|1|
+27|MTO_MAXIMO|15000|Monto máximo permitido en la recarga|4|Monto Máximo Bs.|1|
+28|LONGITUD_MINIMA|11|Longitud que debe tener el número de servicio|4|Longitud|0|
+29|SERVICIO_PROVEEDOR_CONSULTA|Prepago-TV-Consulta|servicio de consulta|4||0|
+30|SERVICIO_PROVEEDOR_PAGO|Prepago-TV-Recarga|servicio de pago|4||0|
+31|SERVICIO_PROVEEDOR_REVERSO|Prepago-TV-Reverso|servicio de reverso|4||0|
+32|PREFIJOS_VALIDOS|0412,0414,0424,0416,0426|Códigos de áreas posibles|5|Prefijos Válidos|0|
+33|LONGITUD_MINIMA|11|Longitud que debe tener el número de servicio|5||0|
+34|LONGITUD_MAXIMA|11|Longitud máxima que debe tener el número de servicio|5||0|
+35|MONTOS_PERMITIDOS|10000,30000,50000,70000|Montos permitidos para la transacción|5|Montos Permitidos Bs.|1|
+36|SERVICIO_PROVEEDOR_PAGO|LDI-Compra-PIN|servicio de pago|5||0|
+37|SERVICIO_PROVEEDOR_CONSULTA|LDI-Balance-PIN|servicio de consulta|5||0|
+38|MTO_MINIMO|100|Monto mínimo a recargar|6|Monto Mínimo Bs.|1|
+39|MTO_INTERVALO|100|Intérvalo de incremento en el monto a recargar|6|Intervalo Bs.|1|
+40|MTO_MAXIMO|6000|Monto máximo permitido en la recarga|6|Monto Máximo Bs.|1|
+41|PREFIJOS_VALIDOS|0412|Códigos de áreas posibles|6|Prefijos Válidos|0|
+42|LONGITUD_MINIMA|11|Longitud que debe tener el número de servicio|6||0|
+43|LONGITUD_MAXIMA|11|Longitud máxima que debe tener el número de servicio|6||0|
+44|TIPO_DATO_SERVICIO|ALFANUMERICO|Tipo de servicio NUMERICO o ALFANUMERICO|6||0|
+45|SERVICIO_PROVEEDOR_CONSULTA|Digitel-Validacion|servicio de consulta|6||0|
+46|SERVICIO_PROVEEDOR_PAGO|Digitel-Recarga|servicio de pago|6||0|
+47|TRANSACCION_CONSULTA|OLB_VALIDATION|Parámetro  de validación|6||0|
+48|MTO_MINIMO|100|Monto mínimo a recargar|7|Monto Mínimo Bs.|1|
+49|MTO_INTERVALO|100|Intérvalo de incremento en el monto a recargar|7|Intervalo Bs.|1|
+50|MTO_MAXIMO|6000|Monto máximo permitido en la recarga|7|Monto Máximo Bs.|1|
+51|PREFIJOS_VALIDOS|0412,02|Códigos de áreas posibles|7|Prefijos Válidos|0|
+52|LONGITUD_MINIMA|11|Longitud que debe tener el número de servicio|7||0|
+53|LONGITUD_MAXIMA|11|Longitud máxima que debe tener el número de servicio|7||0|
+54|TIPO_DATO_SERVICIO|ALFANUMERICO|Tipo de servicio NUMERICO o ALFANUMERICO|7||0|
+55|SERVICIO_PROVEEDOR_CONSULTA|Digitel-Validacion|servicio de consulta|7||0|
+56|SERVICIO_PROVEEDOR_PAGO|Digitel-Recarga|servicio de pago|7||0|
+57|TRANSACCION_CONSULTA|OLB_VALIDATION|Parámetro de validación|7||0|
+58|MTO_MINIMO|100|Monto mínimo a recargar|8|Monto Mínimo Bs.|1|
+59|MTO_INTERVALO|100|Intérvalo de incremento en el monto a recargar|8|Intervalo Bs.|1|
+60|MTO_MAXIMO|6000|Monto máximo permitido en la recarga|8|Monto Máximo Bs.|1|
+61|PREFIJOS_VALIDOS|0412|Códigos de áreas posibles|8|Prefijos Válidos|0|
+62|LONGITUD_MINIMA|11|Longitud que debe tener el número de servicio|8||0|
+63|LONGITUD_MAXIMA|11|Longitud máxima que debe tener el número de servicio|8||0|
+64|TIPO_DATO_SERVICIO|ALFANUMERICO|Tipo de servicio NUMERICO o ALFANUMERICO|8||0|
+65|SERVICIO_PROVEEDOR_CONSULTA|Digitel-Validacion|servicio de consulta|8||0|
+66|SERVICIO_PROVEEDOR_PAGO|Digitel-Recarga|servicio de pago|8||0|
+67|TRANSACCION_CONSULTA|OLB_VALIDATION|Parámetro de validación|8||0|
+68|MTO_MINIMO|1000|Monto mínimo a recargar|9|Monto Mínimo Bs.|1|
+69|MTO_MAXIMO|80000|Monto máximo permitido en la recarga|9|Monto Máximo Bs.|1|
+70|LONGITUD_MINIMA|12|Longitud que debe tener el número de servicio|9||0|
+71|LONGITUD_MAXIMA|12|Longitud máxima que debe tener el número de servicio|9||0|
+72|TIPO_DATO_SERVICIO|ALFANUMERICO|Tipo de servicio NUMERICO o ALFANUMERICO|9||0|
+73|SERVICIO_PROVEEDOR_CONSULTA|DirecTV-Prepago-Consulta|servicio de consulta|9||0|
+74|SERVICIO_PROVEEDOR_PAGO|DirecTV-Prepago-Pago|servicio de pago|9||0|
+75|CONSULTAR_DEUDA|1|el olbpos consulta la deuda del cliente antes de agregar el servicio|9||0|
+76|REQUIERE_CEDULA|1|indica que la consulta requiere la cédula o RIF de la persona|9||0|
+77|TEXTO_SERVICIO|Nro. SmartCard|texto que el servicio debe de mostrar|9||0|
+78|MTO_MINIMO|2500|Monto mínimo a recargar|10|Monto Mínimo Bs.|1|
+79|MTO_MAXIMO|160000|Monto máximo permitido en la recarga|10|Monto Máximo Bs.|1|
+80|MTO_INTERVALO|0.01|Intérvalo de incremento en el monto a recargar|10|Intérvalo Bs.|1|
+81|PAGO_DEUDA_VENCIDA|0|Indicador de obligatoriedad de pagar la deuda vencida|10||0|
+82|LONGITUD_MINIMA|5|Longitud que debe tener el número de servicio|10||0|
+83|LONGITUD_MAXIMA|8|Longitud máxima que debe tener el número de servicio|10||0|
+84|TIPO_DATO_SERVICIO|ALFANUMERICO|Tipo de servicio NUMERICO o ALFANUMERICO|10||0|
+85|SERVICIO_PROVEEDOR_CONSULTA|DirecTV-PrevioPago-Consulta|servicio de consulta|10||0|
+86|SERVICIO_PROVEEDOR_PAGO|DirecTV-PrevioPago-Pago|servicio de pago|10||0|
+87|REQUIERE_CEDULA|0|indica que la consulta requiere la cédula o RIF de la persona|10||0|
+88|TEXTO_SERVICIO|Id del Suscriptor|texto que el servicio debe de mostrar en el titulo de nro servicio|10||0|
+89|TEXTO_SALDO_VENCIDO|Pago Mínimo||10||0|
+90|TEXTO_SALDO_ACTUAL|Deuda Actual||10||0|
+91|TEXTO_SALDO_TOTAL|Deuda Total||10||0|
+92|TEXTO_SALDO|Deuda||10||0|
+93|TEXTO_MONTO|Pago Parcial||10||0|
+94|PAGO_DEUDA_VENCIDA|1|Indicador de obligatoriedad de pagar la deuda vencida|11||0|
+95|LONGITUD_MINIMA|11|Longitud que debe tener el número de servicio|11||0|
+96|LONGITUD_MAXIMA|12|Longitud máxima que debe tener el número de servicio|11||0|
+97|TIPO_DATO_SERVICIO|NUMERICO|Tipo de servicio NUMERICO o ALFANUMERICO|11||0|
+98|SERVICIO_PROVEEDOR_CONSULTA|Digitel-Postpago-Consulta|servicio de consulta|11||0|
+99|SERVICIO_PROVEEDOR_PAGO|Digitel-Postpago-Pago|servicio de pago|11||0|
+100|TRANSACCION_CONSULTA|OLB_BALANCE|Parametro de validación|11||0|
+101|PRE_VALUE_GSM|58|Parametro de procesamiento de informacion|11||0|

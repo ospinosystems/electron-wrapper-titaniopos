@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="ISO-8859-1">
+	<title>Prueba VPOS REST CARDS</title>
+    <script
+		  src="https://code.jquery.com/jquery-3.1.1.min.js"
+		  integrity="sha256-hVVnYaiADRTO2PzUGmuLJr8BLUSjGIZsDYGmIJLv2b8="
+		  crossorigin="anonymous">
+	</script>	
+	<script type="text/javascript">
+		function metodosVirtual(metodoEjecutar){
+			
+			document.getElementById("respuesta").value =  "";
+    		var puntosCanje;
+    		var puntosAcreditacion;
+    		var puntosDevolucion;
+    		var cedula;
+    		var pan;
+    		var dataObj;
+    		var montoCompra;
+    		var tipoMonedero;
+    		
+			//alert("He invocado un metodo VPOS REST : " + metodoEjecutar);			
+			if (metodoEjecutar == 'consultaDeCardsPrepago' || metodoEjecutar == 'consultarPuntosTVirtual') {
+				if (document.getElementById("datos").elements.item(0).value !== "Tipo de Identificacion"){
+					cedula = document.getElementById("datos").elements.item(0).value;
+				}			
+				cedula = cedula + document.getElementById("datos").elements.item(1).value;
+				pan = document.getElementById("datos").elements.item(3).value;
+    			dataObj = {
+    					"accion":metodoEjecutar,
+    					"cedula": cedula,
+    					"numeroTarjeta": pan
+    			}
+    			if (document.getElementById("datos").elements.item(2).value !== ""){
+    				dataObj.vtId = document.getElementById("datos").elements.item(2).value
+    			}
+    			if (document.getElementById("datos").elements.item(4).value !== ""){
+    				dataObj.fechaVcmto = document.getElementById("datos").elements.item(4).value
+    			}
+
+			} else if (metodoEjecutar == 'canjePuntosTVirtual' ) {
+				if (document.getElementById("datos").elements.item(0).value !== "Tipo de Identificacion"){
+					cedula = document.getElementById("datos").elements.item(0).value;
+				}			
+				cedula = cedula + document.getElementById("datos").elements.item(1).value;
+				pan = document.getElementById("datos").elements.item(3).value;
+				puntosCanje = document.getElementById("tVirtual").elements.item(3).value;
+
+    			dataObj = {
+    					"accion":metodoEjecutar,
+    					"cedula": cedula,
+    					"numeroTarjeta": pan,
+    					"puntosCanjear": puntosCanje
+    			}
+    			if (document.getElementById("datos").elements.item(4).value !== ""){
+    				dataObj.fechaVcmto = document.getElementById("datos").elements.item(4).value
+    			}
+				
+			} else if (metodoEjecutar == 'acreditarPuntosTVirtual' ) {
+				if (document.getElementById("datos").elements.item(0).value !== "Tipo de Identificacion"){
+					cedula = document.getElementById("datos").elements.item(0).value;
+				}			
+				cedula = cedula + document.getElementById("datos").elements.item(1).value;
+				pan = document.getElementById("datos").elements.item(3).value;
+				puntosAcreditacion = document.getElementById("tVirtual").elements.item(5).value;
+
+    			dataObj = {
+    					"accion": metodoEjecutar,
+    					"cedula": cedula,
+    					"numeroTarjeta": pan,
+    					"puntosAcreditar": puntosAcreditacion
+    			}
+    			if (document.getElementById("datos").elements.item(4).value !== ""){
+    				dataObj.fechaVcmto = document.getElementById("datos").elements.item(4).value;
+    			}
+
+    		} else if (metodoEjecutar == 'devolverPuntosTVirtual' ) {
+				if (document.getElementById("datos").elements.item(0).value !== "Tipo de Identificacion"){
+					cedula = document.getElementById("datos").elements.item(0).value;
+				}			
+				cedula = cedula + document.getElementById("datos").elements.item(1).value;
+				pan = document.getElementById("datos").elements.item(3).value;
+				puntosDevolucion = document.getElementById("tVirtual").elements.item(7).value;
+
+    			dataObj = {
+    					"accion":metodoEjecutar,
+    					"cedula": cedula,
+    					"numeroTarjeta": pan,
+    					"puntosDevolver": puntosDevolucion
+    			}
+    			if (document.getElementById("datos").elements.item(4).value !== ""){
+    				dataObj.fechaVcmto = document.getElementById("datos").elements.item(4).value
+    			}
+				
+					
+			} else if (metodoEjecutar == 'compraTVirtualCards' ) {
+				if (document.getElementById("datos").elements.item(0).value !== "Tipo de Identificacion"){
+					cedula = document.getElementById("datos").elements.item(0).value;
+				}			
+				cedula = cedula + document.getElementById("datos").elements.item(1).value;
+				pan = document.getElementById("datos").elements.item(3).value;
+				montoCompra = document.getElementById("tVirtual").elements.item(12).value;
+				tipoMonedero = document.getElementById("tVirtual").elements.item(11).value;
+
+    			dataObj = {
+    					"accion":metodoEjecutar,
+    					"cedula": cedula,
+    					"numeroTarjeta": pan,
+    					"saldoPagar": montoCompra,
+    					"tipoMonedero": tipoMonedero
+    			}
+    			if (document.getElementById("datos").elements.item(4).value !== ""){
+    				dataObj.fechaVcmto = document.getElementById("datos").elements.item(4).value
+    			}
+			} else if (metodoEjecutar == 'mantenimientoPINTVirtual') {
+				if (document.getElementById("datos").elements.item(0).value !== "Tipo de Identificacion"){
+					cedula = document.getElementById("datos").elements.item(0).value;
+				}			
+				cedula = cedula + document.getElementById("datos").elements.item(1).value;
+				pan = document.getElementById("datos").elements.item(3).value;
+    			dataObj = {
+    					"accion":metodoEjecutar,
+    					"cedula": cedula,
+    					"numeroTarjeta": pan
+    			}
+    			if (document.getElementById("datos").elements.item(4).value !== ""){
+    				dataObj.fechaVcmto = document.getElementById("datos").elements.item(4).value
+    			}
+
+			}
+
+			var dataRequest = JSON.stringify(dataObj, undefined, 4);
+			//alert(dataRequest);
+			$("#solicitud").val(dataRequest);
+			var dataResponse;
+			$.ajax({
+					url: "http://localhost:8085/vpos/metodo_cards",
+					type: 'POST',						
+					dataType: 'json',
+					contentType: "application/json; charset=utf-8",	
+					data: dataRequest,
+					success: function (dataResponse) {
+						respuesta = JSON.stringify(dataResponse,undefined, 4);
+						document.getElementById("respuesta").value =  respuesta;
+
+						var t = JSON.parse(respuesta);
+
+						if (t['numeroTarjeta'] !== ""){
+							document.getElementById("datos").elements.item(3).value = t['numeroTarjeta'];
+						}
+
+						if (t['fechaExpiracion'] !== ""){
+							document.getElementById("datos").elements.item(4).value = t['fechaExpiracion'];
+						}
+
+						if (t['listaSaldosPrepago'] !== null){
+							var cuentas = JSON.stringify(t['listaSaldosPrepago'],undefined, 4);
+							var t2 = JSON.parse(cuentas);
+
+							document.getElementById("tVirtual").elements.item(9).value = "";
+
+							var s=document.getElementById("cuentas");
+
+							for (let i = s.options.length; i >= 1; i--){
+								s.remove(i);
+							}
+							
+
+							var coordenadas;
+							for (n in t2) {
+								coordenadas = t2[n].toString().split(",");
+ 								document.getElementById("tVirtual").elements.item(9).value = document.getElementById("tVirtual").elements.item(9).value + coordenadas[0] + ": " + coordenadas[1] + "\n";
+
+ 								var option = document.createElement("option");
+								option.value=n.toString();
+								option.text=coordenadas[0];
+
+								s.appendChild(option) 
+ 							
+ 							}
+						
+						}
+						if (t['saldoDisponible'] !== ""){
+							var peticion = JSON.stringify(dataObj);
+							var peticion2 = JSON.parse(peticion);
+							switch (peticion2['accion']){
+								case "consultarPuntosTVirtual":
+									document.getElementById("tVirtual").elements.item(1).value = t['saldoDisponible'];
+								break
+								case "consultaDeCardsPrepago":
+									document.getElementById("tVirtual").elements.item(9).value = t['saldoDisponible'];
+								break
+							}
+						}
+						
+						
+					}
+				});	
+				console.log("Fin ")			
+			}
+
+		function metodosFisica(metodoEjecutar){
+			
+			document.getElementById("respuesta").value =  "";
+    		var puntosCanje;
+    		var puntosAcreditacion;
+    		var puntosDevolucion;
+    		var cedula;
+    		var pan;
+    		var dataObj;
+    		
+			//alert("He invocado un metodo VPOS REST : " + metodoEjecutar);			
+			if (metodoEjecutar == 'leerTarjetaCards') {			
+    			dataObj = {
+    					"accion":metodoEjecutar,
+    			}
+    			if (document.getElementById("datos").elements.item(2).value !== ""){
+    				dataObj.vtId = document.getElementById("datos").elements.item(2).value;
+    			}
+			} else if (metodoEjecutar == 'consultarPuntosTFisica' || metodoEjecutar == 'consultaDeCardsPrepago') {
+				
+				if (document.getElementById("datos").elements.item(0).value !== "Tipo de Identificacion"){
+					cedula = document.getElementById("datos").elements.item(0).value;
+				}			
+				cedula = cedula + document.getElementById("datos").elements.item(1).value;
+				pan = document.getElementById("tfisica").elements.item(1).value;
+
+    			dataObj = {
+    					"accion":metodoEjecutar,
+    					"cedula": cedula,
+    					"numeroTarjeta": pan
+    			}
+    			if (document.getElementById("tfisica").elements.item(2).value !== ""){
+    				dataObj.fechaVcmto = document.getElementById("tfisica").elements.item(2).value
+    			}
+    			if (document.getElementById("datos").elements.item(2).value !== ""){
+    				dataObj.vtId = document.getElementById("datos").elements.item(2).value;
+    			}
+				
+			} else if (metodoEjecutar == 'canjePuntosTFisica' ) {
+				
+				if (document.getElementById("datos").elements.item(0).value !== "Tipo de Identificacion"){
+					cedula = document.getElementById("datos").elements.item(0).value;
+				}			
+				cedula = cedula + document.getElementById("datos").elements.item(1).value;
+				pan = document.getElementById("tfisica").elements.item(1).value;
+				puntosCanje = document.getElementById("tfisica").elements.item(6).value;
+
+    			dataObj = {
+    					"accion":metodoEjecutar,
+    					"cedula": cedula,
+    					"numeroTarjeta": pan,
+    					"puntosCanjear": puntosCanje
+    			}
+    			if (document.getElementById("tfisica").elements.item(2).value !== ""){
+    				dataObj.fechaVcmto = document.getElementById("tfisica").elements.item(2).value
+    			}
+    			if (document.getElementById("datos").elements.item(2).value !== ""){
+    				dataObj.vtId = document.getElementById("datos").elements.item(2).value;
+    			}
+
+    		} else if (metodoEjecutar == 'acreditarPuntosTFisica' ) {
+				
+				if (document.getElementById("datos").elements.item(0).value !== "Tipo de Identificacion"){
+					cedula = document.getElementById("datos").elements.item(0).value;
+				}			
+				cedula = cedula + document.getElementById("datos").elements.item(1).value;
+				pan = document.getElementById("tfisica").elements.item(1).value;
+				puntosAcreditacion = document.getElementById("tfisica").elements.item(8).value;
+
+    			dataObj = {
+    					"accion":metodoEjecutar,
+    					"cedula": cedula,
+    					"numeroTarjeta": pan,
+    					"puntosAcreditar": puntosAcreditacion
+    			}
+    			if (document.getElementById("tfisica").elements.item(2).value !== ""){
+    				dataObj.fechaVcmto = document.getElementById("tfisica").elements.item(2).value
+    			}
+    			if (document.getElementById("datos").elements.item(2).value !== ""){
+    				dataObj.vtId = document.getElementById("datos").elements.item(2).value;
+    			}
+				
+			} else if (metodoEjecutar == 'devolverPuntosTFisica' ) {
+				
+				if (document.getElementById("datos").elements.item(0).value !== "Tipo de Identificacion"){
+					cedula = document.getElementById("datos").elements.item(0).value;
+				}			
+				cedula = cedula + document.getElementById("datos").elements.item(1).value;
+				pan = document.getElementById("tfisica").elements.item(1).value;
+				puntosDevolucion = document.getElementById("tfisica").elements.item(10).value;
+
+    			dataObj = {
+    					"accion":metodoEjecutar,
+    					"cedula": cedula,
+    					"numeroTarjeta": pan,
+    					"puntosDevolver": puntosDevolucion
+    			}
+    			if (document.getElementById("tfisica").elements.item(2).value !== ""){
+    				dataObj.fechaVcmto = document.getElementById("tfisica").elements.item(2).value
+    			}
+    			if (document.getElementById("datos").elements.item(2).value !== ""){
+    				dataObj.vtId = document.getElementById("datos").elements.item(2).value;
+    			}		
+				
+			}else if (metodoEjecutar == 'compraTFisicaCards' ) {
+				if (document.getElementById("datos").elements.item(0).value !== "Tipo de Identificacion"){
+					cedula = document.getElementById("datos").elements.item(0).value;
+				}			
+				cedula = cedula + document.getElementById("datos").elements.item(1).value;
+				pan = document.getElementById("tfisica").elements.item(1).value;
+				montoCompra = document.getElementById("tfisica").elements.item(15).value;
+				tipoMonedero = document.getElementById("tfisica").elements.item(14).value;
+
+    			dataObj = {
+    					"accion":metodoEjecutar,
+    					"cedula": cedula,
+    					"numeroTarjeta": pan,
+    					"saldoPagar": montoCompra,
+    					"tipoMonedero": tipoMonedero
+    			}
+    			if (document.getElementById("tfisica").elements.item(2).value !== ""){
+    				dataObj.fechaVcmto = document.getElementById("tfisica").elements.item(2).value
+    			}
+    			if (document.getElementById("datos").elements.item(2).value !== ""){
+    				dataObj.vtId = document.getElementById("datos").elements.item(2).value;
+    			}
+			
+			} else if (metodoEjecutar == 'mantenimientoPINTFisica') {
+				
+				if (document.getElementById("datos").elements.item(0).value !== "Tipo de Identificacion"){
+					cedula = document.getElementById("datos").elements.item(0).value;
+				}			
+				cedula = cedula + document.getElementById("datos").elements.item(1).value;
+				pan = document.getElementById("tfisica").elements.item(1).value;
+
+    			dataObj = {
+    					"accion":metodoEjecutar,
+    					"cedula": cedula,
+    					"numeroTarjeta": pan
+    			}
+    			if (document.getElementById("tfisica").elements.item(2).value !== ""){
+    				dataObj.fechaVcmto = document.getElementById("tfisica").elements.item(2).value
+    			}
+    			if (document.getElementById("datos").elements.item(2).value !== ""){
+    				dataObj.vtId = document.getElementById("datos").elements.item(2).value;
+    			}
+				
+			}
+
+			var dataRequest = JSON.stringify(dataObj, undefined, 4);
+			//alert(dataRequest);
+			$("#solicitud").val(dataRequest);
+			var dataResponse;
+			$.ajax({
+					url: "http://localhost:8085/vpos/metodo_cards",
+					type: 'POST',						
+					dataType: 'json',
+					contentType: "application/json; charset=utf-8",	
+					data: dataRequest,
+					success: function (dataResponse) {
+						respuesta = JSON.stringify(dataResponse,undefined, 4);
+						document.getElementById("respuesta").value =  respuesta;
+
+						var t = JSON.parse(respuesta);
+
+						if (t['numeroTarjeta'] !== ""){
+							document.getElementById("tfisica").elements.item(1).value = t['numeroTarjeta'];
+						}
+
+						if (t['fechaExpiracion'] !== ""){
+							document.getElementById("tfisica").elements.item(2).value = t['fechaExpiracion'];
+						}
+
+						if (t['saldoDisponible'] !== ""){
+							var peticion = JSON.stringify(dataObj);
+							var peticion2 = JSON.parse(peticion);
+							switch (peticion2['accion']){
+								case "consultarPuntosTFisica":
+									document.getElementById("tfisica").elements.item(4).value = t['saldoDisponible'];
+								break
+								case "consultaDeCardsPrepago":
+									document.getElementById("tfisica").elements.item(12).value = t['saldoDisponible'];
+								break
+							}
+						}
+
+						if (t['listaSaldosPrepago'] !== null){
+							var cuentas = JSON.stringify(t['listaSaldosPrepago'],undefined, 4);
+							var t2 = JSON.parse(cuentas);
+
+							document.getElementById("tfisica").elements.item(12).value = "";
+
+							var s=document.getElementById("cuentasFisica");
+
+							for (let i = s.options.length; i >= 1; i--){
+								s.remove(i);
+							}
+
+							var coordenadas;
+							for (n in t2) {
+								coordenadas = t2[n].toString().split(",");
+ 								document.getElementById("tfisica").elements.item(12).value = document.getElementById("tfisica").elements.item(12).value + coordenadas[0] + ": " + coordenadas[1] + "\n";
+
+ 								var option = document.createElement("option");
+								option.value=n.toString();
+								option.text=coordenadas[0];
+
+								s.appendChild(option) 
+ 							
+ 							}
+						
+						}
+						
+					}
+				});	
+				console.log("Fin ")	
+		}
+		function metodosCards(metodoEjecutar){
+			document.getElementById("respuesta").value =  "";
+			//alert("He invocado un metodo VPOS REST : " + metodoEjecutar);
+			var dataObj;
+			var cedula;
+
+			if (document.getElementById("datos").elements.item(0).value !== "Tipo de Identificacion"){
+					cedula = document.getElementById("datos").elements.item(0).value;
+				}			
+				cedula = cedula + document.getElementById("datos").elements.item(1).value;
+
+			if (metodoEjecutar == 'activacionCards') {
+				dataObj = {
+					"accion":metodoEjecutar
+				}
+				if (document.getElementById("datos").elements.item(2).value !== ""){
+    				dataObj.vtId = document.getElementById("datos").elements.item(2).value;
+    			}
+			} else {
+				dataObj = {
+				"accion":metodoEjecutar,
+				"cedula":cedula
+				}
+				if (document.getElementById("datos").elements.item(2).value !== ""){
+    				dataObj.vtId = document.getElementById("datos").elements.item(2).value;
+    			}
+			}
+			
+			var dataRequest = JSON.stringify(dataObj, undefined, 4);
+			var dataResponse;
+			var respuesta;
+			$("#solicitud").val(dataRequest);
+			$.ajax({
+				url: "http://localhost:8085/vpos/metodo_cards",
+				type: 'POST',						
+				dataType: 'json',
+				contentType: "application/json; charset=utf-8",	
+				data: dataRequest,
+				success: function (dataResponse) {
+					respuesta = JSON.stringify(dataResponse,undefined, 4);
+					document.getElementById("respuesta").value =  respuesta
+				},
+			    error: function (xhr, ajaxOptions, thrownError) {
+			          alert(xhr.status);
+			          alert(thrownError);
+			    }		
+			});	
+			console.log("Fin ")			
+		}
+	</script>
+	<style type="text/css">
+	.izquierda{
+		width: 40%;
+		float: left;
+	}
+	.derecha{
+		width: 58%;
+		float: right;
+	}
+	.derecha textarea{
+	  width: 98%;
+	}
+	input[type="text"], input[type="button"]{
+	    width: 45%;
+		height: 25px;
+		margin-bottom: 10px;
+	}
+	#solicitud{
+	  background-color: black;
+	  color:white;
+	}
+	#respuesta{
+	  background-color: black;
+	  color:white;
+	}
+	.negrita{
+	font-weight: bold;
+	}
+	</style>
+	</head>
+<body>
+
+	<h1>Test de VPosWebServer (Cards)</h1>
+	<div class="izquierda">
+	<fieldset>
+	  <legend>Datos:</legend>
+	  <form id="datos">
+	  	  	<label>Tipo de Identificacion</label>&emsp;&emsp;
+	  	    <select id="tipoIdentificacion">
+			<option value="">Tipo de Identificacion&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;</option>
+			<option value="V">Venezolano</option>
+			<option value="E">Extranjero</option>
+			<option value="P">Pasaporte</option>
+			<option value="R">RIF</option>
+		  </select><br>
+		  <label>Cedula</label>&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;
+		  <input type="text" name="cedula" placeholder="Cedula"><br>
+		   <label>VTerminal</label>&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&ensp;
+		  <input type="text" name="terminalVirtual" placeholder="VTID"><br>
+		   <label>PAN</label>&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&ensp;&nbsp;
+	  	  <input type="text" name="pan" placeholder="Numero de Tarjeta"><br> 
+	  	   <label>Fecha de expiracion</label>&emsp;&emsp;&ensp;&nbsp;
+	  	  <input type="text" name="fechaExp" placeholder="Fecha de expiracion"><br> 
+      </form>
+	</fieldset>
+	
+	<!-- Procesos con Tarjeta Fisica -->
+	<br>
+	<fieldset>
+	  <legend>Tarjeta Fisica:</legend>
+	  		<form id="tfisica">
+			<input type="button" value="Leer Tarjeta"  onclick="metodosFisica('leerTarjetaCards');"><br>
+			<input type="text" name="tarjetaFisica" placeholder="Numero de Tarjeta" readonly="readonly">
+			<input type="text" name="fechaExpFisica" placeholder="Fecha de Expiracion" readonly="readonly"><br>	
+			 <br>
+		  	<input type="button" value="Consulta de Puntos"  onclick="metodosFisica('consultarPuntosTFisica');">
+		  	<input type="text" name="puntosDisponibles" placeholder="Puntos Disponibles" readonly="readonly"><br>
+		  	<input type="button" value="Canje de Puntos"  onclick="metodosFisica('canjePuntosTFisica');">	
+		  	<input type="text" name="puntosCanje" placeholder="Puntos a Canjear"><br>
+		  	<input type="button" value="Acreditacion de Puntos"  onclick="metodosFisica('acreditarPuntosTFisica');">	
+		  	<input type="text" name="puntosAcreditacion" placeholder="Puntos a Acreditar"><br>
+		  	<input type="button" value="Devolucion de Puntos"  onclick="metodosFisica('devolverPuntosTFisica');">	
+		  	<input type="text" name="puntosDevolucion" placeholder="Puntos a Devolver"><br>
+		  	<br>
+		  	<input type="button" value="Consulta de Saldo"  onclick="metodosFisica('consultaDeCardsPrepago');"><br>
+		  	<textarea cols="60" rows="3" placeholder="Saldo Disponible" readonly="readonly"></textarea><br>
+		  	<input type="button" value="Pago con Saldo"  onclick="metodosFisica('compraTFisicaCards');"><br>
+		  	 <select id="cuentasFisica">
+			<option value="">&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;</option>
+		  </select>
+		  	<input type="text" name="saldoAPagar" placeholder="Saldo a Pagar"><br>	
+		  	<br>
+		  	<input type="button" value="Mantenimiento de PIN"  onclick="metodosFisica('mantenimientoPINTFisica');">
+		</form>
+	</fieldset>
+	
+	<!-- Procesos con Tarjeta Virtual -->
+	<br>
+	<fieldset>
+	   <legend>Tarjeta Virtual:</legend>
+	  		<form id="tVirtual">	
+		  	<input type="button" value="Consulta de Puntos"  onclick="metodosVirtual('consultarPuntosTVirtual');">
+		  	<input type="text" name="puntosDisponibles" placeholder="Puntos Disponibles" readonly="readonly"><br>
+		  	<input type="button" value="Canje de Puntos"  onclick="metodosVirtual('canjePuntosTVirtual');">
+		  	<input type="text" name="puntosCanje" placeholder="Puntos a Canjear"><br>
+		  	<input type="button" value="Acreditacion de Puntos"  onclick="metodosVirtual('acreditarPuntosTVirtual');">	
+		  	<input type="text" name="puntosAcreditacion" placeholder="Puntos a Acreditar"><br>
+		  	<input type="button" value="Devolucion de Puntos"  onclick="metodosVirtual('devolverPuntosTVirtual');">	
+		  	<input type="text" name="puntosDevolucion" placeholder="Puntos a Devolver"><br>	
+		  	 <br>
+		  	<input type="button" value="Consulta de Saldo"  onclick="metodosVirtual('consultaDeCardsPrepago');"><br>
+		  	<textarea cols="60" rows="3" placeholder="Saldo Disponible" readonly="readonly"></textarea><br>
+		  	<input type="button" value="Pago con Saldo"  onclick="metodosVirtual('compraTVirtualCards');"><br>
+		  	 <select id="cuentas">
+			<option value="">&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;</option>
+		  </select>
+		  	<input type="text" name="saldoAPagar" placeholder="Saldo a Pagar"><br>		
+		  	<br>
+		  	<input type="button" value="Mantenimiento de PIN"  onclick="metodosVirtual('mantenimientoPINTVirtual');">
+		</form>
+	</fieldset>
+	</div>
+	
+	<div class="derecha">
+	<span class="negrita">Solicitud</span>
+	<textarea id="solicitud" cols="100" rows="5"></textarea>
+	<span class="negrita">Respuesta</span>
+	<textarea id="respuesta" cols="100" rows="50"></textarea>
+	<br>
+	<!-- Procesos Cards -->
+	<fieldset>
+	   <legend>Metodos Generales:</legend>
+	  		<form id="cierre">	
+		  	<input type="button" value="Consulta Lealtad"  onclick="metodosCards('consultarLealtadCards');">
+		  	<input type="button" value="Canje de Producto"  onclick="metodosCards('canjeProductoCards');"><br>
+		  	<input type="button" value="Activacion"  onclick="metodosCards('activacionCards');">
+		  	<input type="button" value="Cambio PIN"  onclick="metodosCards('cambioPINCards');">	
+		</form>
+	</fieldset>
+	</div>
+</body>
+</html>

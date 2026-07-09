@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="ISO-8859-1">
+	<title>Prueba VPOS REST</title>
+    <script
+		  src="https://code.jquery.com/jquery-3.1.1.min.js"
+		  integrity="sha256-hVVnYaiADRTO2PzUGmuLJr8BLUSjGIZsDYGmIJLv2b8="
+		  crossorigin="anonymous">
+	</script>	
+	<script type="text/javascript">
+		function conParametros(metodoEjecutar){
+			
+			document.getElementById("respuesta").value =  "";
+    		var montoCompra, montoAvance;
+    		var cedula;
+    		var dataObj;
+    		
+			//alert("He invocado un metodo VPOS REST : " + metodoEjecutar);			
+			if (metodoEjecutar == 'avanceEfectivo' || metodoEjecutar == 'avanceRetiro' ) {			
+				montoCompra = document.getElementById("cashback").elements.item(0).value;
+				montoAvance = document.getElementById("cashback").elements.item(1).value;
+				montoDonativo = document.getElementById("cashback").elements.item(2).value;
+			    cedula = document.getElementById("cashback").elements.item(3).value;    			
+    			dataObj = {
+    					"accion":metodoEjecutar,
+    					"montoTransaccion": montoCompra,
+    					"montoAvanceRetiro": montoAvance,
+    					"cedula": cedula
+    			}
+    			if (montoDonativo !== ""){
+    				dataObj.montoDonativo = montoDonativo
+    			}
+
+			} else if (metodoEjecutar == 'anulacion' ) {
+				var numSeq = document.getElementById("anulacion").elements.item(0).value;
+				cedula = document.getElementById("pagos").elements.item(1).value;
+				dataObj = {
+    					"accion":metodoEjecutar,
+						"cedula": cedula,
+    					"numSeq": numSeq,				
+    			}
+				if (document.getElementById("anulacion").elements.item(1).value !== ""){
+    				dataObj.terminalVirtual = document.getElementById("anulacion").elements.item(1).value
+    			}
+				
+			} else if (metodoEjecutar == 'tarjeta' ) {
+				montoCompra = document.getElementById("pagos").elements.item(0).value;
+    			cedula = document.getElementById("pagos").elements.item(1).value;
+    			montoDonativo = document.getElementById("pagos").elements.item(2).value;
+    			terminalVirtual = document.getElementById("pagos").elements.item(5).value;
+				medioPago = document.getElementById("pagos").elements.item(6).value;
+    			dataObj = {
+    					"accion":metodoEjecutar,
+    					"montoTransaccion": montoCompra,
+    					"cedula": cedula,
+						"medioPago": medioPago
+						
+    			}				
+    			if (montoDonativo !== ""){
+    				dataObj.montoDonativo = montoDonativo
+    			}
+				if (document.getElementById("pagos").elements.item(5).value !== ""){
+					dataObj.terminalVirtual = document.getElementById("pagos").elements.item(5).value
+				}	
+				if (document.getElementById("pagos").elements.item(4).value !== ""){
+    				dataObj.referencia = document.getElementById("pagos").elements.item(4).value
+    			}
+			}else if (metodoEjecutar == 'cambio' ) {
+					montoCompra = document.getElementById("pagos").elements.item(0).value;
+					cedula = document.getElementById("pagos").elements.item(1).value;
+					tipoMoneda = document.getElementById("pagos").elements.item(3).value;
+					terminalVirtual = document.getElementById("pagos").elements.item(5).value;
+					
+					dataObj = {
+							"accion":metodoEjecutar,
+							"montoTransaccion": montoCompra,
+							"cedula": cedula,
+							"tipoMoneda":tipoMoneda,
+							
+				
+							
+					}
+					if (document.getElementById("pagos").elements.item(5).value !== ""){
+						dataObj.terminalVirtual = document.getElementById("pagos").elements.item(5).value
+					}					
+			
+			} else if (metodoEjecutar == 'tecladoAbierto' ) {
+				montoCompra = document.getElementById("pagos").elements.item(0).value;
+    			cedula = document.getElementById("pagos").elements.item(1).value;
+    			montoDonativo = document.getElementById("pagos").elements.item(2).value;
+    			dataObj = {
+    					"accion":metodoEjecutar,
+    					"montoTransaccion": montoCompra,
+    					"cedula": cedula
+						
+    			}				
+    			if (montoDonativo !== ""){
+    				dataObj.montoDonativo = montoDonativo
+    			}
+			} else if (metodoEjecutar == 'compraServicio' ) {
+				montoCompra = document.getElementById("pagos").elements.item(0).value;
+    			cedula = document.getElementById("pagos").elements.item(1).value;
+    			montoDonativo = document.getElementById("pagos").elements.item(2).value;
+    			dataObj = {
+    					"accion":metodoEjecutar,
+    					"montoTransaccion": montoCompra,
+    					"cedula": cedula
+						
+    			}				
+    			if (montoDonativo !== ""){
+    				dataObj.montoDonativo = montoDonativo
+    			}
+			}else if (metodoEjecutar == 'servicio' ) {
+				montoCompra = document.getElementById("pagos").elements.item(0).value;
+    			cedula = document.getElementById("pagos").elements.item(1).value;
+    			montoDonativo = document.getElementById("pagos").elements.item(2).value;
+    			dataObj = {
+    					"accion":metodoEjecutar,
+    					"montoTransaccion": montoCompra,
+    					"cedula": cedula
+						
+    			}				
+    			if (montoDonativo !== ""){
+    				dataObj.montoDonativo = montoDonativo
+    			}
+			}else if (metodoEjecutar == 'cheque' ) {
+				montoCompra = document.getElementById("pagos").elements.item(0).value;
+    			cedula = document.getElementById("pagos").elements.item(1).value;
+    			montoDonativo = document.getElementById("pagos").elements.item(2).value;
+    			dataObj = {
+    					"accion":metodoEjecutar,
+    					"montoTransaccion": montoCompra,
+    					"cedula": cedula
+						
+    			}				
+    			if (montoDonativo !== ""){
+    				dataObj.montoDonativo = montoDonativo
+    			}
+			}else if (metodoEjecutar == 'preautorizacionCompletitud' ) {
+				montoCompra = document.getElementById("pagos").elements.item(0).value;
+    			cedula = document.getElementById("pagos").elements.item(1).value;
+    			montoDonativo = document.getElementById("pagos").elements.item(2).value;
+    			dataObj = {
+    					"accion":metodoEjecutar,
+    					"montoTransaccion": montoCompra,
+    					"cedula": cedula		
+    			}				
+    			if (montoDonativo !== ""){
+    				dataObj.montoDonativo = montoDonativo
+    			}
+    			if (document.getElementById("pagos").elements.item(5).value !== ""){
+    				dataObj.terminalVirtual = document.getElementById("pagos").elements.item(5).value
+    			}
+			}else if (metodoEjecutar == 'consumoAjuste' ) {
+				montoCompra = document.getElementById("pagos").elements.item(0).value;
+    			cedula = document.getElementById("pagos").elements.item(1).value;
+    			montoDonativo = document.getElementById("pagos").elements.item(2).value;
+    			dataObj = {
+    					"accion":metodoEjecutar,
+    					"montoTransaccion": montoCompra,
+    					"cedula": cedula
+						
+    			}				
+    			if (montoDonativo !== ""){
+    				dataObj.montoDonativo = montoDonativo
+    			}
+			}
+			var dataRequest = JSON.stringify(dataObj, undefined, 4);
+			//alert(dataRequest);
+			$("#solicitud").val(dataRequest);
+			var dataResponse;
+			$.ajax({
+					url: "http://localhost:8085/vpos/metodo",
+					type: 'POST',						
+					dataType: 'json',
+					contentType: "application/json; charset=utf-8",	
+					data: dataRequest,
+					success: function (dataResponse) {
+						respuesta = JSON.stringify(dataResponse,undefined, 4);
+						document.getElementById("respuesta").value =  respuesta;
+					}				
+				});	
+				console.log("Fin ")			
+			}
+		
+		function metodoLysto(metodoEjecutar) {
+            document.getElementById("respuesta").value = "";
+            var montoCompra, cedula, dataObj, idOrden, numSeqOrden, numFactura;
+
+            if (metodoEjecutar == 'creacionLysto') {
+                montoCompra = document.getElementById("lysto").elements.item(0).value;
+                cedula = document.getElementById("lysto").elements.item(1).value;
+                idOrden = document.getElementById("lysto").elements.item(2).value;
+                tipoFinanciamiento = document.getElementById("lysto").elements.item(5).value;
+                dataObj = {
+                    "accion": metodoEjecutar,
+                    "montoTransaccion": montoCompra,
+                    "cedula": cedula,
+                    "tipoFinanciamiento": tipoFinanciamiento,
+                    "idOrden": idOrden
+                };
+                if (document.getElementById("lysto").elements.item(6).value !== "") {
+                    dataObj.terminalVirtual = document.getElementById("lysto").elements.item(6).value;
+                }
+            } else if (metodoEjecutar == 'confirmacionLysto') {
+                montoCompra = document.getElementById("lysto").elements.item(0).value;
+                idOrden = document.getElementById("lysto").elements.item(2).value;
+                medioPago = document.getElementById("lysto").elements.item(3).value;
+                dataObj = {
+                    "accion": metodoEjecutar,
+                    "montoTransaccion": montoCompra,
+                    "idOrden": idOrden,
+                    "medioPago": medioPago
+                };
+                if (document.getElementById("lysto").elements.item(6).value !== "") {
+                    dataObj.terminalVirtual = document.getElementById("lysto").elements.item(6).value;
+                }
+            } else if (metodoEjecutar == 'cancelacionLysto') {
+                numSeqOrden = document.getElementById("lysto").elements.item(4).value;
+                dataObj = {
+                    "accion": metodoEjecutar,
+                    "numSeqOrden": numSeqOrden
+                };
+                if (document.getElementById("lysto").elements.item(6).value !== "") {
+                    dataObj.terminalVirtual = document.getElementById("lysto").elements.item(6).value;
+                }
+            } else if (metodoEjecutar == 'solicitudLysto') {
+                montoCompra = document.getElementById("lysto").elements.item(0).value;
+                dataObj = {
+                    "accion": metodoEjecutar,
+                    "montoTransaccion": montoCompra
+                };
+                if (document.getElementById("lysto").elements.item(6).value !== "") {
+                    dataObj.terminalVirtual = document.getElementById("lysto").elements.item(6).value;
+                }
+            }
+
+            var dataRequest = JSON.stringify(dataObj, undefined, 4);
+            $("#solicitud").val(dataRequest);
+            $.ajax({
+                url: "http://localhost:8085/vpos/metodo_lysto",
+                type: 'POST',
+                dataType: 'json',
+                contentType: "application/json; charset=utf-8",
+                data: dataRequest,
+                success: function (dataResponse) {
+                    var respuesta = JSON.stringify(dataResponse, undefined, 4);
+                    document.getElementById("respuesta").value = respuesta;
+
+                    var t = JSON.parse(respuesta);
+                    var peticion = JSON.stringify(dataObj);
+
+                    if (t['idOrden'] !== "") {
+                        document.getElementById("lysto").elements.item(2).value = t['idOrden'];
+                    }
+
+                    if (t['numSeqOrden'] !== "" && t['numSeqOrden'] !== 0) {
+                        document.getElementById("lysto").elements.item(4).value = t['numSeqOrden'];
+                    }
+
+                    if (metodoEjecutar == "creacionLysto") {
+                        if (t['montoTransaccion'] !== "" && t['montoTransaccion'] !== 0) {
+                            document.getElementById("lysto").elements.item(0).value = t['montoTransaccion'];
+                            document.getElementById("lysto").elements.item(4).value = t['numSeq'];
+                        }
+                    }
+
+                    // Populate tipoFinanciamiento dropdown for solicitudLysto
+                    if (metodoEjecutar == "solicitudLysto" && t['productosDisponibles']) {
+                        var select = document.getElementById("tipoFinanciamientoLysto");
+                        select.innerHTML = '<option value="">Seleccione financiamiento</option>'; // Reset options
+                        for (var key in t['productosDisponibles']) {
+                            var option = document.createElement("option");
+                            option.value = key;
+                            option.text = t['productosDisponibles'][key];
+                            select.appendChild(option);
+                        }
+                    }
+                },
+                error: function (xhr, ajaxOptions, thrownError) {
+                    var errorMsg = `Error: ${xhr.status} - ${thrownError || 'Request failed'}`;
+                    document.getElementById("respuesta").value = errorMsg;
+                    console.error(errorMsg);
+                }
+            });
+            console.log("Fin ");
+        }
+		function metodoCashea(metodoEjecutar){
+			
+			document.getElementById("respuesta").value =  "";
+    		var montoCompra, montoAvance;
+    		var cedula;
+    		var dataObj;
+    		var idOrden;
+    		var numSeqOrden;
+    		var numFactura;
+    		
+			//alert("He invocado un metodo VPOS REST : " + metodoEjecutar);			
+			if (metodoEjecutar == 'creacionCashea') {			
+				montoCompra = document.getElementById("cashea").elements.item(0).value;
+    			cedula = document.getElementById("cashea").elements.item(1).value; 
+				numFactura = document.getElementById("cashea").elements.item(3).value;    			
+    			dataObj = {
+    					"accion":metodoEjecutar,
+    					"montoTransaccion": montoCompra,
+    					"cedula": cedula,
+    					"numFactura": numFactura
+    					
+    			}
+    			if (document.getElementById("cashea").elements.item(6).value !== ""){
+    				dataObj.terminalVirtual = document.getElementById("cashea").elements.item(6).value;
+    			}
+			} else if (metodoEjecutar == 'confirmacionCashea') {		
+				montoCompra = document.getElementById("cashea").elements.item(0).value;	
+				idOrden = document.getElementById("cashea").elements.item(2).value;  	
+				igtf =document.getElementById("cashea").elements.item(5).value;  	
+    			dataObj = {
+    					"accion":metodoEjecutar,
+    					"montoTransaccion": montoCompra,
+    					"idOrden": idOrden,
+    			}
+                if (document.getElementById("cashea").elements.item(5).value !== ""){
+                    dataObj.igtf = document.getElementById("cashea").elements.item(5).value;
+                }
+    			if (document.getElementById("cashea").elements.item(6).value !== ""){
+    				dataObj.terminalVirtual = document.getElementById("cashea").elements.item(6).value;
+    			}
+			} else if (metodoEjecutar == 'cancelacionCashea') {		
+				numSeqOrden = document.getElementById("cashea").elements.item(4).value;  			
+    			dataObj = {
+    					"accion":metodoEjecutar,
+    					"numSeqOrden": numSeqOrden
+    			}
+    			if (document.getElementById("cashea").elements.item(6).value !== ""){
+    				dataObj.terminalVirtual = document.getElementById("cashea").elements.item(6).value;
+    			}
+			} 
+			var dataRequest = JSON.stringify(dataObj, undefined, 4);
+			//alert(dataRequest);
+			$("#solicitud").val(dataRequest);
+			var dataResponse;
+			$.ajax({
+					url: "http://localhost:8085/vpos/metodo_cashea",
+					type: 'POST',						
+					dataType: 'json',
+					contentType: "application/json; charset=utf-8",	
+					data: dataRequest,
+					success: function (dataResponse) {
+						respuesta = JSON.stringify(dataResponse,undefined, 4);
+						document.getElementById("respuesta").value =  respuesta;
+
+						var t = JSON.parse(respuesta);
+						var peticion = JSON.stringify(dataObj);
+
+						if (t['idOrden'] !== "" && t['idOrden'] !== "0"){
+							document.getElementById("cashea").elements.item(2).value = t['idOrden'];
+						}
+
+						if (t['numSeqOrden'] !== "" && t['numSeqOrden'] !== 0){
+							document.getElementById("cashea").elements.item(4).value = t['numSeqOrden'];
+						}
+
+						 if (metodoEjecutar == "creacionCashea") {			
+						 	if (t['montoTransaccion'] !== "" && t['montoTransaccion'] !== 0){
+						 		document.getElementById("cashea").elements.item(0).value = t['montoTransaccion'];
+						 	}
+						 }
+					}				
+				});	
+				console.log("Fin ")			
+			}
+		function cierreParametros(metodoEjecutar){
+			
+			document.getElementById("respuesta").value =  "";
+    		var dataObj;
+    		
+			//alert("He invocado un metodo VPOS REST : " + metodoEjecutar);			
+   			dataObj = {
+				"accion":metodoEjecutar
+			}
+
+			if (document.getElementById("cierre").elements.item(0).value !== ""){
+    				dataObj.terminalVirtual = document.getElementById("cierre").elements.item(0).value
+    		}
+
+			var dataRequest = JSON.stringify(dataObj, undefined, 4);
+			//alert(dataRequest);
+			$("#solicitud").val(dataRequest);
+			var dataResponse;
+			$.ajax({
+					url: "http://localhost:8085/vpos/metodo",
+					type: 'POST',						
+					dataType: 'json',
+					contentType: "application/json; charset=utf-8",	
+					data: dataRequest,
+					success: function (dataResponse) {
+						respuesta = JSON.stringify(dataResponse,undefined, 4);
+						document.getElementById("respuesta").value =  respuesta;
+					}				
+				});	
+				console.log("Fin ")			
+			}			
+		function sinParametros(metodoEjecutar){
+			document.getElementById("respuesta").value =  "";
+			//alert("He invocado un metodo VPOS REST : " + metodoEjecutar);
+			var dataObj = {
+				"accion":metodoEjecutar
+			}
+
+			if (document.getElementById("vouchers").elements.item(0).value !== ""){
+				dataObj.terminalVirtual = document.getElementById("vouchers").elements.item(0).value
+			}			
+			var dataRequest = JSON.stringify(dataObj, undefined, 4);
+			var dataResponse;
+			var respuesta;
+			$("#solicitud").val(dataRequest);
+			$.ajax({
+				url: "http://localhost:8085/vpos/metodo",
+				type: 'POST',						
+				dataType: 'json',
+				contentType: "application/json; charset=utf-8",	
+				data: dataRequest,
+				success: function (dataResponse) {
+					respuesta = JSON.stringify(dataResponse,undefined, 4);
+					document.getElementById("respuesta").value =  respuesta
+
+					var t = JSON.parse(respuesta);
+
+						if (t['mediosPago'] !== null){
+							var mediosPago = JSON.stringify(t['mediosPago'],undefined, 4);
+							var t2 = JSON.parse(mediosPago);
+
+							var s=document.getElementById("mediosPago");
+
+							for (let i = s.options.length; i >= 1; i--){
+								s.remove(i);
+							}
+							
+
+							for (n in t2) {
+
+ 								var option = document.createElement("option");
+								option.value=n.toString();
+								option.text=t2[n].toString();
+
+								s.appendChild(option) 
+ 							
+ 							}
+						
+						}
+				},
+			    error: function (xhr, ajaxOptions, thrownError) {
+			          alert(xhr.status);
+			          alert(thrownError);
+			    }		
+			});	
+			console.log("Fin ")			
+		}
+		function administrativas(metodoEjecutar){
+			document.getElementById("respuesta").value =  "";
+			//alert("He invocado un metodo VPOS REST : " + metodoEjecutar);
+			var dataObj = {
+				"accion":metodoEjecutar
+			}
+		
+			if (document.getElementById("administrativa").elements.item(0).value !== ""){
+    				dataObj.terminalVirtual = document.getElementById("administrativa").elements.item(0).value
+    		}
+
+			var dataRequest = JSON.stringify(dataObj, undefined, 4);
+			var dataResponse;
+			var respuesta;
+			$("#solicitud").val(dataRequest);
+			$.ajax({
+				url: "http://localhost:8085/vpos/metodo",
+				type: 'POST',						
+				dataType: 'json',
+				contentType: "application/json; charset=utf-8",	
+				data: dataRequest,
+				success: function (dataResponse) {
+					respuesta = JSON.stringify(dataResponse,undefined, 4);
+					document.getElementById("respuesta").value =  respuesta
+				},
+			    error: function (xhr, ajaxOptions, thrownError) {
+			          alert(xhr.status);
+			          alert(thrownError);
+			    }		
+			});	
+			console.log("Fin ")			
+		}		
+
+        function apiExterna(metodoEjecutar){
+            document.getElementById("respuesta").value =  "";
+            //alert("He invocado un metodo VPOS REST : " + metodoEjecutar);
+
+            montoCompra = document.getElementById("serviciosexternos").elements.item(0).value;
+            cedula = document.getElementById("serviciosexternos").elements.item(1).value;             
+            var dataObj = {
+                "accion":metodoEjecutar,
+                "montoTransaccion": montoCompra,
+                "cedula": cedula      
+            }
+        
+            if (document.getElementById("serviciosexternos").elements.item(2).value !== ""){
+                    dataObj.referencia = document.getElementById("serviciosexternos").elements.item(2).value
+            }
+
+            if (document.getElementById("serviciosexternos").elements.item(3).value !== ""){
+                    dataObj.terminalVirtual = document.getElementById("serviciosexternos").elements.item(3).value
+            }
+
+            var dataRequest = JSON.stringify(dataObj, undefined, 4);
+            var dataResponse;
+            var respuesta;
+            $("#solicitud").val(dataRequest);
+            $.ajax({
+                url: "http://localhost:8085/vpos/metodo",
+                type: 'POST',                       
+                dataType: 'json',
+                contentType: "application/json; charset=utf-8", 
+                data: dataRequest,
+                success: function (dataResponse) {
+                    respuesta = JSON.stringify(dataResponse,undefined, 4);
+                    document.getElementById("respuesta").value =  respuesta
+                },
+                error: function (xhr, ajaxOptions, thrownError) {
+                      alert(xhr.status);
+                      alert(thrownError);
+                }       
+            }); 
+            console.log("Fin ")         
+        }       
+	</script>
+	<style type="text/css">
+	.derecha{
+		width: 55%;
+		float: right;
+        margin-top: -2%;
+	}
+	.derecha textarea{
+	  width: 98%;
+	}
+	input[type="text"], input[type="button"], select{
+	    width: 45%;
+		height: 30px;
+		margin-bottom: 10px;
+        margin-left: 10px;
+	}
+	textarea{
+	  background-color: black;
+	  color:white;
+	}
+	.negrita{
+	font-weight: bold;
+	}
+
+    .tab-content{
+        display: none;
+        padding-top: 5px;
+        border: 1px solid;
+        width: 80%;
+        margin-left: 31%;
+    }
+
+    .tab:target .tab-content, .tab:last-of-type .tab-contente{
+        display: block;
+    }
+
+    .tab:target ~ .tab:last-of-type .tab-contente{
+        display: block;
+    }
+
+    .tab:target>a, .tab:last-of-type>a{
+        background-color: silver;
+    }
+
+    .tab:target ~ .tab:last-of-type>a{
+        background-color: white;
+    }
+
+    .tabs * {
+        box-sizing: border-box;
+    }
+
+    .tab-container{
+        position: relative;
+        padding-top: 0px;
+    }
+
+    #administrativadv>a{ 
+        --tab-position: 8;
+    }
+    #cierredv>a{ 
+        --tab-position: 7;
+    }
+
+    #vouchersdv>a{ 
+        --tab-position: 6;
+    }
+
+    #serviciosexternosdv>a{ 
+        --tab-position: 5;
+    }
+
+     #lystodv>a{ 
+        --tab-position: 4;
+    }
+
+    #casheadv>a{ 
+        --tab-position: 3;
+    }
+
+    #cashbackdv>a{ 
+        --tab-position: 2;
+    }
+
+    #anulaciondv>a{ 
+        --tab-position: 1;
+    }
+
+
+    #pagosdv>a{ 
+        --tab-position: 0;
+    }
+
+    a{
+        font-family: sans-serif;
+        color: inherit;
+        border: 1px solid;
+        text-decoration: none;
+        position: absolute;
+        text-align: center;
+        height: 30px;
+        padding-top: 3px;
+        
+        top: 0px;
+        --width-a: 30%;
+        width: var(--width-a);
+
+
+
+        left: 0px;
+        top: calc(35px * var(--tab-position));
+        
+    }
+
+    .tabs{
+        float: left;
+        width: 40%;
+    }
+
+  
+	</style>
+	</head>
+<body>
+
+	<h1>Test de VPosWebServer</h1>
+    <div class="tabs">
+        <div class="tab-container">
+            <div  id="administrativadv" class="tab">
+                <a class="a2" href="#administrativadv">Administrativa</a>
+                <div class="tab-content">
+                    <form id="administrativa">
+                        <input type="text" name="terminalVirtual" placeholder="VTerminal"><br> 
+                        <input type="button" value="Miscelaneos"  onclick="administrativas('miscelaneos');">
+                        <input type="button" value="Carga de Llaves EMV"  onclick="administrativas('cargarLlavesPublicasEMV');">  
+                    </form>
+                </div>
+            </div>
+            <div  id="cierredv" class="tab">
+                <a class="a2" href="#cierredv">Cierre</a>
+                <div class="tab-content">
+                    <form id="cierre">
+                        <input type="text" name="terminalVirtual" placeholder="VTerminal"><br>
+                        <input type="button" value="Precierre"  onclick="cierreParametros('precierre');">
+                        <input type="button" value="Cierre"  onclick="cierreParametros('cierre');">
+                        <input type="button" value="Ultimo Cierre"  onclick="cierreParametros('ultimoCierre');">  
+                    </form>
+                </div>
+            </div>        
+            <div  id="vouchersdv" class="tab">
+                <a class="a2" href="#vouchersdv">Vouchers</a>
+                <div class="tab-content">
+                    <form id="vouchers">
+                        <input type="text" name="terminalVirtual" placeholder="VTerminal"><br>
+                        <input type="button" value="Ultimo Voucher Aprobado"  onclick="sinParametros('imprimeUltimoVoucher');">
+                        <input type="button" value="Ultimo Voucher Procesado"  onclick="sinParametros('imprimeUltimoVoucherP');">
+                    </form>
+                </div>
+            </div>
+            <div  id="serviciosexternosdv" class="tab">
+                <a class="a2" href="#serviciosexternosdv">Servicios Externos</a>
+                <div class="tab-content">
+                    <form id="serviciosexternos">
+                        <input type="text" name="monto" placeholder="monto">
+                        <input type="text" name="cedula" placeholder="cedula"><br>
+                        <input type="text" name="indicadorServicio" placeholder="Indicador API">
+                        <input type="text" name="terminalVirtual" placeholder="VTerminal"><br>
+                        <input type="button" value="Servicios Externos" onclick="apiExterna('serviciosExternos');">
+                        
+                    </form>
+                </div>
+            </div>
+            <div id="lystodv" class="tab">
+                <a class="a1" href="#lystodv">Lysto</a>
+                <div class="tab-content">
+                    <form id="lysto">
+                        <input type="text" name="monto" placeholder="monto">
+                        <input type="text" name="cedula" placeholder="cedula"><br>
+                        <input type="text" name="idOrdenLysto" placeholder="orden Lysto">
+                        <select name="metodoPago" id="metodoPago">
+                            <option value="">Seleccione método de pago</option>
+                            <option value="0">0 - otros</option>
+                            <option value="1">1 - merchant</option>
+                            <option value="2">2 - efectivo</option>
+                        </select>
+                        <input type="text" name="seqNumOrdenLysto" placeholder="secuencia Lysto">
+                        <select name="tipoFinanciamientoLysto" id="tipoFinanciamientoLysto">
+                            <option value="">Seleccione financiamiento</option>
+                        </select>
+                        <input type="text" name="terminalVirtual" placeholder="VTerminal">
+                        <br>
+                        <input type="button" value="Solicitud" onclick="metodoLysto('solicitudLysto');">
+                        <input type="button" value="Crear Orden" onclick="metodoLysto('creacionLysto');">
+                        <input type="button" value="Confirmar" onclick="metodoLysto('confirmacionLysto');">
+                        <input type="button" value="Cancelar Orden" onclick="metodoLysto('cancelacionLysto');">
+                    </form>
+                </div>
+            </div>
+            <div id="casheadv" class="tab">
+                <a class="a1" href="#casheadv">Cashea</a>
+                <div class="tab-content">
+                    <form id="cashea">
+                        <input type="text" name="monto" placeholder="monto">
+                        <input type="text" name="cedula" placeholder="cedula"><br>
+                        <input type="text" name="idOrdenCashea" placeholder="orden cashea">
+                        <input type="text" name="numFactura" placeholder="numero de factura">
+                        <input type="text" name="seqNumOrdenCashea" placeholder="secuencia cashea">
+                        <input type="text" name="igt" placeholder="impuesto IGTF">
+                        <input type="text" name="terminalVirtual" placeholder="VTerminal"><br> 
+                        <input type="button" value="Crear Orden"  onclick="metodoCashea('creacionCashea');">
+                        <input type="button" value="Confirmar"  onclick="metodoCashea('confirmacionCashea');">
+                        <input type="button" value="Cancelar Orden"  onclick="metodoCashea('cancelacionCashea');">
+                    </form> 
+                </div>
+            </div>
+            <div id="cashbackdv" class="tab">
+                <a class="a1" href="#cashbackdv">Cashback</a>
+                <div class="tab-content">
+                    <form id="cashback">
+                        <input type="text" name="montoCompra" placeholder="monto compra">
+                        <input type="text" name="montoAvance" placeholder="monto efectivo">
+                        <input type="text" name="montoDonativo" placeholder="monto donativo">
+                        <input type="text" name="cedula" placeholder="cedula"><br>                      
+                        <input type="button" value="Avance Efectivo"  onclick="conParametros('avanceEfectivo');">
+                        <input type="button" value="Avance/Retiro"  onclick="conParametros('avanceRetiro');"> 
+                    </form> 
+                </div>
+            </div>
+            <div id="anulaciondv" class="tab">
+                <a class="a1" href="#anulaciondv">Anulación</a>
+                <div class="tab-content">
+                    <form id="anulacion">
+                        <input type="text" name="numeroSecuencia" placeholder="numero secuencia">
+                        <input type="text" name="terminalVirtual" placeholder="VTerminal"><br>          
+                        <input type="button" value="Anulacion" onclick="conParametros('anulacion');">
+                    </form>
+                </div>
+            </div>
+
+            <div id="pagosdv" class="tab">
+                <a class="a1" href="#pagosdv">Transaccionales</a>
+                <div class="tab-content">
+                    <form id="pagos">
+                        <input type="text" name="monto" placeholder="monto">
+                        <input type="text" name="cedula" placeholder="cedula"><br>
+                        <input type="text" name="montoDonativo" placeholder="monto donativo">   
+         
+                        <select id="tipoMneda">
+                            <option value="">Seleccione moneda</option>
+                            <option value="VES">Bolivares</option>
+                            <option value="USD">Dolares</option>
+                            <option value="EUR">Euro</option>
+                        </select>
+                        <input type="text" name="refrencia" placeholder="referencia"> 
+                        <input type="text" name="terminalVirtual" placeholder="VTerminal"><br>
+                        <select id="mediosPago">
+                            <option value="">Seleccione medio de pago</option>
+                        </select>
+                        <input type="button" value="Obtener Medios de Pago" onclick="sinParametros('obtenerMediosPago');"><br>
+                        <input type="button" value="Tarjetas" onclick="conParametros('tarjeta');">
+                        <input type="button" value="Teclado Abierto" onclick="conParametros('tecladoAbierto');">
+                        <input type="button" value="Cheque"  onclick="conParametros('cheque');">
+                        <input type="button" value="Consumo y Ajustes"  onclick="conParametros('consumoAjuste');">
+                        <input type="button" value="Compra Servicios"  onclick="conParametros('compraServicio');">
+                        <input type="button" value="Servicios"  onclick="conParametros('servicio');">
+                        <input type="button" value="Preautorizacion" onclick="conParametros('preautorizacionCompletitud');">
+                        <input type="button" value="C@mbio" onclick="conParametros('cambio');">
+                    </form>
+                </div>
+            </div>            
+        </div>
+    </div>
+	
+	<div class="derecha">
+	<span class="negrita">Solicitud</span>
+	<textarea id="solicitud" cols="100" rows="5"></textarea>
+	<span class="negrita">Respuesta</span>
+	<textarea id="respuesta" cols="100" rows="30"></textarea>
+	</div>
+</body>
+</html>

@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE log4j:configuration SYSTEM "log4j.dtd">
+<log4j:configuration xmlns:log4j="http://jakarta.apache.org/log4j/">
+	<appender name="consola" class="org.apache.log4j.ConsoleAppender">
+		<layout class="org.apache.log4j.PatternLayout">
+			<param name="ConversionPattern" value="%l - %m%n" />
+		</layout>
+	</appender>
+	<appender name="archivo" class="org.apache.log4j.RollingFileAppender">
+		<param name="file" value="C:/voucher/logs/vpos.log" />
+		<param name="maxFileSize" value="2MB" />
+		<param name="maxBackupIndex" value="4" />
+		<param name="append" value="true" />
+		<param name="Threshold" value="debug" />
+		<layout class="org.apache.log4j.PatternLayout">
+			<param name="ConversionPattern" value="%d %l - %m%n" />
+		</layout>
+	</appender>
+	<appender name="errores" class="org.apache.log4j.RollingFileAppender">
+		<param name="file" value="C:/voucher/logs/vposerr.log" />
+		<param name="maxFileSize" value="1MB" />
+		<param name="maxBackupIndex" value="1" />
+		<param name="append" value="true" />
+		<layout class="org.apache.log4j.PatternLayout">
+			<param name="ConversionPattern" value="%d %l - %m%n" />
+		</layout>
+		<filter class="org.apache.log4j.varia.LevelRangeFilter">
+			<param name="LevelMin" value="warn" />
+			<param name="LevelMax" value="fatal" />
+		</filter>
+	</appender>
+	<logger name="ve.com.megasoft.util.IniFile" additivity="false">
+		<level value="warn" />
+		<appender-ref ref="archivo" />
+		<appender-ref ref="errores" />
+	</logger>
+
+	<logger name="b2b.platform.interfaces.Interface" additivity="false">
+		<level value="warn" />
+		<appender-ref ref="errores" />
+	</logger>
+	<logger name="ve.com.megasoft.universal.util" additivity="false">
+		<level value="off" />
+		<appender-ref ref="errores" />
+	</logger>	
+	<logger name="ve.com.megasoft.bean.TimeTracker" additivity="false">
+		<level value="off" />
+		<appender-ref ref="errores" />
+	</logger>
+	<logger name="ve.com.megasoft.util.CustomizeWindows" additivity="false">
+		<level value="warn" />
+		<appender-ref ref="errores" />
+	</logger>
+	<logger name="b2b.formatters.hibrido" additivity="false">
+		<level value="off" />
+		<appender-ref ref="archivo" />
+		<appender-ref ref="errores" />
+	</logger>
+	<logger name="ve.com.megasoft.olbpos.dao.ParametrosArchivoDao" additivity="false">
+		<level value="off" />
+		<appender-ref ref="archivo" />
+		<appender-ref ref="errores" />
+	</logger>	
+	
+	<root>
+		<priority value="debug" />
+		<appender-ref ref="consola" />
+		<appender-ref ref="archivo" />
+		<appender-ref ref="errores" />
+	</root>
+</log4j:configuration>
