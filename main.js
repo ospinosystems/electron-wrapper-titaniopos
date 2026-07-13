@@ -1839,7 +1839,17 @@ ipcMain.handle('backup-save-order', async (event, order) => {
     const fileName = `order_${order.id || Date.now()}.json`;
     const filePath = path.join(backupDir, fileName);
 
-    await fs.promises.writeFile(filePath, JSON.stringify(order), 'utf-8');
+    // Atómico + fsync: mismo motivo que los backups diarios — un corte de
+    // energía a mitad de escritura no debe dejar un JSON truncado.
+    const tmpPath = `${filePath}.tmp`;
+    const fh = await fs.promises.open(tmpPath, 'w');
+    try {
+      await fh.writeFile(JSON.stringify(order), 'utf-8');
+      await fh.sync();
+    } finally {
+      await fh.close();
+    }
+    await fs.promises.rename(tmpPath, filePath);
     console.log('💾 [BACKUP] Orden guardada:', fileName);
 
     return { success: true, path: filePath };
@@ -1923,6 +1933,35 @@ const normalizeBackupData = (raw, fallbackDate = getDateString()) => {
   };
 };
 
+// Rota el archivo actual a `.prev` antes de renombrar el `.tmp` nuevo encima.
+// Mantiene siempre una generación anterior recuperable: si un corte de energía
+// deja el archivo principal corrupto (o desaparece entre los dos rename), el
+// lector puede restaurar desde `.prev` (ver readBackupFileWithRecovery).
+const rotateBackupToPrevSync = (filePath) => {
+  const prevPath = `${filePath}.prev`;
+  try {
+    fs.rmSync(prevPath, { force: true });
+    fs.renameSync(filePath, prevPath);
+  } catch (err) {
+    // ENOENT = primera escritura del día (no hay archivo aún) — normal.
+    if (err.code !== 'ENOENT') {
+      console.warn('⚠️ [BACKUP] No se pudo rotar a .prev:', err.message);
+    }
+  }
+};
+
+const rotateBackupToPrevAsync = async (filePath) => {
+  const prevPath = `${filePath}.prev`;
+  try {
+    await fs.promises.rm(prevPath, { force: true });
+    await fs.promises.rename(filePath, prevPath);
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      console.warn('⚠️ [BACKUP] No se pudo rotar a .prev:', err.message);
+    }
+  }
+};
+
 // Escribe el backup en formato firmado v2: { version, data, signature }.
 // `data` es JSON plano y legible. `signature` es HMAC-SHA256 de JSON.stringify(data).
 //
@@ -1946,7 +1985,18 @@ const writeBackupFileAtomic = (filePath, backupData, useJwt = BACKUP_WRITE_JWT) 
   // Sin pretty-print: en escrituras frecuentes, indentar duplica el tamaño y
   // ralentiza I/O. Los inspect tools admin parsean JSON normal — no necesitan
   // espacios. Para inspección humana, abrir en un editor que reformatee.
-  fs.writeFileSync(tmpPath, JSON.stringify(payload), 'utf-8');
+  //
+  // fsync ANTES del rename: sin él, un corte de energía puede dejar el rename
+  // registrado en el journal de NTFS con los datos aún sin bajar a disco → el
+  // archivo destino queda vacío o lleno de ceros al reiniciar.
+  const fd = fs.openSync(tmpPath, 'w');
+  try {
+    fs.writeSync(fd, JSON.stringify(payload), null, 'utf-8');
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  rotateBackupToPrevSync(filePath);
   fs.renameSync(tmpPath, filePath);
 };
 
@@ -1955,9 +2005,9 @@ const writeBackupFileAtomic = (filePath, backupData, useJwt = BACKUP_WRITE_JWT) 
 // Celeron con HDD donde `writeFileSync` de 500KB-1MB puede tomar 100-300ms y
 // congelar el printer, fiscal handlers e IPC durante ese tiempo.
 //
-// Mantiene la misma semántica de atomicidad: escribe a `.tmp`, luego rename
-// atómico al destino. Si algo falla antes del rename, el archivo destino queda
-// intacto (no medio escrito).
+// Mantiene la misma semántica de atomicidad: escribe a `.tmp` con fsync, rota el
+// archivo anterior a `.prev` y hace rename atómico al destino. Si algo falla
+// antes del rename final, el destino o su `.prev` quedan intactos.
 const writeBackupFileAtomicAsync = async (filePath, backupData, useJwt = BACKUP_WRITE_JWT) => {
   const normalized = normalizeBackupData(backupData);
   let payload;
@@ -1971,7 +2021,15 @@ const writeBackupFileAtomicAsync = async (filePath, backupData, useJwt = BACKUP_
     };
   }
   const tmpPath = `${filePath}.tmp`;
-  await fs.promises.writeFile(tmpPath, JSON.stringify(payload), 'utf-8');
+  const fh = await fs.promises.open(tmpPath, 'w');
+  try {
+    await fh.writeFile(JSON.stringify(payload), 'utf-8');
+    // fsync antes del rename — ver nota en writeBackupFileAtomic.
+    await fh.sync();
+  } finally {
+    await fh.close();
+  }
+  await rotateBackupToPrevAsync(filePath);
   await fs.promises.rename(tmpPath, filePath);
 };
 
@@ -2034,6 +2092,80 @@ const readBackupFileNormalized = (backupPath, opts = {}) => {
 
   const err = new Error('Backup sin firma rechazado');
   err.code = 'BACKUP_UNSIGNED';
+  throw err;
+};
+
+// Códigos que indican manipulación o formato inválido REAL (no corrupción por
+// I/O). Estos NO se auto-recuperan desde .prev: se propagan al caller para que
+// mantenga el comportamiento estricto de siempre.
+const BACKUP_TAMPER_CODES = new Set([
+  'BACKUP_SIGNATURE_INVALID',
+  'BACKUP_TOKEN_UNSUPPORTED',
+  'BACKUP_UNSIGNED',
+]);
+
+// Mueve un backup ilegible a cuarentena (`*.corrupt-<stamp>.json`) en vez de
+// dejarlo en el camino: así el siguiente flush no lo pisa y queda disponible
+// para inspección/recuperación manual desde el inspector admin.
+const quarantineCorruptBackup = (backupPath) => {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const target = `${backupPath}.corrupt-${stamp}.json`;
+  try {
+    fs.renameSync(backupPath, target);
+    console.warn('🧪 [BACKUP] Archivo corrupto puesto en cuarentena:', path.basename(target));
+    return target;
+  } catch (err) {
+    console.warn('⚠️ [BACKUP] No se pudo poner en cuarentena:', err.message);
+    return null;
+  }
+};
+
+// Lee un backup con recuperación ante corrupción por corte de energía:
+//  - JSON ilegible → cuarentena + intento con la generación anterior `.prev`
+//  - archivo principal ausente pero `.prev` presente (corte entre los dos
+//    rename del writer) → usa `.prev`
+//  - `.prev` legible → se restaura como archivo principal
+// Lanza con código:
+//  - BACKUP_NOT_FOUND  → no hay archivo ni .prev (día sin backup, caso normal)
+//  - BACKUP_CORRUPT    → había datos pero ninguna generación es legible
+//  - códigos de manipulación (firma/JWT) → se propagan sin auto-recuperar
+const readBackupFileWithRecovery = (backupPath, opts = {}) => {
+  const prevPath = `${backupPath}.prev`;
+  let hadCorruption = false;
+
+  if (fs.existsSync(backupPath)) {
+    try {
+      return readBackupFileNormalized(backupPath, opts);
+    } catch (error) {
+      if (BACKUP_TAMPER_CODES.has(error?.code)) throw error;
+      hadCorruption = true;
+      console.error('⚠️ [BACKUP] Backup ilegible (posible corte de energía), intentando .prev:', error.message);
+      quarantineCorruptBackup(backupPath);
+    }
+  }
+
+  if (fs.existsSync(prevPath)) {
+    try {
+      const data = readBackupFileNormalized(prevPath, { ...opts, migrateJwtToPlain: false });
+      try {
+        writeBackupFileAtomic(backupPath, data, BACKUP_WRITE_JWT);
+        console.log('♻️ [BACKUP] Restaurado desde .prev:', path.basename(backupPath));
+      } catch (restoreError) {
+        console.warn('⚠️ [BACKUP] No se pudo restaurar desde .prev:', restoreError.message);
+      }
+      return data;
+    } catch (prevError) {
+      if (BACKUP_TAMPER_CODES.has(prevError?.code)) throw prevError;
+      hadCorruption = true;
+      console.error('⚠️ [BACKUP] .prev también ilegible:', prevError.message);
+      quarantineCorruptBackup(prevPath);
+    }
+  }
+
+  const err = hadCorruption
+    ? new Error('Backup corrupto y sin generación previa recuperable')
+    : new Error('Backup no existe');
+  err.code = hadCorruption ? 'BACKUP_CORRUPT' : 'BACKUP_NOT_FOUND';
   throw err;
 };
 
@@ -2102,16 +2234,24 @@ ipcMain.handle('backup-get-all-orders', async (event, range) => {
     const merged = new Map();
     let lastSyncBest = null;
     let filesRead = 0;
+    const corruptFiles = [];
 
     for (const dateStr of dates) {
       const backupPath = path.join(backupDir, `backup_${dateStr}.json`);
-      if (!fs.existsSync(backupPath)) continue;
-      filesRead += 1;
       let data;
       try {
-        data = readBackupFileNormalized(backupPath, { migrateJwtToPlain: !BACKUP_WRITE_JWT });
+        data = readBackupFileWithRecovery(backupPath, { migrateJwtToPlain: !BACKUP_WRITE_JWT });
       } catch (readError) {
         const code = readError?.code;
+        if (code === 'BACKUP_NOT_FOUND') continue;
+        if (code === 'BACKUP_CORRUPT') {
+          // Corrupción por I/O (corte de energía) sin .prev recuperable. NO es
+          // manipulación: se reporta al renderer para que caiga a IndexedDB en
+          // lugar de arrancar en cero. El archivo dañado ya quedó en cuarentena.
+          corruptFiles.push(`backup_${dateStr}.json`);
+          console.error(`❌ [BACKUP] backup_${dateStr}.json corrupto sin recuperación posible`);
+          continue;
+        }
         let errorCode;
         let errorMessage;
         if (code === 'BACKUP_SIGNATURE_INVALID') {
@@ -2124,8 +2264,11 @@ ipcMain.handle('backup-get-all-orders', async (event, range) => {
           errorCode = 'BACKUP_UNSIGNED';
           errorMessage = 'Backup sin firma rechazado';
         } else {
-          errorCode = 'JWT_INVALID_SIGNATURE';
-          errorMessage = 'Token JWT inválido o manipulado';
+          // Error de I/O genérico (EACCES, EIO...). Antes se reportaba como
+          // JWT_INVALID_SIGNATURE, lo que hacía que el renderer lo tratara como
+          // manipulación y borrara sus copias locales. Ahora tiene código propio.
+          errorCode = 'BACKUP_READ_ERROR';
+          errorMessage = `No se pudo leer el respaldo: ${readError?.message || 'error desconocido'}`;
         }
         console.error('❌ [BACKUP] Error leyendo backup:', readError);
         return {
@@ -2135,6 +2278,7 @@ ipcMain.handle('backup-get-all-orders', async (event, range) => {
           orders: [],
         };
       }
+      filesRead += 1;
       mergeOrdersIntoMap(merged, data.orders);
       const ls = data.lastSync;
       if (ls && (!lastSyncBest || ls > lastSyncBest)) lastSyncBest = ls;
@@ -2160,10 +2304,11 @@ ipcMain.handle('backup-get-all-orders', async (event, range) => {
       lastSync: lastSyncBest,
       count: orders.length,
       date: dateLabel,
+      corruptFiles,
     };
   } catch (error) {
     console.error('❌ [BACKUP] Error leyendo backup:', error);
-    return { success: false, error: error.message, orders: [] };
+    return { success: false, error: error.message, errorCode: 'BACKUP_READ_ERROR', orders: [] };
   }
 });
 
@@ -2179,12 +2324,18 @@ ipcMain.handle('backup-delete-order', async (event, orderId) => {
     const dateStr = getDateString();
     const todayBackupPath = path.join(backupDir, `backup_${dateStr}.json`);
 
-    if (fs.existsSync(todayBackupPath)) {
-      const data = readBackupFileNormalized(todayBackupPath, { migrateJwtToPlain: !BACKUP_WRITE_JWT });
-      data.orders = data.orders.filter((o) => String(o.id) !== String(orderId));
-      data.count = data.orders.length;
-      data.lastSync = new Date().toISOString();
-      await writeBackupFileAtomicAsync(todayBackupPath, data, BACKUP_WRITE_JWT);
+    let todayData = null;
+    try {
+      todayData = readBackupFileWithRecovery(todayBackupPath, { migrateJwtToPlain: !BACKUP_WRITE_JWT });
+    } catch (readError) {
+      // Sin backup de hoy (o irrecuperable): no hay nada que borrar del diario.
+      if (readError?.code !== 'BACKUP_NOT_FOUND' && readError?.code !== 'BACKUP_CORRUPT') throw readError;
+    }
+    if (todayData) {
+      todayData.orders = todayData.orders.filter((o) => String(o.id) !== String(orderId));
+      todayData.count = todayData.orders.length;
+      todayData.lastSync = new Date().toISOString();
+      await writeBackupFileAtomicAsync(todayBackupPath, todayData, BACKUP_WRITE_JWT);
     }
 
     // También eliminar archivo individual si existe
