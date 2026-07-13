@@ -120,12 +120,12 @@ function getServiceId(app) {
 }
 
 /**
- * Resuelve un rustdesk.exe utilizable. Prioridad: INSTALADO (servicio) →
- * bundleado en bin/ → descargado en userData.
+ * Binario PORTABLE de RustDesk (release oficial autocontenido): bundleado en
+ * bin/ o descargado a userData. NO incluye el instalado — ese rustdesk.exe es
+ * un launcher Flutter que depende de las DLL de su carpeta y copiado suelto
+ * no arranca.
  */
-function getRustdeskPath(app) {
-  const installed = getInstalledPath();
-  if (installed) return installed;
+function getPortableExe(app, opts = {}) {
   const candidates = [];
   if (process.resourcesPath) {
     candidates.push(path.join(process.resourcesPath, 'bin', CONFIGURED_EXE_NAME));
@@ -138,7 +138,7 @@ function getRustdeskPath(app) {
     candidates.push(path.join(asarParent, 'bin', CONFIGURED_EXE_NAME));
     candidates.push(path.join(asarParent, 'bin', 'rustdesk.exe'));
   }
-  candidates.push(downloadedBinPath(app));
+  if (!opts.excludeDownloaded) candidates.push(downloadedBinPath(app));
   for (const c of candidates) {
     try { if (fs.existsSync(c)) return c; } catch (_) { /* ignore */ }
   }
@@ -146,14 +146,38 @@ function getRustdeskPath(app) {
 }
 
 /**
- * Devuelve un exe con el NOMBRE que bakea host/key (copiándolo si hace falta).
- * Es el que se usa para instalar el servicio apuntando al self-host.
+ * Resuelve un rustdesk.exe utilizable. Prioridad: INSTALADO (servicio) →
+ * bundleado en bin/ → descargado en userData.
+ */
+function getRustdeskPath(app) {
+  const installed = getInstalledPath();
+  if (installed) return installed;
+  return getPortableExe(app);
+}
+
+/**
+ * Devuelve un exe EJECUTABLE con el NOMBRE que bakea host/key (copiándolo si
+ * hace falta). La fuente de la copia debe ser un binario PORTABLE: copiar el
+ * rustdesk.exe INSTALADO (launcher de 366KB sin sus DLL) producía un exe que
+ * no arranca — la causa de "Conectar no abre ninguna ventana". Si no hay
+ * portable, se devuelve el instalado EN SU SITIO (ahí sí corre) y el caller
+ * garantiza server/key con `--config`.
  */
 function ensureConfiguredExe(app, baseExe) {
   const dest = downloadedBinPath(app);
   try {
     if (path.basename(baseExe) === CONFIGURED_EXE_NAME) return baseExe;
-    if (!fs.existsSync(dest)) fs.copyFileSync(baseExe, dest);
+    // Fuente portable (sin contar la copia destino, que podría estar dañada).
+    const source = getPortableExe(app, { excludeDownloaded: true });
+    if (!source) {
+      // Solo existe el instalado: usarlo en su carpeta (con sus DLL).
+      return baseExe;
+    }
+    // Re-copiar si falta O si el tamaño no coincide con la fuente (copia
+    // truncada o versión vieja — antes se copiaba una sola vez y para siempre).
+    const needCopy =
+      !fs.existsSync(dest) || fs.statSync(dest).size !== fs.statSync(source).size;
+    if (needCopy) fs.copyFileSync(source, dest);
     return dest;
   } catch (e) {
     console.error('[REMOTE] No se pudo preparar exe configurado:', e.message);
@@ -573,7 +597,14 @@ function registerRemoteSupportHandlers(app) {
     if (!targetId) return { success: false, error: 'ID inválido.' };
     try {
       const exe = ensureConfiguredExe(app, base);
-      spawn(exe, ['--connect', targetId], { detached: true, stdio: 'ignore' }).unref();
+      // Sin nombre bakeado (instalado en su sitio): garantizar server+key por
+      // CLI antes de conectar, para que no dependa de la config que tenga.
+      if (path.basename(exe) !== CONFIGURED_EXE_NAME) {
+        await runRustdesk(exe, ['--config', RUSTDESK_CONFIG], 8000);
+      }
+      const child = spawn(exe, ['--connect', targetId], { detached: true, stdio: 'ignore' });
+      child.on('error', (e) => console.error('[REMOTE] spawn connect falló:', e.message));
+      child.unref();
       return { success: true };
     } catch (e) {
       return { success: false, error: e.message };
@@ -586,7 +617,12 @@ function registerRemoteSupportHandlers(app) {
     if (!base) return { success: false, error: 'RustDesk no está disponible en esta máquina.' };
     try {
       const exe = ensureConfiguredExe(app, base);
-      spawn(exe, [], { detached: true, stdio: 'ignore' }).unref();
+      if (path.basename(exe) !== CONFIGURED_EXE_NAME) {
+        await runRustdesk(exe, ['--config', RUSTDESK_CONFIG], 8000);
+      }
+      const child = spawn(exe, [], { detached: true, stdio: 'ignore' });
+      child.on('error', (e) => console.error('[REMOTE] spawn open falló:', e.message));
+      child.unref();
       return { success: true };
     } catch (e) {
       return { success: false, error: e.message };
