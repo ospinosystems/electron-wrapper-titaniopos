@@ -40,6 +40,11 @@ let rustdeskProc = null;
 // Contraseña fija de acceso desatendido. El cajero no la configura.
 const DEFAULT_PASSWORD = 'Jaja2712$$';
 
+// Clave requerida para DESACTIVAR el soporte remoto desde la UI. El soporte se
+// instala solo (instalador NSIS + auto-instalación al arrancar); desactivarlo
+// es la única acción manual y queda protegida por esta clave.
+const DISABLE_PASSWORD = process.env.TITANIOPOS_REMOTE_DISABLE_PASSWORD || '1229**';
+
 // Servidor RustDesk PROPIO (self-host en AWS). `key` = llave pública del hbbs;
 // solo clientes con esta llave pueden registrarse. El relay (hbbr) lo resuelve
 // el propio hbbs.
@@ -456,7 +461,10 @@ function registerRemoteSupportHandlers(app) {
       success: true,
       available: !!exe,
       installed,
-      enabled: cfg.enabled === true,
+      // La verdad la dice el SERVICIO: si está instalado, el soporte está
+      // activo (el flag de config quedaba desfasado cuando instalaba el NSIS).
+      enabled: installed,
+      disabledByUser: cfg.disabledByUser === true,
       hasPassword: !!(cfg.password && cfg.password.length),
       running: installed || !!(rustdeskProc && !rustdeskProc.killed),
       id,
@@ -496,7 +504,7 @@ function registerRemoteSupportHandlers(app) {
     }
 
     const result = run.result;
-    writeConfig(app, { enabled: true, password: pw });
+    writeConfig(app, { enabled: true, password: pw, disabledByUser: false });
     return {
       success: true,
       id: result.id || '',
@@ -525,7 +533,7 @@ function registerRemoteSupportHandlers(app) {
     }
 
     const result = run.result;
-    writeConfig(app, { enabled: true, password: pw });
+    writeConfig(app, { enabled: true, password: pw, disabledByUser: false });
     return {
       success: true,
       id: result.id || '',
@@ -535,11 +543,18 @@ function registerRemoteSupportHandlers(app) {
     };
   });
 
-  // Desinstala el servicio y limpia todo (un UAC).
-  ipcMain.handle('remote-support:disable', async () => {
+  // Desinstala el servicio y limpia todo (un UAC). Requiere la clave de
+  // desactivación: es la única acción manual del flujo y queda registrada como
+  // decisión del usuario (disabledByUser) para que la auto-instalación al
+  // arrancar NO lo vuelva a instalar.
+  ipcMain.handle('remote-support:disable', async (_event, password) => {
+    const provided = (password || '').toString();
+    if (provided !== DISABLE_PASSWORD) {
+      return { success: false, error: 'Clave incorrecta.' };
+    }
     const cfg = readConfig(app);
     const res = await elevatedUninstall(app);
-    writeConfig(app, { ...cfg, enabled: false });
+    writeConfig(app, { ...cfg, enabled: false, disabledByUser: res.ok });
     try {
       if (rustdeskProc && !rustdeskProc.killed) {
         rustdeskProc.kill();
@@ -582,11 +597,60 @@ function registerRemoteSupportHandlers(app) {
 }
 
 /**
- * Al iniciar la app NO se lanza nada: el acceso desatendido lo provee el
- * SERVICIO de RustDesk (instalado al activar), que corre solo en segundo plano.
+ * Auto-instalación al arrancar: el camino normal es que el instalador NSIS de
+ * TitanioPOS deje RustDesk instalado (ya corre elevado → cero prompts). Esto es
+ * el RESPALDO para cajas que actualizan sin reinstalar o donde el NSIS falló:
+ * si el servicio no está y el usuario NO lo desactivó explícitamente, se
+ * instala solo (un único UAC). Un intento por arranque, sin bloquear el boot.
  */
-function startRemoteSupportIfEnabled() {
-  // intencionalmente vacío — el servicio maneja el acceso desatendido.
+function startRemoteSupportIfEnabled(app) {
+  if (process.platform !== 'win32') return;
+
+  setTimeout(async () => {
+    try {
+      const cfg = readConfig(app);
+
+      // El usuario lo desactivó con clave: respetar su decisión.
+      if (cfg.disabledByUser === true) {
+        console.log('[REMOTE] Soporte desactivado por el usuario — no se auto-instala.');
+        return;
+      }
+
+      // Ya instalado (NSIS o activación previa): sincronizar la config con la
+      // realidad. Si el instalador lo reinstaló después de una desactivación,
+      // ese reinstalar cuenta como decisión explícita → se limpia disabledByUser.
+      if (getInstalledPath()) {
+        if (cfg.enabled !== true || cfg.disabledByUser === true) {
+          writeConfig(app, { ...cfg, enabled: true, disabledByUser: false, password: cfg.password || DEFAULT_PASSWORD });
+        }
+        return;
+      }
+
+      const base = getRustdeskPath(app);
+      if (!base) {
+        console.log('[REMOTE] Sin binario de RustDesk bundleado — auto-instalación omitida.');
+        return;
+      }
+
+      console.log('[REMOTE] RustDesk no instalado — auto-instalando…');
+      const configuredExe = ensureConfiguredExe(app, base);
+      clearSetupResult(app);
+      const run = await runElevatedSetup(app, buildInstallBlock(app, configuredExe, DEFAULT_PASSWORD), 'install');
+      writeConfig(app, {
+        ...cfg,
+        enabled: !!run.ok,
+        password: DEFAULT_PASSWORD,
+        disabledByUser: false,
+      });
+      if (run.ok) {
+        console.log('✅ [REMOTE] RustDesk auto-instalado. ID:', (run.result && run.result.id) || '(pendiente)');
+      } else {
+        console.warn('⚠️ [REMOTE] Auto-instalación falló:', run.error || describeSetupFailure(run.result));
+      }
+    } catch (e) {
+      console.error('[REMOTE] Error en auto-instalación:', e.message);
+    }
+  }, 20000); // dejar que la caja termine de arrancar (Celeron + HDD)
 }
 
 module.exports = {

@@ -79,7 +79,8 @@
         "from": "bin",
         "to": "bin",
         "filter": [
-          "*.exe"
+          "*.exe",
+          "*.ps1"
         ]
       },
       {

@@ -426,7 +426,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Repara: desinstala limpio + reinstala el servicio en un solo UAC. */
   remoteSupportRepair: (password) => ipcRenderer.invoke('remote-support:repair', password),
   /** Desactiva el acceso desatendido y cierra RustDesk. */
-  remoteSupportDisable: () => ipcRenderer.invoke('remote-support:disable'),
+  remoteSupportDisable: (password) => ipcRenderer.invoke('remote-support:disable', password),
   /** Abre la ventana de RustDesk manualmente. */
   remoteSupportOpen: () => ipcRenderer.invoke('remote-support:open'),
   /** Conecta desde esta máquina a un ID remoto (soporte). */

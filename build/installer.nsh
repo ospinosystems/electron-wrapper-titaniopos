@@ -45,6 +45,24 @@
   Pop $0
 
   DetailPrint "TitanioPOS: performance profile applied."
+
+  ; --- 3. RustDesk (soporte remoto desatendido). -------------------------
+  ; Se instala AQUI, con los permisos de admin del instalador, para que la
+  ; caja quede lista sin descargar ni activar nada desde la app. El script
+  ; es idempotente (si ya esta instalado solo re-aplica servidor + clave) y
+  ; un fallo NO aborta la instalacion de TitanioPOS.
+  ${If} ${FileExists} "$INSTDIR\resources\bin\rustdesk.exe"
+    DetailPrint "TitanioPOS: instalando soporte remoto (RustDesk)..."
+    nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\resources\bin\setup-rustdesk.ps1" -ExePath "$INSTDIR\resources\bin\rustdesk.exe"'
+    Pop $0
+    ${If} $0 == 0
+      DetailPrint "  Soporte remoto: OK"
+    ${Else}
+      DetailPrint "  Soporte remoto fallo (exit $0) - la app lo reintentara al iniciar"
+    ${EndIf}
+  ${Else}
+    DetailPrint "TitanioPOS: rustdesk.exe no incluido en este build - se omite"
+  ${EndIf}
 !macroend
 
 !macro customUnInstall
