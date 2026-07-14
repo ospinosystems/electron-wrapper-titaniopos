@@ -142,7 +142,7 @@ const { registerPrinterHandlers } = require('./printer-handlers');
 const { registerFiscalHandlers } = require('./fiscal-handlers');
 const { registerPinpadHandlers } = require('./pinpad-handlers');
 const { registerMegaPosHandlers } = require('./mega-pos-handlers');
-const { startMegaPosServer, stopMegaPosServer, restartMegaPosServer, getVposRuntimeDir } = require('./mega-pos-manager');
+const { startMegaPosServer, stopMegaPosServer, restartMegaPosServer, getVposRuntimeDir, setSeqNum } = require('./mega-pos-manager');
 const { registerCajaConfigHandlers } = require('./caja-config-handlers');
 const { registerRemoteSupportHandlers, startRemoteSupportIfEnabled } = require('./remote-support-handlers');
 const { registerPrinterDriverHandlers } = require('./printer-driver-handlers');
@@ -3380,6 +3380,82 @@ app.whenReady().then(() => {
       return r;
     } catch (error) {
       console.error('❌ [MEGA_POS] restart:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Fija [SeqNum] seqnum en el vposconf.ini runtime y reinicia el servicio para
+  // que el VPOS lo tome. Operación de soporte (realinear la secuencia con el
+  // Merchant). No se persiste en el settings: es un ajuste puntual.
+  ipcMain.handle('mega-pos-set-seqnum', async (_e, value) => {
+    try {
+      const r = setSeqNum(getVposRuntimeDir(app), value);
+      if (!r.success) return r;
+      // Reiniciar para que el VPOS relea el ini con la nueva secuencia.
+      const restart = await restartMegaPosServer(app);
+      return { ...r, restarted: Boolean(restart && restart.success), restartMessage: restart && (restart.message || restart.error) };
+    } catch (error) {
+      console.error('❌ [MEGA_POS] set-seqnum:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Instala la VPOS (procedimiento oficial Megasoft) ELEVADO (UAC): registra el
+  // autoarranque en Startup y configura las rutas. Antes detiene la instancia
+  // gestionada por la app y después la vuelve a arrancar para quedar como único
+  // dueño del servicio en :8085 (startMegaPosServer mata instancias externas).
+  ipcMain.handle('mega-pos-install-vpos', async () => {
+    try {
+      const runtimeDir = getVposRuntimeDir(app);
+      const bat = path.join(runtimeDir, 'InstalacionVPOSREST.bat');
+      if (!fs.existsSync(bat)) {
+        return { success: false, error: 'No se encontró InstalacionVPOSREST.bat. Reinicia el servicio primero para generar la copia runtime.' };
+      }
+      stopMegaPosServer();
+      const { execFile } = require('child_process');
+      const psCmd = `Start-Process -Verb RunAs -Wait -WindowStyle Hidden -WorkingDirectory '${runtimeDir.replace(/'/g, "''")}' -FilePath 'cmd.exe' -ArgumentList '/c','\"${bat.replace(/'/g, "''")}\"'`;
+      const ran = await new Promise((resolve) => {
+        execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCmd], { windowsHide: true }, (error) => {
+          if (error) return resolve({ success: false, error: 'No se pudo instalar (¿se canceló el permiso de administrador?).' });
+          resolve({ success: true });
+        });
+      });
+      if (!ran.success) { restartMegaPosServer(app).catch(() => {}); return ran; }
+      // La app vuelve a ser dueña del servicio (mata la instancia del autostart y arranca la suya).
+      const restart = await restartMegaPosServer(app);
+      return { success: true, message: 'VPOS instalada (autoarranque registrado).', restarted: Boolean(restart && restart.success) };
+    } catch (error) {
+      console.error('❌ [MEGA_POS] install-vpos:', error);
+      restartMegaPosServer(app).catch(() => {});
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Desinstala la VPOS ELEVADO (UAC): detiene el servicio y quita el
+  // autoarranque de Startup. Se replica el EFECTO del DesinstalacionVPOSREST.bat
+  // (taskkill javaw + quitar el VBS de autostart) sin correr el .bat original,
+  // que trae un `pause` interactivo y un `del` sobre TODA la carpeta Startup.
+  ipcMain.handle('mega-pos-uninstall-vpos', async () => {
+    try {
+      stopMegaPosServer();
+      const { execFile } = require('child_process');
+      const psCmd = [
+        'taskkill /F /IM javaw.exe 2>$null;',
+        'taskkill /F /IM java.exe 2>$null;',
+        "Remove-Item -Force -ErrorAction SilentlyContinue \"$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\VposREST.vbs\"",
+      ].join(' ');
+      const full = `Start-Process -Verb RunAs -Wait -WindowStyle Hidden -FilePath 'powershell.exe' -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command','${psCmd.replace(/'/g, "''")}'`;
+      const ran = await new Promise((resolve) => {
+        execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', full], { windowsHide: true }, (error) => {
+          if (error) return resolve({ success: false, error: 'No se pudo desinstalar (¿se canceló el permiso de administrador?).' });
+          resolve({ success: true });
+        });
+      });
+      return ran.success
+        ? { success: true, message: 'VPOS desinstalada (servicio detenido y autoarranque quitado).' }
+        : ran;
+    } catch (error) {
+      console.error('❌ [MEGA_POS] uninstall-vpos:', error);
       return { success: false, error: error.message };
     }
   });

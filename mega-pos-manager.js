@@ -190,6 +190,56 @@ const applyConfigToIni = (runtimeDir, cfg) => {
 };
 
 /**
+ * Fija el número de secuencia de transacciones en [SeqNum] seqnum del
+ * vposconf.ini de la copia runtime. `seqnum` es el consecutivo que el terminal
+ * usa para numerar cada transacción (manual MAIO-VPOSJ: "Consecutivo empleado
+ * para asignar el número de secuencia de las transacciones para el terminal";
+ * default 1, máximo `limite`=99999999). Operación de SOPORTE: se usa para
+ * realinear la secuencia local con la del Merchant cuando se desincroniza.
+ *
+ * Escribe SOLO la copia runtime (la que lee el VPOS); requiere reiniciar el
+ * servicio para que tome efecto. No se persiste en el settings de la app: es un
+ * ajuste puntual — de ahí en adelante el propio VPOS incrementa el consecutivo.
+ *
+ * @returns {{success: boolean, previous?: string|null, next?: number, error?: string}}
+ */
+const MAX_SEQNUM = 99999999; // [SeqNum] limite (manual MAIO-VPOSJ)
+const setSeqNum = (runtimeDir, value) => {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1 || n > MAX_SEQNUM) {
+    return { success: false, error: `El número de secuencia debe ser un entero entre 1 y ${MAX_SEQNUM}.` };
+  }
+  const iniPath = path.join(runtimeDir, 'conf', 'vposconf.ini');
+  if (!fs.existsSync(iniPath)) {
+    return { success: false, error: `vposconf.ini no encontrado en ${iniPath}. Reinicia el servicio primero para generar la copia runtime.` };
+  }
+  try {
+    const lines = fs.readFileSync(iniPath, 'utf8').split(/\r?\n/);
+    let section = null;
+    let found = false;
+    let previous = null;
+    const out = lines.map((line) => {
+      const sec = line.match(/^\s*\[([^\]]+)\]\s*$/);
+      if (sec) { section = sec[1].trim().toLowerCase(); return line; }
+      if (section === 'seqnum') {
+        const kv = line.match(/^(\s*)seqnum\s*=\s*(.*)$/i);
+        if (kv) { previous = kv[2].trim(); found = true; return `${kv[1]}seqnum=${n}`; }
+      }
+      return line;
+    });
+    if (!found) {
+      return { success: false, error: 'No se encontró la clave seqnum en la sección [SeqNum] del vposconf.ini.' };
+    }
+    fs.writeFileSync(iniPath, out.join('\n'), 'utf8');
+    log(`[MEGA_POS] vposconf.ini: [SeqNum] seqnum ${previous} -> ${n}`);
+    return { success: true, previous, next: n };
+  } catch (e) {
+    logErr('[MEGA_POS] No se pudo fijar seqnum:', e.message);
+    return { success: false, error: e.message };
+  }
+};
+
+/**
  * Activa [COMPRA_MEDIOS_PAGO] activo=1 en vposuniversal.ini (requerido por Megasoft
  * para el ambiente de certificación: "activar con valor 1"). Idempotente: solo
  * toca la clave `activo` dentro de esa sección.
@@ -418,4 +468,5 @@ module.exports = {
   restartMegaPosServer,
   pingVpos,
   getVposRuntimeDir,
+  setSeqNum,
 };

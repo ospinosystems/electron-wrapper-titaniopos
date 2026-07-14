@@ -191,6 +191,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Tareas de caja: imprimeUltimoVoucher | imprimeUltimoVoucherP | precierre | cierre | ultimoCierre. */
   megaPosTask: (action) => ipcRenderer.invoke('mega-pos-task', { action }),
 
+  /** Fija [SeqNum] seqnum en el vposconf.ini y reinicia el servicio (soporte). */
+  megaPosSetSeqnum: (value) => ipcRenderer.invoke('mega-pos-set-seqnum', value),
+
+  /** Instala/desinstala la VPOS como admin (UAC): autoarranque de Windows. */
+  megaPosInstallVpos: () => ipcRenderer.invoke('mega-pos-install-vpos'),
+  megaPosUninstallVpos: () => ipcRenderer.invoke('mega-pos-uninstall-vpos'),
+
   /** Última transacción del VPOS desde sus archivos de control:
    *  { success, approved: <última APROBADA>, processed: <última PROCESADA> }
    *  con { codRespuesta, estado, numSeq, montoCents, fecha, hora, referencia,
