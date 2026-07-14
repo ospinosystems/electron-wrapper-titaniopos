@@ -159,7 +159,7 @@ const applyConfigToIni = (runtimeDir, cfg) => {
 
   const overrides = {
     server: { host: cfg.serverHost, port: cfg.serverPort },
-    // Producción exige SSL (ssl.megasoftve.com:4763); `false` explícito lo apaga.
+    // Producción exige SSL (ssl.megasoftve.com:4772); `false` explícito lo apaga.
     ssl: { active: cfg.ssl === false ? '0' : '1' },
     vtid: { vtid: cfg.vtid, id: cfg.id },
   };

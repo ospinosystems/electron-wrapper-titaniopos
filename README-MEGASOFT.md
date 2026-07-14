@@ -9,7 +9,7 @@ componen y los datos operativos de producción.
 | Dato | Valor |
 |---|---|
 | Merchant Server | `ssl.megasoftve.com` |
-| Puerto | `4763` (conexión SSL) |
+| Puerto | `4772` (conexión SSL) |
 | VPOS | 3.16.0 REST (Java 21 embebido) |
 | VTID / afiliación | **Uno por caja** — pendiente de que Megasoft los genere |
 | Cajas | Maracay 5, Guacara 7, Tinaquillo 4 (total 16) |

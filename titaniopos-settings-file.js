@@ -69,7 +69,7 @@ const DEFAULT_UI = {
 const DEFAULT_MEGA_POS = {
   enabled: false,
   serverHost: 'ssl.megasoftve.com',
-  serverPort: '4763',
+  serverPort: '4772',
   ssl: true,
   vtid: '',
   id: '',
@@ -116,9 +116,10 @@ function normalizeMegaPos(raw) {
   return {
     enabled: Boolean(base.enabled),
     // Host/puerto vacíos (configs guardadas antes de tener defaults) caen al
-    // Merchant Server de producción.
+    // Merchant Server de producción. El puerto 4763 fue el default anterior
+    // (incorrecto): se corrige a 4772, el puerto SSL real del Merchant.
     serverHost: String(base.serverHost || DEFAULT_MEGA_POS.serverHost),
-    serverPort: String(base.serverPort || DEFAULT_MEGA_POS.serverPort),
+    serverPort: ((p) => (p === '4763' ? '4772' : p))(String(base.serverPort || DEFAULT_MEGA_POS.serverPort)),
     ssl: base.ssl === undefined || base.ssl === null ? true : Boolean(base.ssl),
     vtid: String(base.vtid ?? ''),
     id: String(base.id ?? ''),
