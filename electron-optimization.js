@@ -43,7 +43,7 @@ function applyElectronOptimizations() {
   // 1. V8 heap — calibrated for Celeron 4 GB.
   //    Win10/11 idles ~1.5 GB, fiscal-server (Python) ~250 MB, leaves ~2.2 GB.
   //    768 MB renderer heap is the ceiling before Windows starts swapping.
-  //    --expose-gc lets us force GC after print jobs (image buffers leak otherwise).
+  //    --expose-gc lets us force GC after memory-heavy jobs.
   app.commandLine.appendSwitch(
     'js-flags',
     '--max-old-space-size=768 --expose-gc'
@@ -138,8 +138,7 @@ function applyElectronOptimizations() {
   app.commandLine.appendSwitch('disk-cache-size', String(150 * 1024 * 1024));
   app.commandLine.appendSwitch('media-cache-size', String(20 * 1024 * 1024));
 
-  // 7. Renderer process limit — single POS window. Print windows are
-  //    short-lived and get reused by Chromium's process model, so 1 is safe.
+  // 7. Renderer process limit — single POS window, so 1 is safe.
   app.commandLine.appendSwitch('renderer-process-limit', '1');
 
   console.log('[PERF] Chromium flags applied (Celeron 4GB profile)');

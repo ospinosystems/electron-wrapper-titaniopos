@@ -56,7 +56,7 @@ const saveFiscalConfig = (app, config) => {
   }
 };
 
-// Respuestas pendientes: fiscal-responses.json (aparte del JSON unificado de caja/thermal)
+// Respuestas pendientes: fiscal-responses.json (aparte del JSON unificado de caja)
 const loadFiscalResponses = (app) => {
   try {
     return readFiscalResponsesFile(app);

@@ -1,6 +1,6 @@
 ﻿# TitanioPOS Desktop
 
-Electron wrapper for the TitanioPOS web application. It loads the configured frontend URL, adds **native printing** (thermal, USB, network, serial), **local order backup** (JWT-backed), optional **fiscal device** integration via an embedded Python bridge, **pinpad/LAN proxy** helpers, and **auto-updates** through `electron-updater`.
+Electron wrapper for the TitanioPOS web application. It loads the configured frontend URL, adds **local order backup** (JWT-backed), optional **fiscal device** integration via an embedded Python bridge, **pinpad/LAN proxy** helpers, and **auto-updates** through `electron-updater`.
 
 ## Table of contents
 
@@ -25,7 +25,6 @@ Electron wrapper for the TitanioPOS web application. It loads the configured fro
 |------|-------------|
 | **Shell** | Single main window; loads the PWA from `TITANIOPOS_URL` (or local default). |
 | **Single instance** | A second launch exits immediately; the running instance is focused. |
-| **Printing** | Silent print, printer discovery, and multiple driver paths (see `main.js` / printer handlers). |
 | **Backups** | IPC APIs to persist orders locally; payloads use JWT (shared secret with your stack). |
 | **Fiscal** | Optional local fiscal server (Python); port and tooling path configurable via environment. |
 | **Updates** | Packaged builds can check GitHub Releases (see **Auto-updates**). |
@@ -203,9 +202,9 @@ Packaged apps use **`electron-updater`**. Update metadata and binaries are expec
 
 | Path | Role |
 |------|------|
-| `main.js` | Main process: window, menus, IPC, printing, backups, DevTools policy, updater hooks. |
+| `main.js` | Main process: window, menus, IPC, backups, DevTools policy, updater hooks. |
 | `preload.js` | Context-isolated bridge exposed to the renderer as `window.electronAPI`. |
-| `printer-handlers.js` / `fiscal-handlers.js` / `pinpad-handlers.js` | Feature-specific IPC backends. |
+| `fiscal-handlers.js` / `pinpad-handlers.js` | Feature-specific IPC backends. |
 | `fiscal-server-manager.js` | Lifecycle for the optional Python fiscal service. |
 | `fiscal-server/` | Python fiscal bridge sources. |
 | `.github/workflows/` | CI release pipeline. |

@@ -20,27 +20,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Recarga forzada sin caché (tras mostrar feedback en el renderer). */
   reloadIgnoringCache: () => ipcRenderer.invoke('reload-ignoring-cache'),
 
-  /**
-   * Impresión silenciosa con HTML
-   * @param {string} html - Contenido HTML a imprimir
-   * @param {object} options - Opciones de impresión
-   * @param {string} options.pageWidth - Ancho del papel: '58mm' o '80mm' (default: '80mm')
-   * @param {string} options.printerName - Nombre de la impresora (opcional, usa default si no se especifica)
-   */
-  silentPrint: (html, options = {}) => ipcRenderer.invoke('silent-print', html, options),
-  
-  // Obtener lista de impresoras disponibles
-  getPrinters: () => ipcRenderer.invoke('get-printers'),
-  
-  /**
-   * Imprimir a impresora específica con HTML
-   * @param {string} printerName - Nombre de la impresora
-   * @param {string} html - Contenido HTML a imprimir
-   * @param {object} options - Opciones de impresión
-   */
-  printToPrinter: (printerName, html, options = {}) => 
-    ipcRenderer.invoke('print-to-printer', printerName, html, options),
-  
   // Verificar si estamos en Electron
   isElectron: true,
 
@@ -111,21 +90,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
    */
   backupAdminResign: (filePath, data) => ipcRenderer.invoke('backup-admin-resign', filePath, data),
 
-  // ==================== PRINTER CONFIGURATION ====================
-  
-  /**
-   * Get current printer configuration
-   * @returns {Promise<{success: boolean, config: object}>}
-   */
-  printerConfigGet: () => ipcRenderer.invoke('printer-config-get'),
-  
-  /**
-   * Save printer configuration
-   * @param {object} config - Printer configuration
-   * @returns {Promise<{success: boolean, config?: object, error?: string}>}
-   */
-  printerConfigSave: (config) => ipcRenderer.invoke('printer-config-save', config),
-
   // ==================== CAJA (sin fiscal) ====================
 
   /** @returns {Promise<{ success: boolean, config?: object, path?: string, error?: string }>} */
@@ -139,31 +103,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   /** @param {object} partial - campos a fusionar en ui config */
   appConfigSave: (partial) => ipcRenderer.invoke('app-config-save', partial),
-
-  /**
-   * Get list of available printers
-   * @returns {Promise<{success: boolean, printers: array}>}
-   */
-  printerList: () => ipcRenderer.invoke('printer-list'),
-  
-  /**
-   * Print using configured printer and method
-   * @param {string} content - Content to print (HTML for native, text for ESC/POS)
-   * @param {object} options - Additional options
-   * @returns {Promise<{success: boolean, method?: string, error?: string}>}
-   */
-  printerPrint: (content, options = {}) => ipcRenderer.invoke('printer-print', content, options),
-  
-  /**
-   * Test print with specific method
-   * @param {string} method - Method to test ('native' or 'escpos')
-   * @param {string} printerName - Printer name
-   * @param {string} content - Test content
-   * @param {object} options - Additional options (paperWidth, usbPort, etc.)
-   * @returns {Promise<{success: boolean, method?: string, error?: string}>}
-   */
-  printerTest: (method, printerName, content, options = {}) => 
-    ipcRenderer.invoke('printer-test', method, printerName, content, options),
 
   // ==================== PINPAD ====================
 
@@ -430,11 +369,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Abre la ventana de RustDesk manualmente. */
   remoteSupportOpen: () => ipcRenderer.invoke('remote-support:open'),
   /** Conecta desde esta máquina a un ID remoto (soporte). */
-  remoteSupportConnect: (id) => ipcRenderer.invoke('remote-support:connect', id),
-
-  // ==================== DRIVERS DE IMPRESORA ====================
-  /** Estado: { available: { thermal, label, remove } }. */
-  printerDriverStatus: () => ipcRenderer.invoke('printer-driver:status'),
-  /** Lanza un instalador elevado. key: 'thermal' | 'label' | 'remove'. */
-  printerDriverLaunch: (key) => ipcRenderer.invoke('printer-driver:launch', key)
+  remoteSupportConnect: (id) => ipcRenderer.invoke('remote-support:connect', id)
 });

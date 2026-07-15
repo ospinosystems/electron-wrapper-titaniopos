@@ -1,32 +1,24 @@
 {
   "name": "titaniopos-electron",
   "version": "1.0.72",
-  "description": "TitanioPOS Desktop - Wrapper Electron con impresión silenciosa",
+  "description": "TitanioPOS Desktop - Wrapper Electron",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "prebuild": "node prebuild.js",
     "bundle:frontend": "node bundle-frontend.js",
-    "build": "npm run prebuild && npm run bundle:frontend && electron-builder --win --publish never",
-    "build:portable": "npm run prebuild && npm run bundle:frontend && electron-builder --win portable --publish never",
-    "release": "npm run prebuild && npm run bundle:frontend && electron-builder --win --publish always",
-    "publish": "npm run prebuild && npm run bundle:frontend && electron-builder --win --publish always",
+    "build": "npm run bundle:frontend && electron-builder --win --publish never",
+    "build:portable": "npm run bundle:frontend && electron-builder --win portable --publish never",
+    "release": "npm run bundle:frontend && electron-builder --win --publish always",
+    "publish": "npm run bundle:frontend && electron-builder --win --publish always",
     "start:local": "electron . --env=local",
     "start:prod": "electron . --env=prod"
   },
   "author": "TitanioPOS",
   "license": "MIT",
   "dependencies": {
-    "electron-updater": "^6.1.8",
-    "@3ksy/electron-pos-printer": "^1.4.9",
     "bwip-js": "^4.8.0",
-    "escpos": "^3.0.0-alpha.6",
-    "escpos-buffer": "^4.1.0",
-    "escpos-network": "^3.0.0-alpha.5",
-    "escpos-usb": "^3.0.0-alpha.4",
-    "jsonwebtoken": "^9.0.3",
-    "node-thermal-printer": "^4.5.0",
-    "serialport": "^13.0.0"
+    "electron-updater": "^6.1.8",
+    "jsonwebtoken": "^9.0.3"
   },
   "devDependencies": {
     "electron": "^42.0.0",
@@ -78,13 +70,6 @@
       {
         "from": "bin",
         "to": "bin",
-        "filter": [
-          "*.exe"
-        ]
-      },
-      {
-        "from": "drivers",
-        "to": "drivers",
         "filter": [
           "*.exe"
         ]

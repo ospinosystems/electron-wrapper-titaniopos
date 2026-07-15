@@ -1,6 +1,6 @@
 /**
- * Caja, impresora térmica y config fiscal: Documentos/TitanioPOS-Settings/titaniopos-settings.json
- * Cola de respuestas fiscales (HKA): mismo directorio, fiscal-responses.json (aparte; no se mezcla con caja/thermal)
+ * Caja y config fiscal: Documentos/TitanioPOS-Settings/titaniopos-settings.json
+ * Cola de respuestas fiscales (HKA): mismo directorio, fiscal-responses.json (aparte; no se mezcla con caja)
  */
 
 const path = require('path');
@@ -12,8 +12,6 @@ const SETTINGS_FILENAME = 'titaniopos-settings.json';
 /** @deprecated - migración */
 const LEGACY_CAJA_DIR = 'TitanioPOS-Caja';
 const LEGACY_FISCAL_DIR = 'TitanioPOS-Fiscal';
-const LEGACY_USERDATA_PRINTER = 'printer-config.json';
-const THERMAL_PRINTER_FILE = 'thermal-printer.json';
 const FISCAL_CONFIG_FILE = 'fiscal-config.json';
 const FISCAL_RESPONSES_FILE = 'fiscal-responses.json';
 
@@ -21,15 +19,6 @@ const DEFAULT_CAJA = {
   cashRegisterNumber: null,
   pinpadIp: null,
   operationMode: 'POS',
-};
-
-const DEFAULT_THERMAL = {
-  printerName: '',
-  usbPort: 'USB003',
-  method: 'escpos',
-  paperWidth: '80mm',
-  debugPdf: false,
-  lastUpdated: null,
 };
 
 const DEFAULT_FISCAL = {
@@ -93,7 +82,6 @@ const DEFAULT_MEGA_POS = {
 const DEFAULT_SETTINGS = {
   schemaVersion: 1,
   caja: { ...DEFAULT_CAJA },
-  thermalPrinter: { ...DEFAULT_THERMAL },
   fiscal: { ...DEFAULT_FISCAL },
   ui: { ...DEFAULT_UI },
   megaPos: { ...DEFAULT_MEGA_POS },
@@ -111,10 +99,6 @@ function normalizeCaja(raw) {
     pinpadIp: base.pinpadIp ?? null,
     operationMode: base.operationMode === 'SELF_SERVICE' ? 'SELF_SERVICE' : 'POS',
   };
-}
-
-function normalizeThermal(raw) {
-  return { ...DEFAULT_THERMAL, ...raw };
 }
 
 function normalizeFiscal(raw) {
@@ -153,7 +137,6 @@ function normalizeSettings(raw) {
   return {
     schemaVersion: raw.schemaVersion ?? 1,
     caja: normalizeCaja(raw.caja || {}),
-    thermalPrinter: normalizeThermal(raw.thermalPrinter || raw.printer || {}),
     fiscal: normalizeFiscal(raw.fiscal || {}),
     ui: normalizeUi(raw.ui || {}),
     megaPos: normalizeMegaPos(raw.megaPos || raw.smartPos || {}),
@@ -270,19 +253,15 @@ function migrateToUnifiedSettings(app) {
     }
 
     const documentsPath = app.getPath('documents');
-    const userData = app.getPath('userData');
     const cajaDir = path.join(documentsPath, LEGACY_CAJA_DIR);
     const legacyFiscalDir = path.join(documentsPath, LEGACY_FISCAL_DIR);
-    const oldPrinter = path.join(userData, LEGACY_USERDATA_PRINTER);
 
     const legacyCandidatePaths = [
       path.join(legacyFiscalDir, FISCAL_CONFIG_FILE),
       path.join(legacyFiscalDir, FISCAL_RESPONSES_FILE),
       path.join(cajaDir, 'caja-config.json'),
-      path.join(cajaDir, THERMAL_PRINTER_FILE),
       path.join(cajaDir, FISCAL_CONFIG_FILE),
       path.join(cajaDir, FISCAL_RESPONSES_FILE),
-      oldPrinter,
     ];
     const hasLegacyFiles = legacyCandidatePaths.some(
       (p) => fs.existsSync(p) && fs.statSync(p).size > 0,
@@ -301,14 +280,6 @@ function migrateToUnifiedSettings(app) {
 
     const cCaja = readSafeJson(path.join(cajaDir, 'caja-config.json'));
     if (cCaja) merged.caja = normalizeCaja(cCaja);
-
-    const tCaja = readSafeJson(path.join(cajaDir, 'thermal-printer.json'));
-    if (tCaja) {
-      merged.thermalPrinter = normalizeThermal(tCaja);
-    } else {
-      const tUser = readSafeJson(oldPrinter);
-      if (tUser) merged.thermalPrinter = normalizeThermal(tUser);
-    }
 
     const fCaja = readSafeJson(path.join(cajaDir, FISCAL_CONFIG_FILE));
     if (fCaja) merged.fiscal = normalizeFiscal(fCaja);
@@ -336,7 +307,6 @@ module.exports = {
   writeFiscalResponsesFile,
   splitFiscalResponsesFromUnifiedIfPresent,
   normalizeCaja,
-  normalizeThermal,
   normalizeFiscal,
   normalizeUi,
   normalizeMegaPos,

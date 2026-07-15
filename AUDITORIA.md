@@ -22,7 +22,6 @@ el sistema, identificando al usuario y el momento.
 | **Historial de cambios de producto** (`product_change_history`) | Toda modificación de un producto / ítem de inventario | producto, tienda, ítem, **usuario**, campo modificado, **valor anterior → valor nuevo** |
 | **Historial de precios** (`price_history`) | Cambios de precio por ítem de inventario | ítem, precio, fecha |
 | **Respuestas fiscales** (`fiscal_responses`) | Cada documento fiscal emitido (factura / nota de crédito) | orden, tipo de documento, JSON íntegro devuelto por la máquina fiscal, fecha/hora fiscal |
-| **Reimpresiones de factura** (`invoice_prints`) | Cada copia/reimpresión de un comprobante | orden, usuario, contador (**tope de 5 copias**), marca de documento no fiscal |
 | **Solicitudes de verificación / aprobación** (`transactions_request`) | Aprobaciones de descuentos, créditos, reembolsos, transferencias | tipo, estado (pendiente/aprobado/rechazado), aprobador, referencia |
 | **Respuestas de punto de pago** (`pinpad_responses`) | Cada transacción con pinpad / VPOS | referencia, lote, código de respuesta, terminal, monto |
 
