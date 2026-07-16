@@ -219,9 +219,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @param {string} errorMessage - Error message
    * @returns {Promise<{success: boolean}>}
    */
-  fiscalMarkSyncError: (responseId, errorMessage) => 
-    ipcRenderer.invoke('fiscal-mark-sync-error', responseId, errorMessage),
-  
+  fiscalMarkSyncError: (responseId, errorMessage, permanent = false) =>
+    ipcRenderer.invoke('fiscal-mark-sync-error', responseId, errorMessage, permanent),
+
+  /** Purga respuestas atascadas ('stuck' = synced/simuladas/fallos permanentes) o 'all'. */
+  fiscalPurgeResponses: (mode = 'stuck') => ipcRenderer.invoke('fiscal-purge-responses', mode),
+
   /**
    * Get all fiscal responses
    * @returns {Promise<{success: boolean, responses: array}>}
@@ -245,7 +248,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @returns {Promise<{success: boolean, error?: string}>}
    */
   fiscalSendReportZ: () => ipcRenderer.invoke('fiscal-send-report-z'),
-  
+  fiscalPrintNonFiscal: (payload) => ipcRenderer.invoke('fiscal-print-non-fiscal', payload),
+
   /**
    * Configure COM port for fiscal machine
    * @param {string} comPort - COM port (e.g., 'COM1')
@@ -277,6 +281,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @returns {Promise<{success: boolean, puerto_com?: string, ruta_programa?: string, error?: string}>}
    */
   fiscalGetServerConfig: () => ipcRenderer.invoke('fiscal-get-server-config'),
+
+  /** Estado decodificado de la impresora (esperando/sin papel/memoria/transacción). */
+  fiscalGetStatus: () => ipcRenderer.invoke('fiscal-get-status'),
+
+  /** Datos de la máquina fiscal (S1): RIF, serial registrado, contadores. */
+  fiscalGetMachineData: () => ipcRenderer.invoke('fiscal-get-machine-data'),
+
+  /** Lista las operaciones de prueba disponibles (Fijas del Fiscalizador). */
+  fiscalListOperations: () => ipcRenderer.invoke('fiscal-list-operations'),
+
+  /** Ejecuta una operación de prueba (emite un documento fiscal real). */
+  fiscalRunOperation: (name) => ipcRenderer.invoke('fiscal-run-operation', name),
 
   // ==================== FISCAL SERVER MANAGEMENT ====================
   

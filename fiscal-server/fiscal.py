@@ -1,41 +1,35 @@
 """
-Servidor Fiscal HKA - Versión Portable para TitanioPOS
-Este servidor se integra con la aplicación Electron y maneja la comunicación con la impresora fiscal.
+Servidor Fiscal HKA para TitanioPOS.
+
+Backend unico: tfhka.py (port del SDK TfhkaNet.dll). Se comunica directo con la
+impresora fiscal por serial o TCP; ya NO usa IntTFHKA.exe ni hka_serial.py.
+
+Ademas de imprimir facturas/notas, expone endpoints que LEEN las respuestas de la
+fiscal: status decodificado, reportes X/Z (data e impresion), datos S1..S8, etc.
 """
 
 import os
 import sys
 
-# Garantizar que el directorio del script esté en sys.path. Con Python embebido
-# en Windows el archivo ._pth reemplaza sys.path y omite el dir del script si
-# el CWD es otro; sin esto, `import hka_serial` puede fallar.
+# Asegurar que el dir del script y el site-packages del Python embebido esten en
+# sys.path (con Python embebido en Windows el ._pth puede omitirlos).
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
-
-# Garantizar que el site-packages del Python embebido esté en sys.path.
-# El archivo ._pth debería cargarlo pero a veces falla en producción
-# (e.g. si NSIS no preservó el archivo o si Python no aplica `import site`
-# correctamente en algunos clientes). Lo agregamos defensivamente.
 _PY_DIR = os.path.dirname(os.path.abspath(sys.executable))
 _SITE_PACKAGES = os.path.join(_PY_DIR, 'Lib', 'site-packages')
 if os.path.isdir(_SITE_PACKAGES) and _SITE_PACKAGES not in sys.path:
     sys.path.insert(0, _SITE_PACKAGES)
 
-# Log de diagnóstico inmediato para detectar problemas de empaquetado
 print(f"[FISCAL] Python exec: {sys.executable}")
-print(f"[FISCAL] Python prefix: {sys.prefix}")
 print(f"[FISCAL] site-packages probe: {_SITE_PACKAGES} (exists={os.path.isdir(_SITE_PACKAGES)})")
-print(f"[FISCAL] sys.path: {sys.path}")
 
 try:
     from flask import Flask, request, jsonify
 except ModuleNotFoundError as e:
     print(f"[FISCAL] FATAL: Flask no se encuentra. {e}")
-    print(f"[FISCAL] Verifica que existan: {_SITE_PACKAGES}\\flask\\__init__.py")
     sys.exit(2)
 
-import subprocess
 import json
 import queue
 import threading
@@ -43,44 +37,23 @@ import time
 import uuid
 import re
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime
 
-# Importar módulo de comunicación serial directa HKA.
-# Vía de escape: USE_HKA_SERIAL=0 fuerza IntTFHKA.exe (útil si un cliente
-# tiene un modelo cuyo framing no coincide con hka_serial).
-_use_hka_serial_flag = os.environ.get('USE_HKA_SERIAL', '1').strip().lower()
-if _use_hka_serial_flag in ('0', 'false', 'no', 'off'):
-    HKA_SERIAL_AVAILABLE = False
-    print("[FISCAL] hka_serial deshabilitado por USE_HKA_SERIAL=0 - usando IntTFHKA.exe")
-else:
-    try:
-        from hka_serial import HKAPrinter, check_printer, send_fiscal_file, send_command as hka_send_command
-        HKA_SERIAL_AVAILABLE = True
-        print("[FISCAL] Módulo hka_serial cargado - comunicación serial directa disponible")
-    except ImportError as _e:
-        HKA_SERIAL_AVAILABLE = False
-        print(f"[FISCAL] Módulo hka_serial no disponible ({_e}) - usando IntTFHKA.exe")
+from tfhka import Tfhka, parse_s1
 
 app = Flask(__name__)
 
-# Lock global: serializa todas las invocaciones de IntTFHKA.exe.
-# Flask es multi-threaded; dos procesos IntTFHKA.exe simultáneos compiten
-# por el puerto COM y causan Error 128.
-_INTTFHKA_LOCK = threading.Lock()
-
-# Obtener el directorio base del script
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Directorio runtime escribible. En producción (Electron empaquetado) BASE_DIR vive
-# dentro de Program Files y no es escribible. El wrapper Electron debe pasarnos
-# FISCAL_RUNTIME_DIR (típicamente %APPDATA%/TitanioPOS/fiscal). En desarrollo
-# caemos al propio BASE_DIR para no cambiar el comportamiento.
+
+# --------------------------------------------------------------------------
+#  Runtime dir escribible (en produccion BASE_DIR vive en Program Files)
+# --------------------------------------------------------------------------
 def _resolve_runtime_dir():
     env_dir = os.environ.get('FISCAL_RUNTIME_DIR', '').strip()
     if env_dir:
         try:
             os.makedirs(env_dir, exist_ok=True)
-            # Verificar escritura
             test_path = os.path.join(env_dir, '.write_test')
             with open(test_path, 'w') as f:
                 f.write('ok')
@@ -90,138 +63,83 @@ def _resolve_runtime_dir():
             print(f"[FISCAL] FISCAL_RUNTIME_DIR no escribible ({env_dir}): {e}. Usando BASE_DIR.")
     return BASE_DIR
 
+
 RUNTIME_DIR = _resolve_runtime_dir()
+DATA_DIR = os.path.join(RUNTIME_DIR, 'data')
+os.makedirs(DATA_DIR, exist_ok=True)
 print(f"[FISCAL] RUNTIME_DIR: {RUNTIME_DIR}")
 
-# Directorio de datos (para archivos temporales y de estado)
-DATA_DIR = os.path.join(RUNTIME_DIR, 'data')
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR)
+PUERTO = int(os.environ.get('FISCAL_SERVER_PORT', 3000))
 
-# Ruta del ejecutable IntTFHKA - configurable por PC via .env o endpoint /fiscal/config/programa
-def get_programa_path():
-    """Obtiene la ruta absoluta del ejecutable IntTFHKA.exe"""
-    # 1. Variable de entorno INTFHKA_PATH (configurable por PC)
-    env_path = os.environ.get('INTFHKA_PATH', '')
-    if env_path:
-        # Siempre resolver a ruta absoluta usando BASE_DIR como referencia
-        if not os.path.isabs(env_path):
-            env_path = os.path.abspath(os.path.join(BASE_DIR, env_path))
-        if os.path.exists(env_path):
-            return env_path
-    
-    # 2. SIEMPRE usar la carpeta del servidor (junto a fiscal.py)
-    # Esto asegura que Factura.txt se escriba en la ubicación correcta
-    local_path = os.path.abspath(os.path.join(BASE_DIR, 'IntTFHKA.exe'))
-    return local_path  # Siempre usar esta ruta para mantener consistencia
 
-def get_programa_dir():
-    """Obtiene el directorio donde está IntTFHKA.exe"""
-    return os.path.dirname(get_programa_path())
-
+# --------------------------------------------------------------------------
+#  Puerto COM (Puerto.dat)  y  factura de auditoria (Factura.txt)
+# --------------------------------------------------------------------------
 def get_puerto_dat_path():
-    """Obtiene la ruta del archivo Puerto.dat.
-    Prioriza RUNTIME_DIR (escribible). Si no existe ahí pero sí en programa_dir
-    (legado), usa el de programa_dir para retro-compatibilidad.
-    """
     runtime_path = os.path.join(RUNTIME_DIR, 'Puerto.dat')
     if os.path.exists(runtime_path):
         return runtime_path
-    legacy_path = os.path.join(get_programa_dir(), 'Puerto.dat')
+    legacy_path = os.path.join(BASE_DIR, 'Puerto.dat')
     if os.path.exists(legacy_path) and RUNTIME_DIR != BASE_DIR:
         return legacy_path
     return runtime_path
 
+
 def get_factura_path():
-    """Obtiene la ruta del archivo Factura.txt (en RUNTIME_DIR escribible)"""
     return os.path.join(RUNTIME_DIR, 'Factura.txt')
 
-def get_retorno_path():
-    """Obtiene la ruta del archivo Retorno.txt"""
-    return os.path.join(get_programa_dir(), 'Retorno.txt')
-
-def get_status_error_path():
-    """Obtiene la ruta del archivo Status_Error.txt"""
-    return os.path.join(get_programa_dir(), 'Status_Error.txt')
 
 def configurar_puerto_com(puerto):
-    """Configura el puerto COM en Puerto.dat"""
     try:
-        puerto_path = get_puerto_dat_path()
-        with open(puerto_path, 'w') as f:
+        with open(get_puerto_dat_path(), 'w') as f:
             f.write(puerto)
-        print(f"[FISCAL] Puerto COM configurado: {puerto} en {puerto_path}")
+        print(f"[FISCAL] Puerto COM configurado: {puerto}")
         return True
     except Exception as e:
         print(f"[FISCAL] Error configurando puerto: {e}")
         return False
 
+
 def leer_puerto_com():
-    """Lee el puerto COM actual desde Puerto.dat"""
     try:
-        puerto_path = get_puerto_dat_path()
-        if os.path.exists(puerto_path):
-            with open(puerto_path, 'r') as f:
+        p = get_puerto_dat_path()
+        if os.path.exists(p):
+            with open(p, 'r') as f:
                 return f.read().strip()
         return None
     except Exception as e:
         print(f"[FISCAL] Error leyendo puerto: {e}")
         return None
 
-def leer_retorno():
-    """Lee el contenido del archivo Retorno.txt"""
-    try:
-        retorno_path = get_retorno_path()
-        if os.path.exists(retorno_path):
-            with open(retorno_path, 'r', encoding='utf-8', errors='ignore') as f:
-                return f.read().strip()
-        return None
-    except Exception as e:
-        print(f"[FISCAL] Error leyendo retorno: {e}")
-        return None
 
-def leer_status_error():
-    """Lee el contenido del archivo Status_Error.txt"""
-    try:
-        status_path = get_status_error_path()
-        if os.path.exists(status_path):
-            with open(status_path, 'r', encoding='utf-8', errors='ignore') as f:
-                return f.read().strip()
-        return None
-    except Exception as e:
-        print(f"[FISCAL] Error leyendo status_error: {e}")
-        return None
+def _nueva_impresora():
+    """Instancia Tfhka con el puerto configurado. Devuelve (impresora, error)."""
+    puerto = leer_puerto_com()
+    if not puerto:
+        return None, "Puerto COM no configurado"
+    return Tfhka(port=puerto), None
 
-RUTA_PROGRAMA = get_programa_path()
-print(f"[FISCAL] IntTFHKA.exe path: {RUTA_PROGRAMA} (exists: {os.path.exists(RUTA_PROGRAMA)})")
+
 print(f"[FISCAL] Puerto.dat path: {get_puerto_dat_path()}")
 print(f"[FISCAL] Puerto COM actual: {leer_puerto_com()}")
 
-# Cola thread-safe para procesar peticiones
+
+# --------------------------------------------------------------------------
+#  Cola secuencial + anti-duplicados (para impresion de facturas)
+# --------------------------------------------------------------------------
 cola_fiscal = queue.Queue()
-# Lock para asegurar que solo un proceso fiscal se ejecute a la vez
 lock_fiscal = threading.Lock()
-# Diccionario para almacenar el estado de los trabajos
 trabajos_estado = {}
 
-# Almacén para IDs de caja ya ejecutados (para evitar doble ejecución)
 ids_caja_ejecutados = set()
-# Archivo para persistir los IDs ejecutados
 ARCHIVO_IDS_EJECUTADOS = os.path.join(DATA_DIR, "ids_caja_ejecutados.txt")
 
-# Archivo para facturas temporales - DEBE estar en el mismo directorio que IntTFHKA.exe
-# Ya no usamos DATA_DIR para Factura.txt, se usa get_factura_path()
-
-# Sistema anti-duplicados
-peticiones_procesadas = {}  # hash_peticion -> {"timestamp": datetime, "job_id": str, "estado": str}
+peticiones_procesadas = {}
 lock_duplicados = threading.Lock()
-TIEMPO_EXPIRACION_DUPLICADOS = 300  # 5 minutos
+TIEMPO_EXPIRACION_DUPLICADOS = 300
 
-# Puerto configurable via variable de entorno
-PUERTO = int(os.environ.get('FISCAL_SERVER_PORT', 3000))
 
 def cargar_ids_ejecutados():
-    """Carga los IDs de caja ya ejecutados desde archivo"""
     global ids_caja_ejecutados
     try:
         if os.path.exists(ARCHIVO_IDS_EJECUTADOS):
@@ -231,9 +149,8 @@ def cargar_ids_ejecutados():
         print(f"Error cargando IDs ejecutados: {e}")
         ids_caja_ejecutados = set()
 
+
 def guardar_id_ejecutado(id_caja):
-    """Guarda un ID de caja como ejecutado"""
-    global ids_caja_ejecutados
     try:
         ids_caja_ejecutados.add(id_caja)
         with open(ARCHIVO_IDS_EJECUTADOS, 'a') as f:
@@ -241,827 +158,821 @@ def guardar_id_ejecutado(id_caja):
     except Exception as e:
         print(f"Error guardando ID ejecutado: {e}")
 
+
 def generar_hash_peticion(parametros, type_param, file_param):
-    """Genera un hash único para identificar peticiones duplicadas"""
     try:
-        datos_peticion = {
-            "parametros": parametros,
-            "type": type_param,
-            "file": file_param
-        }
-        datos_str = json.dumps(datos_peticion, sort_keys=True, ensure_ascii=False)
-        return hashlib.md5(datos_str.encode('utf-8')).hexdigest()
+        datos = {"parametros": parametros, "type": type_param, "file": file_param}
+        return hashlib.md5(json.dumps(datos, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
     except Exception as e:
-        print(f"Error generando hash de petición: {e}")
+        print(f"Error generando hash: {e}")
         return None
 
+
 def limpiar_peticiones_expiradas():
-    """Limpia peticiones antigas del registro de duplicados"""
-    global peticiones_procesadas
     try:
         with lock_duplicados:
             ahora = datetime.now()
-            peticiones_expiradas = []
-            
-            for hash_peticion, info in peticiones_procesadas.items():
-                tiempo_transcurrido = (ahora - info["timestamp"]).total_seconds()
-                if tiempo_transcurrido > TIEMPO_EXPIRACION_DUPLICADOS:
-                    peticiones_expiradas.append(hash_peticion)
-            
-            for hash_peticion in peticiones_expiradas:
-                del peticiones_procesadas[hash_peticion]
-                
-            if peticiones_expiradas:
-                print(f"Limpiadas {len(peticiones_expiradas)} peticiones expiradas del registro anti-duplicados")
-                
+            expiradas = [h for h, i in peticiones_procesadas.items()
+                         if (ahora - i["timestamp"]).total_seconds() > TIEMPO_EXPIRACION_DUPLICADOS]
+            for h in expiradas:
+                del peticiones_procesadas[h]
     except Exception as e:
-        print(f"Error limpiando peticiones expiradas: {e}")
+        print(f"Error limpiando peticiones: {e}")
 
-def verificar_peticion_duplicada(hash_peticion):
-    """Verifica si una petición ya está siendo procesada o fue procesada recientemente"""
-    if not hash_peticion:
+
+def verificar_peticion_duplicada(h):
+    if not h:
         return False, None
-        
     with lock_duplicados:
-        if hash_peticion in peticiones_procesadas:
-            info = peticiones_procesadas[hash_peticion]
-            return True, info
+        if h in peticiones_procesadas:
+            return True, peticiones_procesadas[h]
     return False, None
 
-def registrar_peticion(hash_peticion, job_id, estado="pendiente"):
-    """Registra una nueva petición en el sistema anti-duplicados"""
-    if not hash_peticion:
-        return
-        
-    with lock_duplicados:
-        peticiones_procesadas[hash_peticion] = {
-            "timestamp": datetime.now(),
-            "job_id": job_id,
-            "estado": estado
-        }
 
-def actualizar_estado_peticion(hash_peticion, nuevo_estado):
-    """Actualiza el estado de una petición en el registro anti-duplicados"""
-    if not hash_peticion:
+def registrar_peticion(h, job_id, estado="pendiente"):
+    if not h:
         return
-        
     with lock_duplicados:
-        if hash_peticion in peticiones_procesadas:
-            peticiones_procesadas[hash_peticion]["estado"] = nuevo_estado
+        peticiones_procesadas[h] = {"timestamp": datetime.now(), "job_id": job_id, "estado": estado}
+
+
+def actualizar_estado_peticion(h, estado):
+    if not h:
+        return
+    with lock_duplicados:
+        if h in peticiones_procesadas:
+            peticiones_procesadas[h]["estado"] = estado
+
 
 def extraer_id_caja(parametros):
-    """Extrae el ID de caja de los parámetros que empieza con 'i05Caja:' y retorna también la línea completa"""
+    """Extrae el ID de caja de una linea 'i05Caja:...' para el anti-duplicados."""
     try:
-        linea_completa = None
-        id_caja = None
-        
         if isinstance(parametros, str):
             try:
                 parametros = json.loads(parametros)
-            except:
-                if "i05Caja:" in parametros:
-                    match = re.search(r'i05Caja:([^,\]\s]+)', parametros)
-                    if match:
-                        id_caja = match.group(1)
-                        linea_match = re.search(r'[^,\[\]]*i05Caja:[^,\[\]]*', parametros)
-                        if linea_match:
-                            linea_completa = linea_match.group(0).strip()
-                return {"id_caja": id_caja, "linea_completa": linea_completa}
-
+            except Exception:
+                m = re.search(r'i05Caja:([^,\]\s]+)', parametros)
+                if m:
+                    return {"id_caja": m.group(1), "linea_completa": m.group(0)}
+                return {"id_caja": None, "linea_completa": None}
         if isinstance(parametros, list):
             for item in parametros:
                 if isinstance(item, str) and "i05Caja:" in item:
                     if item.startswith("i05Caja:"):
-                        id_caja = item.replace("i05Caja:", "")
-                        linea_completa = item
-                    else:
-                        match = re.search(r'i05Caja:([^,\]\s]+)', item)
-                        if match:
-                            id_caja = match.group(1)
-                            linea_completa = item
-                    break
-        
-        return {"id_caja": id_caja, "linea_completa": linea_completa}
+                        return {"id_caja": item.replace("i05Caja:", ""), "linea_completa": item}
+                    m = re.search(r'i05Caja:([^,\]\s]+)', item)
+                    if m:
+                        return {"id_caja": m.group(1), "linea_completa": item}
+        return {"id_caja": None, "linea_completa": None}
     except Exception as e:
         print(f"Error extrayendo ID de caja: {e}")
         return {"id_caja": None, "linea_completa": None}
 
+
+def _lineas_de(parametros):
+    """Normaliza `parametros` (lista o JSON string de lista) a lista de strings."""
+    if isinstance(parametros, str):
+        try:
+            parametros = json.loads(parametros)
+        except Exception:
+            return [parametros]
+    if isinstance(parametros, list):
+        return [str(x) for x in parametros]
+    return [str(parametros)]
+
+
+_REASON_MSG = {
+    "open_failed": "No se pudo abrir el puerto de la impresora fiscal",
+    "no_response": "La impresora fiscal no responde (revise cable/encendido)",
+    "paper": "La impresora fiscal no tiene papel",
+    "nak_line": "La impresora rechazó una línea del documento",
+    "warn_not_closed": "El documento pudo no haber cerrado correctamente",
+}
+
+
+def _mensaje_fallo_impresion(diag):
+    base = _REASON_MSG.get(diag.get("reason"), "Error imprimiendo el documento")
+    st = diag.get("pre_status") or diag.get("post_status")
+    if diag.get("reason") == "nak_line" and diag.get("line"):
+        base += f" (línea: {diag['line']!r})"
+    if st and st.get("error") not in (None, "00"):
+        base += f" — estado {st.get('status')}/{st.get('error')}: {st.get('error_description')}"
+    return base
+
+
+def _log_fiscal_attempt(tipo, id_caja, diag):
+    """Registra cada intento de impresión (con estado pre/post) para post-mortem.
+
+    Que nunca vuelva a ser 'sin explicación': queda en data/fiscal_intentos_YYYYMMDD.log.
+    """
+    try:
+        ahora = datetime.now()
+        path = os.path.join(DATA_DIR, f"fiscal_intentos_{ahora.strftime('%Y%m%d')}.log")
+        entry = {"ts": ahora.isoformat(), "tipo": tipo, "id_caja": id_caja,
+                 "ok": diag.get("ok"), "reason": diag.get("reason"),
+                 "recovered_open_doc": diag.get("recovered_open_doc"),
+                 "pre_status": diag.get("pre_status"), "post_status": diag.get("post_status"),
+                 "line": diag.get("line"), "sent": diag.get("sent")}
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"[FISCAL] No se pudo escribir log de intento: {e}")
+
+
+def ejecutar_programa_fiscal(parametros, type_param, file_param):
+    """Imprime factura/nota o envia un comando de reporte. Usa tfhka directo."""
+    try:
+        info = extraer_id_caja(parametros)
+        id_caja, linea_completa = info["id_caja"], info["linea_completa"]
+        fecha = datetime.now().isoformat()
+
+        if id_caja and id_caja in ids_caja_ejecutados:
+            return {"status": "ok", "message": f"ID {id_caja} ya ejecutado", "id_caja": id_caja,
+                    "linea_completa": linea_completa, "fecha_hora": fecha, "ejecutado_previamente": True}
+
+        impresora, err = _nueva_impresora()
+        if err:
+            return {"status": "error", "message": err}
+
+        if type_param in ("factura", "notacredito"):
+            lineas = _lineas_de(parametros)
+
+            # NOTA DE CRÉDITO: la HKA exige la referencia COMPLETA de la factura
+            # original (iF* numérico + iD* + iI* serial) para abrir el documento;
+            # sin iI* rechaza la primera línea del cuerpo (visto en HW 15-07-2026:
+            # NAK en 'A<motivo>' en toda NC sin serial). Si el frontend/config no
+            # mandó iI*, inyectamos el serial de ESTA máquina leyendo S1 (caso
+            # normal: la factura original salió de esta misma caja).
+            if type_param == "notacredito" and not any(str(l).startswith("iI*") for l in lineas):
+                try:
+                    s1 = impresora.get_s1_data()
+                    serial = (s1 or {}).get("registered_machine_number")
+                    if serial and str(serial).strip():
+                        idx = next((i + 1 for i, l in enumerate(lineas)
+                                    if str(l).startswith("iD*")), 0)
+                        lineas.insert(idx, f"iI*{str(serial).strip()}")
+                        print(f"[FISCAL] NC sin iI*: serial {serial} inyectado desde S1")
+                    else:
+                        print("[FISCAL] NC sin iI* y S1 sin serial: se envia tal cual")
+                except Exception as e:
+                    print(f"[FISCAL] NC sin iI*: no se pudo leer S1 ({e}); se envia tal cual")
+
+            # Guardar copia de auditoria de lo que se envio.
+            try:
+                fp = get_factura_path()
+                if os.path.exists(fp):
+                    os.remove(fp)
+                with open(fp, "w", encoding='latin-1') as f:
+                    for l in lineas:
+                        if str(l).strip():
+                            f.write(f"{str(l).rstrip()}\n")
+            except Exception as e:
+                print(f"[FISCAL] No se pudo escribir Factura.txt de auditoria: {e}")
+
+            # Flujo con diagnóstico: recupera doc abierto, valida papel/comunicación,
+            # envía con ACK+reintento y confirma cierre. NUNCA da éxito silencioso.
+            diag = impresora.print_invoice(lineas)
+            _log_fiscal_attempt(type_param, id_caja, diag)  # post-mortem persistente
+            if diag.get("ok"):
+                if id_caja:
+                    guardar_id_ejecutado(id_caja)
+                # SENIAT: capturar el número fiscal asignado + serial de la máquina
+                # (leyendo S1). Es lo que una futura nota de crédito debe referenciar.
+                numero_fiscal = None
+                maquina = None
+                try:
+                    s1 = impresora.get_s1_data()
+                    if s1:
+                        maquina = {"serial": s1.get("registered_machine_number"),
+                                   "rif": s1.get("rif"),
+                                   "fecha_hora": s1.get("current_printer_datetime")}
+                        numero_fiscal = (s1.get("last_credit_note_number")
+                                         if type_param == "notacredito"
+                                         else s1.get("last_invoice_number"))
+                except Exception:
+                    pass
+                return {"status": "ok", "message": "Documento impreso correctamente",
+                        "id_caja": id_caja, "linea_completa": linea_completa, "fecha_hora": fecha,
+                        "puerto_com": impresora.port, "diagnostico": diag,
+                        "numero_fiscal": numero_fiscal, "machine": maquina}
+            return {"status": "error",
+                    "message": _mensaje_fallo_impresion(diag),
+                    "reason": diag.get("reason"), "printer_status": diag.get("pre_status") or diag.get("post_status"),
+                    "id_caja": id_caja, "fecha_hora": fecha, "puerto_com": impresora.port,
+                    "diagnostico": diag}
+
+        elif type_param == "reportefiscal":
+            cmd = parametros if isinstance(parametros, str) else str(parametros)
+            ok = impresora.send_cmd(cmd)
+            return {"status": "ok" if ok else "error",
+                    "message": "Comando ejecutado" if ok else f"Error en comando: {impresora.last_error}",
+                    "printer_status": impresora.get_printer_status() if not ok else None,
+                    "fecha_hora": fecha, "puerto_com": impresora.port}
+
+        elif type_param == "documentonofiscal":
+            # Presupuesto / comprobante interno: texto libre, NO es documento fiscal.
+            lineas = _lineas_de(parametros)
+            diag = impresora.print_non_fiscal(lineas)
+            _log_fiscal_attempt(type_param, id_caja, diag)
+            if diag.get("ok"):
+                if id_caja:
+                    guardar_id_ejecutado(id_caja)
+                return {"status": "ok", "message": "Documento no fiscal impreso",
+                        "id_caja": id_caja, "linea_completa": linea_completa, "fecha_hora": fecha,
+                        "puerto_com": impresora.port, "diagnostico": diag}
+            return {"status": "error", "message": _mensaje_fallo_impresion(diag),
+                    "reason": diag.get("reason"), "printer_status": diag.get("pre_status") or diag.get("post_status"),
+                    "id_caja": id_caja, "fecha_hora": fecha, "puerto_com": impresora.port, "diagnostico": diag}
+        else:
+            return {"status": "error", "message": f"Tipo no soportado: {type_param}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 def procesar_cola_fiscal():
-    """Procesa la cola de peticiones fiscales de forma secuencial"""
     while True:
         try:
             trabajo = cola_fiscal.get(timeout=1)
-            
             if trabajo is None:
                 break
-                
             job_id = trabajo['job_id']
-            parametros = trabajo['parametros']
-            type_param = trabajo['type']
-            file_param = trabajo['file']
-            hash_peticion = trabajo.get('hash_peticion')
-            
+            h = trabajo.get('hash_peticion')
             trabajos_estado[job_id]['estado'] = 'procesando'
             trabajos_estado[job_id]['fecha_inicio'] = datetime.now()
-            
-            actualizar_estado_peticion(hash_peticion, 'procesando')
-            
+            actualizar_estado_peticion(h, 'procesando')
             try:
                 with lock_fiscal:
-                    resultado = ejecutar_programa_fiscal(parametros, type_param, file_param)
-                    
+                    resultado = ejecutar_programa_fiscal(trabajo['parametros'], trabajo['type'], trabajo['file'])
                 if resultado['status'] == 'ok':
                     trabajos_estado[job_id]['estado'] = 'completado'
                     trabajos_estado[job_id]['resultado'] = resultado
-                    actualizar_estado_peticion(hash_peticion, 'completado')
+                    actualizar_estado_peticion(h, 'completado')
                 else:
                     trabajos_estado[job_id]['estado'] = 'error'
                     trabajos_estado[job_id]['error'] = resultado['message']
-                    actualizar_estado_peticion(hash_peticion, 'error')
-                    
+                    trabajos_estado[job_id]['resultado'] = resultado
+                    actualizar_estado_peticion(h, 'error')
             except Exception as e:
                 trabajos_estado[job_id]['estado'] = 'error'
                 trabajos_estado[job_id]['error'] = str(e)
-                actualizar_estado_peticion(hash_peticion, 'error')
-                
+                actualizar_estado_peticion(h, 'error')
             trabajos_estado[job_id]['fecha_fin'] = datetime.now()
             cola_fiscal.task_done()
-            
         except queue.Empty:
             continue
         except Exception as e:
             print(f"Error en procesador de cola: {e}")
             continue
 
-def ejecutar_con_hka_serial(parametros, type_param, file_param, puerto, id_caja, linea_completa, fecha_hora_ejecucion):
-    """Ejecuta comando fiscal usando comunicación serial directa (sin IntTFHKA.exe)"""
-    try:
-        print(f"[{fecha_hora_ejecucion}] Usando hka_serial en {puerto}")
-        
-        if type_param in ["factura", "notacredito"]:
-            # Escribir archivo de factura
-            archivo_factura = get_factura_path()
-            
-            # CRÍTICO: Eliminar archivo anterior para evitar cache
-            if os.path.exists(archivo_factura):
-                os.remove(archivo_factura)
-                print(f"[{fecha_hora_ejecucion}] Archivo anterior eliminado: {archivo_factura}")
-            
-            print(f"[{fecha_hora_ejecucion}] Escribiendo factura en: {archivo_factura}")
-            
-            with open(archivo_factura, "w", encoding='latin-1') as fp:
-                if isinstance(parametros, str):
-                    try:
-                        parametros = json.loads(parametros)
-                    except:
-                        pass
 
-                if isinstance(parametros, list):
-                    for i, linea in enumerate(parametros):
-                        linea_str = str(linea).rstrip()
-                        if linea_str:
-                            fp.write(f"{linea_str}\n")
-                            print(f"[{fecha_hora_ejecucion}] Línea {i}: {linea_str}")
-                else:
-                    fp.write(str(parametros))
-            
-            # Enviar archivo usando hka_serial
-            result = send_fiscal_file(puerto, archivo_factura)
-            
-            if result['success']:
-                if id_caja:
-                    guardar_id_ejecutado(id_caja)
-                return {
-                    "status": "ok",
-                    "message": "Factura impresa correctamente (hka_serial)",
-                    "method": "hka_serial",
-                    "result": result['result'],
-                    "id_caja": id_caja,
-                    "linea_completa": linea_completa,
-                    "fecha_hora": fecha_hora_ejecucion,
-                    "puerto_com": puerto
-                }
-            else:
-                return {
-                    "status": "error",
-                    "message": f"Error imprimiendo factura: {result['result']}",
-                    "method": "hka_serial",
-                    "id_caja": id_caja,
-                    "fecha_hora": fecha_hora_ejecucion,
-                    "puerto_com": puerto
-                }
-                
-        elif type_param == "reportefiscal":
-            # Enviar comando de reporte
-            result = hka_send_command(puerto, parametros)
-            
-            if result['success']:
-                return {
-                    "status": "ok",
-                    "message": "Reporte ejecutado correctamente (hka_serial)",
-                    "method": "hka_serial",
-                    "response": result['response'],
-                    "fecha_hora": fecha_hora_ejecucion,
-                    "puerto_com": puerto
-                }
-            else:
-                return {
-                    "status": "error",
-                    "message": f"Error en reporte: {result.get('error', 'Unknown')}",
-                    "method": "hka_serial",
-                    "fecha_hora": fecha_hora_ejecucion,
-                    "puerto_com": puerto
-                }
-        else:
-            return {"status": "error", "message": f"Tipo de operación no soportado: {type_param}"}
-            
-    except Exception as e:
-        return {"status": "error", "message": f"Error hka_serial: {str(e)}"}
-
-def ejecutar_programa_fiscal(parametros, type_param, file_param):
-    """Ejecuta el programa fiscal y espera a que termine"""
-    try:
-        id_caja_info = extraer_id_caja(parametros)
-        id_caja = id_caja_info["id_caja"]
-        linea_completa = id_caja_info["linea_completa"]
-        fecha_hora_ejecucion = datetime.now().isoformat()
-        
-        if id_caja and id_caja in ids_caja_ejecutados:
-            return {
-                "status": "ok", 
-                "message": f"ID de caja {id_caja} ya fue ejecutado anteriormente",
-                "id_caja": id_caja,
-                "linea_completa": linea_completa,
-                "fecha_hora": fecha_hora_ejecucion,
-                "ejecutado_previamente": True,
-                "codigo_retorno": 0
-            }
-        
-        puerto = leer_puerto_com()
-        if not puerto:
-            return {"status": "error", "message": "Puerto COM no configurado"}
-        
-        # USAR COMUNICACIÓN SERIAL DIRECTA SI ESTÁ DISPONIBLE
-        if HKA_SERIAL_AVAILABLE:
-            return ejecutar_con_hka_serial(parametros, type_param, file_param, puerto, id_caja, linea_completa, fecha_hora_ejecucion)
-        
-        # FALLBACK: Usar IntTFHKA.exe
-        ruta_programa = get_programa_path()
-        programa_dir = get_programa_dir()
-        
-        if not os.path.exists(ruta_programa):
-            return {"status": "error", "message": f"Programa no encontrado en: {ruta_programa}"}
-        
-        archivo_factura = get_factura_path()
-        
-        if type_param in ["factura", "notacredito"]:
-            # CRÍTICO: Eliminar archivo anterior para evitar cache
-            if os.path.exists(archivo_factura):
-                os.remove(archivo_factura)
-                print(f"[{fecha_hora_ejecucion}] Archivo anterior eliminado: {archivo_factura}")
-            
-            print(f"[{fecha_hora_ejecucion}] Escribiendo factura en: {archivo_factura}")
-            
-            with open(archivo_factura, "w", encoding='utf-8') as fp:
-                if isinstance(parametros, str):
-                    try:
-                        parametros = json.loads(parametros)
-                    except:
-                        pass
-
-                if isinstance(parametros, list):
-                    for i, linea in enumerate(parametros):
-                        linea_str = str(linea).rstrip()
-                        if linea_str:
-                            fp.write(f"{linea_str}\n")
-                            print(f"[{fecha_hora_ejecucion}] Línea {i}: {linea_str}")
-                else:
-                    fp.write(str(parametros))
-
-            # CRÍTICO: IntTFHKA.exe lee Factura.txt de SU directorio (CWD),
-            # no del RUNTIME_DIR donde lo escribimos. Copiarlo o imprimiría
-            # un archivo viejo (p.ej. el de la prueba).
-            import shutil as _shutil
-            exe_factura = os.path.join(programa_dir, 'Factura.txt')
-            if os.path.abspath(archivo_factura) != os.path.abspath(exe_factura):
-                _shutil.copy2(archivo_factura, exe_factura)
-                print(f"[{fecha_hora_ejecucion}] Factura.txt copiado a: {exe_factura}")
-
-            parametros = "SendFileCmd(Factura.txt)"
-            
-        elif type_param == "reportefiscal":
-            parametros = f"SendCmd({parametros})"
-
-        comando_str = f'IntTFHKA.exe {parametros}'
-        
-        print(f"[{fecha_hora_ejecucion}] Ejecutando: {comando_str}")
-        print(f"[{fecha_hora_ejecucion}] CWD: {programa_dir}")
-        print(f"[{fecha_hora_ejecucion}] Puerto COM: {puerto}")
-        
-        proceso = subprocess.Popen(
-            comando_str, 
-            shell=True, 
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE,
-            cwd=programa_dir
-        )
-        stdout, stderr = proceso.communicate(timeout=60)
-        
-        salida_fiscal = stdout.decode('utf-8', errors='ignore').strip() if stdout else ""
-        error_fiscal = stderr.decode('utf-8', errors='ignore').strip() if stderr else ""
-        
-        # Leer archivos de respuesta de IntTFHKA
-        retorno_contenido = leer_retorno()
-        status_error_contenido = leer_status_error()
-        
-        print(f"[{fecha_hora_ejecucion}] Return code: {proceso.returncode}")
-        print(f"[{fecha_hora_ejecucion}] Stdout: {salida_fiscal}")
-        print(f"[{fecha_hora_ejecucion}] Retorno.txt: {retorno_contenido}")
-        print(f"[{fecha_hora_ejecucion}] Status_Error.txt: {status_error_contenido}")
-        if error_fiscal:
-            print(f"[{fecha_hora_ejecucion}] Stderr: {error_fiscal}")
-        
-        # Códigos de retorno de IntTFHKA:
-        # 0 = Error o sin respuesta
-        # 3 = Comando ejecutado (factura impresa)
-        # 4 = Comando ejecutado con advertencia
-        # 5 = Comando ejecutado
-        if proceso.returncode in [3, 4, 5] and id_caja:
-            print(f"[{fecha_hora_ejecucion}] Retorno {proceso.returncode} - Guardando ID de caja: {id_caja}")
-            guardar_id_ejecutado(id_caja)
-        
-        # Considerar exitoso si returncode es 3, 4 o 5
-        if proceso.returncode in [3, 4, 5]:
-            return {
-                "status": "ok", 
-                "message": "Factura impresa correctamente",
-                "salida_fiscal": salida_fiscal,
-                "retorno_txt": retorno_contenido,
-                "status_error_txt": status_error_contenido,
-                "codigo_retorno": proceso.returncode,
-                "id_caja": id_caja,
-                "linea_completa": linea_completa,
-                "fecha_hora": fecha_hora_ejecucion
-            }
-        elif proceso.returncode == 0:
-            # Retorno 0 generalmente significa error o timeout
-            return {
-                "status": "error", 
-                "message": f"Error de comunicación con impresora fiscal. Retorno: {retorno_contenido}",
-                "salida_fiscal": salida_fiscal,
-                "retorno_txt": retorno_contenido,
-                "status_error_txt": status_error_contenido,
-                "codigo_retorno": proceso.returncode,
-                "id_caja": id_caja,
-                "linea_completa": linea_completa,
-                "fecha_hora": fecha_hora_ejecucion
-            }
-        else:
-            return {
-                "status": "error", 
-                "message": f"Error en ejecución. Código: {proceso.returncode}. {error_fiscal if error_fiscal else retorno_contenido}",
-                "salida_fiscal": salida_fiscal,
-                "retorno_txt": retorno_contenido,
-                "status_error_txt": status_error_contenido,
-                "error_fiscal": error_fiscal,
-                "codigo_retorno": proceso.returncode,
-                "id_caja": id_caja,
-                "linea_completa": linea_completa,
-                "fecha_hora": fecha_hora_ejecucion
-            }
-            
-    except subprocess.TimeoutExpired:
-        return {
-            "status": "error", 
-            "message": "Timeout: La impresora fiscal no respondió en 60 segundos",
-            "fecha_hora": datetime.now().isoformat()
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
+# --------------------------------------------------------------------------
+#  Endpoints: impresion en cola (factura/nota/reporte)
+# --------------------------------------------------------------------------
 @app.route('/fiscal', methods=['POST'])
 def agregar_a_cola():
-    """Agrega la petición a la cola y devuelve un ID de trabajo"""
     try:
         limpiar_peticiones_expiradas()
-        
         data = request.get_json()
         parametros = data.get("parametros", "")
         type_param = data.get("type", "")
         file_param = data.get("file", "")
-        
-        hash_peticion = generar_hash_peticion(parametros, type_param, file_param)
-        
-        es_duplicada, info_duplicada = verificar_peticion_duplicada(hash_peticion)
 
-        if es_duplicada:
-            return jsonify({
-                "status": "duplicada", 
-                "message": f"Petición duplicada detectada. Job ID original: {info_duplicada['job_id']}",
-                "job_id_original": info_duplicada['job_id'],
-                "estado_original": info_duplicada['estado'],
-                "timestamp_original": info_duplicada['timestamp'].isoformat(),
-                "hash_peticion": hash_peticion
-            }), 409
-        
+        h = generar_hash_peticion(parametros, type_param, file_param)
+        es_dup, info = verificar_peticion_duplicada(h)
+        if es_dup:
+            return jsonify({"status": "duplicada",
+                            "message": f"Peticion duplicada. Job original: {info['job_id']}",
+                            "job_id_original": info['job_id'], "estado_original": info['estado'],
+                            "hash_peticion": h}), 409
+
         job_id = str(uuid.uuid4())
-        
-        registrar_peticion(hash_peticion, job_id, "pendiente")
-        
-        trabajo = {
-            'job_id': job_id,
-            'parametros': parametros,
-            'type': type_param,
-            'file': file_param,
-            'timestamp': datetime.now(),
-            'hash_peticion': hash_peticion
-        }
-        
-        trabajos_estado[job_id] = {
-            'estado': 'pendiente',
-            'fecha_creacion': datetime.now(),
-            'trabajo': trabajo,
-            'hash_peticion': hash_peticion
-        }
-        
+        registrar_peticion(h, job_id, "pendiente")
+        trabajo = {'job_id': job_id, 'parametros': parametros, 'type': type_param,
+                   'file': file_param, 'timestamp': datetime.now(), 'hash_peticion': h}
+        trabajos_estado[job_id] = {'estado': 'pendiente', 'fecha_creacion': datetime.now(),
+                                   'trabajo': trabajo, 'hash_peticion': h}
         cola_fiscal.put(trabajo)
-        
-        return jsonify({
-            "status": "ok", 
-            "message": "Petición agregada a la cola",
-            "job_id": job_id,
-            "posicion_cola": cola_fiscal.qsize(),
-            "hash_peticion": hash_peticion
-        })
-        
+        return jsonify({"status": "ok", "message": "Peticion agregada a la cola",
+                        "job_id": job_id, "posicion_cola": cola_fiscal.qsize(), "hash_peticion": h})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
 
 @app.route('/fiscal/estado/<job_id>', methods=['GET'])
 def obtener_estado(job_id):
-    """Obtiene el estado de un trabajo específico"""
     if job_id not in trabajos_estado:
         return jsonify({"status": "error", "message": "Trabajo no encontrado"}), 404
-    
-    trabajo = trabajos_estado[job_id]
-    return jsonify({
-        "job_id": job_id,
-        "estado": trabajo['estado'],
-        "fecha_creacion": trabajo['fecha_creacion'].isoformat(),
-        "fecha_inicio": trabajo.get('fecha_inicio', {}).isoformat() if trabajo.get('fecha_inicio') else None,
-        "fecha_fin": trabajo.get('fecha_fin', {}).isoformat() if trabajo.get('fecha_fin') else None,
-        "resultado": trabajo.get('resultado'),
-        "error": trabajo.get('error'),
-        "hash_peticion": trabajo.get('hash_peticion')
-    })
+    t = trabajos_estado[job_id]
+    return jsonify({"job_id": job_id, "estado": t['estado'],
+                    "fecha_creacion": t['fecha_creacion'].isoformat(),
+                    "fecha_inicio": t['fecha_inicio'].isoformat() if t.get('fecha_inicio') else None,
+                    "fecha_fin": t['fecha_fin'].isoformat() if t.get('fecha_fin') else None,
+                    "resultado": t.get('resultado'), "error": t.get('error'),
+                    "hash_peticion": t.get('hash_peticion')})
+
 
 @app.route('/fiscal/cola/estado', methods=['GET'])
 def estado_cola():
-    """Devuelve el estado general de la cola"""
-    pendientes = sum(1 for t in trabajos_estado.values() if t['estado'] == 'pendiente')
-    procesando = sum(1 for t in trabajos_estado.values() if t['estado'] == 'procesando')
-    completados = sum(1 for t in trabajos_estado.values() if t['estado'] == 'completado')
-    errores = sum(1 for t in trabajos_estado.values() if t['estado'] == 'error')
-    
-    with lock_duplicados:
-        duplicados_pendientes = sum(1 for info in peticiones_procesadas.values() if info['estado'] == 'pendiente')
-        duplicados_procesando = sum(1 for info in peticiones_procesadas.values() if info['estado'] == 'procesando')
-        duplicados_completados = sum(1 for info in peticiones_procesadas.values() if info['estado'] == 'completado')
-        duplicados_errores = sum(1 for info in peticiones_procesadas.values() if info['estado'] == 'error')
-        total_duplicados = len(peticiones_procesadas)
-    
-    return jsonify({
-        "cola_tamaño": cola_fiscal.qsize(),
-        "pendientes": pendientes,
-        "procesando": procesando,
-        "completados": completados,
-        "errores": errores,
-        "total_trabajos": len(trabajos_estado),
-        "ruta_programa": get_programa_path(),
-        "programa_existe": os.path.exists(get_programa_path()),
-        "sistema_antiduplicados": {
-            "total_peticiones_registradas": total_duplicados,
-            "pendientes": duplicados_pendientes,
-            "procesando": duplicados_procesando,
-            "completados": duplicados_completados,
-            "errores": duplicados_errores,
-            "tiempo_expiracion_segundos": TIEMPO_EXPIRACION_DUPLICADOS
-        }
-    })
+    def cnt(e):
+        return sum(1 for t in trabajos_estado.values() if t['estado'] == e)
+    return jsonify({"cola_tamano": cola_fiscal.qsize(), "pendientes": cnt('pendiente'),
+                    "procesando": cnt('procesando'), "completados": cnt('completado'),
+                    "errores": cnt('error'), "total_trabajos": len(trabajos_estado),
+                    "puerto_com": leer_puerto_com()})
 
+
+# --------------------------------------------------------------------------
+#  Endpoints: LECTURA de la fiscal (status / reportes / datos S*)
+# --------------------------------------------------------------------------
+@app.route('/fiscal/status', methods=['GET'])
+def fiscal_status():
+    imp, err = _nueva_impresora()
+    if err:
+        return jsonify({"status": "error", "message": err}), 400
+    return jsonify({"status": "ok", "printer_status": imp.get_printer_status(), "puerto_com": imp.port})
+
+
+@app.route('/fiscal/check', methods=['GET', 'POST'])
+def fiscal_check():
+    imp, err = _nueva_impresora()
+    if err:
+        return jsonify({"status": "error", "message": err}), 400
+    conectada = imp.check_fprinter()
+    return jsonify({"status": "ok" if conectada else "error",
+                    "printer_connected": conectada,
+                    "message": "Impresora conectada" if conectada else "Impresora no detectada",
+                    "error": imp.last_error if not conectada else None, "puerto_com": imp.port})
+
+
+@app.route('/fiscal/drawer', methods=['GET'])
+def fiscal_drawer():
+    imp, err = _nueva_impresora()
+    if err:
+        return jsonify({"status": "error", "message": err}), 400
+    return jsonify({"status": "ok", "drawer_open": imp.check_drawer(), "puerto_com": imp.port})
+
+
+@app.route('/fiscal/command', methods=['POST'])
+def fiscal_command():
+    """Envia un comando crudo y espera ACK (SendCmd)."""
+    imp, err = _nueva_impresora()
+    if err:
+        return jsonify({"status": "error", "message": err}), 400
+    cmd = (request.get_json() or {}).get("cmd", "")
+    if not cmd:
+        return jsonify({"status": "error", "message": "Falta 'cmd'"}), 400
+    ok = imp.send_cmd(cmd)
+    return jsonify({"status": "ok" if ok else "error", "acked": ok,
+                    "printer_status": imp.get_printer_status() if not ok else None, "cmd": cmd})
+
+
+@app.route('/fiscal/cancel', methods=['POST'])
+def fiscal_cancel():
+    """Cancela el documento fiscal en curso (SendCmd 7)."""
+    imp, err = _nueva_impresora()
+    if err:
+        return jsonify({"status": "error", "message": err}), 400
+    ok = imp.cancel_document()
+    return jsonify({"status": "ok" if ok else "error", "acked": ok})
+
+
+@app.route('/fiscal/sdata/<cmd>', methods=['GET'])
+def fiscal_sdata(cmd):
+    """Getter generico de status Sx (S1..S8, SG, SM, SR, SS...). Devuelve el payload crudo.
+
+    Si es S1, tambien lo devuelve parseado (RIF, serial, contadores).
+    """
+    imp, err = _nueva_impresora()
+    if err:
+        return jsonify({"status": "error", "message": err}), 400
+    if not re.match(r'^[A-Za-z0-9]{1,4}$', cmd):
+        return jsonify({"status": "error", "message": "Comando invalido"}), 400
+    raw = imp.get_status_data(cmd.upper())
+    if raw is None:
+        return jsonify({"status": "error", "message": "Sin respuesta de la impresora",
+                        "printer_status": imp.get_printer_status(), "cmd": cmd.upper()}), 502
+    resp = {"status": "ok", "cmd": cmd.upper(), "raw": raw}
+    if cmd.upper() == "S1":
+        resp["parsed"] = parse_s1(raw)
+    return jsonify(resp)
+
+
+@app.route('/fiscal/s1', methods=['GET'])
+def fiscal_s1():
+    """Datos de la maquina (S1): RIF, serial registrado, contadores, fecha/hora."""
+    imp, err = _nueva_impresora()
+    if err:
+        return jsonify({"status": "error", "message": err}), 400
+    data = imp.get_s1_data()
+    if data is None:
+        return jsonify({"status": "error", "message": "Sin respuesta",
+                        "printer_status": imp.get_printer_status()}), 502
+    return jsonify({"status": "ok", "s1": data})
+
+
+@app.route('/fiscal/report/x', methods=['GET'])
+def report_x():
+    """Lee (no imprime) el reporte X con totales del dia."""
+    imp, err = _nueva_impresora()
+    if err:
+        return jsonify({"status": "error", "message": err}), 400
+    data = imp.get_x_report()
+    if data is None:
+        return jsonify({"status": "error", "message": "Sin respuesta",
+                        "printer_status": imp.get_printer_status()}), 502
+    return jsonify({"status": "ok", "report": data})
+
+
+@app.route('/fiscal/report/z', methods=['GET'])
+def report_z():
+    """Lee (no imprime) el ultimo reporte Z."""
+    imp, err = _nueva_impresora()
+    if err:
+        return jsonify({"status": "error", "message": err}), 400
+    data = imp.get_z_report()
+    if data is None:
+        return jsonify({"status": "error", "message": "Sin respuesta",
+                        "printer_status": imp.get_printer_status()}), 502
+    return jsonify({"status": "ok", "report": data})
+
+
+@app.route('/fiscal/report/z-range', methods=['GET'])
+def report_z_range():
+    """Lee reportes Z por rango. by=number (?start=&end= enteros) o by=date (?start=&end= DDMMYY)."""
+    imp, err = _nueva_impresora()
+    if err:
+        return jsonify({"status": "error", "message": err}), 400
+    by = request.args.get("by", "number")
+    start = request.args.get("start", "")
+    end = request.args.get("end", "")
+    if not start or not end:
+        return jsonify({"status": "error", "message": "Faltan 'start'/'end'"}), 400
+    try:
+        if by == "date":
+            if not (re.match(r'^\d{6}$', start) and re.match(r'^\d{6}$', end)):
+                return jsonify({"status": "error", "message": "Fechas deben ser DDMMYY (6 digitos)"}), 400
+            data = imp.get_z_reports_by_date(start, end)
+        else:
+            data = imp.get_z_reports_by_number(int(start), int(end))
+    except ValueError:
+        return jsonify({"status": "error", "message": "start/end invalidos"}), 400
+    if data is None:
+        return jsonify({"status": "error", "message": "Sin respuesta",
+                        "printer_status": imp.get_printer_status()}), 502
+    return jsonify({"status": "ok", "count": len(data), "reports": data})
+
+
+@app.route('/fiscal/report/print/x', methods=['POST'])
+def print_x():
+    imp, err = _nueva_impresora()
+    if err:
+        return jsonify({"status": "error", "message": err}), 400
+    ok = imp.print_x_report()
+    return jsonify({"status": "ok" if ok else "error", "acked": ok,
+                    "printer_status": imp.get_printer_status() if not ok else None})
+
+
+@app.route('/fiscal/report/print/z', methods=['POST'])
+def print_z():
+    imp, err = _nueva_impresora()
+    if err:
+        return jsonify({"status": "error", "message": err}), 400
+    ok = imp.print_z_report()
+    return jsonify({"status": "ok" if ok else "error", "acked": ok,
+                    "printer_status": imp.get_printer_status() if not ok else None})
+
+
+@app.route('/fiscal/report/print/z-range', methods=['POST'])
+def print_z_range():
+    """Imprime reportes Z por rango. body {by:'number'|'date', start, end}."""
+    imp, err = _nueva_impresora()
+    if err:
+        return jsonify({"status": "error", "message": err}), 400
+    data = request.get_json() or {}
+    by, start, end = data.get("by", "number"), data.get("start"), data.get("end")
+    if start is None or end is None:
+        return jsonify({"status": "error", "message": "Faltan 'start'/'end'"}), 400
+    try:
+        if by == "date":
+            ok = imp.print_z_reports_by_date(str(start), str(end))
+        else:
+            ok = imp.print_z_reports_by_number(int(start), int(end))
+    except ValueError:
+        return jsonify({"status": "error", "message": "start/end invalidos"}), 400
+    return jsonify({"status": "ok" if ok else "error", "acked": ok})
+
+
+@app.route('/fiscal/network/<what>', methods=['GET'])
+def fiscal_network(what):
+    """Config de red del equipo. what in {ip, cw, url, red, cd} (WM12..15/WD13).
+
+    Port fiel pero SIN validar en hardware; ver TFHKA_PROTOCOLO.md.
+    """
+    imp, err = _nueva_impresora()
+    if err:
+        return jsonify({"status": "error", "message": err}), 400
+    if what.lower() not in imp.NETWORK_COMMANDS:
+        return jsonify({"status": "error", "message": f"Tipo invalido. Use: {list(imp.NETWORK_COMMANDS)}"}), 400
+    raw = imp.get_network(what)
+    if raw is None:
+        return jsonify({"status": "error", "message": "Sin respuesta",
+                        "printer_status": imp.get_printer_status()}), 502
+    return jsonify({"status": "ok", "what": what.lower(), "cmd": imp.NETWORK_COMMANDS[what.lower()], "raw": raw})
+
+
+@app.route('/fiscal/fel', methods=['POST'])
+def fiscal_fel():
+    """Modo FEL/JSON (facturacion electronica, modelos que lo soportan)."""
+    imp, err = _nueva_impresora()
+    if err:
+        return jsonify({"status": "error", "message": err}), 400
+    payload = (request.get_json() or {}).get("payload", "")
+    if not payload:
+        return jsonify({"status": "error", "message": "Falta 'payload'"}), 400
+    return jsonify({"status": "ok", "response": imp.send_cmd_fel(payload)})
+
+
+# --------------------------------------------------------------------------
+#  Operaciones "Fijas" (extraídas del Fiscalizador; ver OPERACIONES_FISCALIZADOR.md)
+#  Cada operación es una secuencia de comandos. Las fiscales emiten un documento
+#  REAL con número consecutivo; fondo/retiro/no-fiscal son movimientos de caja.
+# --------------------------------------------------------------------------
+_TAX = {0: " ", 1: "!", 2: '"', 3: "#", 4: "$"}
+
+
+def _n(s, width):
+    """Quita la coma decimal y rellena con ceros (formato de montos HKA)."""
+    return s.replace(",", "").rjust(width, "0")
+
+
+def _prod(tasa, precio, cant, desc):
+    return f"{_TAX[tasa]}{_n(precio, 10)}{_n(cant, 8)}{desc}"
+
+
+def _devol(tasa, precio, cant, desc):
+    return f"d{tasa}{_n(precio, 10)}{_n(cant, 8)}{desc}"
+
+
+def _nd_item(tasa, precio, cant, desc):
+    return f"`{tasa}{_n(precio, 10)}{_n(cant, 8)}{desc}"
+
+
+def _pago_parcial(tipo, medio, monto):
+    return f"{tipo}{medio}{_n(monto, 12)}"
+
+
+_CM = "@PRUEBA DESDE TITANIOPOS"
+
+OPERACIONES = {
+    "factura-cliente": {"label": "Factura Cliente", "fiscal": True, "lines": [
+        "iS*THE FACTORY HKA, C.A.", "iR*J-312171197",
+        "i00DIRECCION: LA CALIFORNIA", "i01CARACAS", _CM,
+        _prod(0, "0,10", "1,000", "Producto 1"), _prod(1, "0,10", "1,000", "Producto 2"),
+        _prod(2, "0,10", "1,000", "Producto 3"), _prod(3, "0,10", "1,000", "Producto 4"),
+        _CM, "3", "101", "199"]},
+    "factura-igtf": {"label": "Factura IGTF", "fiscal": True, "lines": [
+        "iR* J31218119-7", "iS*THE FACTORY HKA, C.A.", _CM,
+        " 000000010000001000prueba", "!000000010000001000prueba",
+        '"000000010000001000prueba', "#000000010000001000prueba",
+        "$000000010000001000prueba", _CM, "124", "199"]},
+    "factura-pago-parcial": {"label": "Factura Pago Parcial", "fiscal": True, "lines": [
+        "iS*THE FACTORY HKA, C.A.", "iR*J-312171197", "i00DIRECCION: LA CALIFORNIA", "i01CARACAS",
+        _prod(0, "0,10", "1,000", "Producto 1"), "p-5000",
+        _prod(1, "0,10", "1,000", "Producto 2"), _CM,
+        _prod(2, "0,10", "2,000", "Producto 3"), _prod(3, "0,10", "1,000", "Producto 4"),
+        "k", _pago_parcial("2", "05", "0,07"), _pago_parcial("2", "09", "0,20"),
+        _pago_parcial("2", "13", "0,10"), "101", "199"]},
+    "factura-pago-total": {"label": "Factura Pago Total", "fiscal": True, "lines": [
+        "iS*THE FACTORY HKA, C.A.", "iR*J-312171197", "i00DIRECCION: LA CALIFORNIA", "i01CARACAS",
+        _prod(0, "0,10", "1,000", "Producto 1"), "p-5000",
+        _prod(1, "0,10", "1,000", "Producto 2"), _CM,
+        _prod(2, "0,10", "1,000", "Producto 3"), _prod(3, "0,10", "2,000", "Producto 4"),
+        "k", "101", "199"]},
+    "factura-anulacion": {"label": "Factura con Anulación", "fiscal": True, "lines": [
+        "i01Juan Pablo Segundo", "i02San jose", "i03 ", "i04 ", "@Producto en Promocion",
+        _prod(0, "0,20", "1,000", "Producto 1"), _prod(1, "0,40", "3,000", "Producto 2"),
+        _prod(2, "0,10", "5,000", "Producto 3"), "3", "7"]},
+    "nota-credito": {"label": "Nota de Crédito", "fiscal": True, "lines": [
+        "iS*THE FACTORY HKA, C.A.", "iR*J-312171197", "iF*00001234", "iI*Z7C1234567",
+        "iD*09-09-2021", "i00DIRECCION: LA CALIFORNIA", "i01CARACAS",
+        _devol(0, "0,10", "1,000", "Producto 1"), _devol(1, "0,10", "1,000", "Producto 2"),
+        _devol(2, "0,10", "1,000", "Producto 3"), _devol(3, "0,10", "1,000", "Producto 4"),
+        _CM, "101", "199"]},
+    "nc-igtf": {"label": "Nota de Crédito IGTF", "fiscal": True, "lines": [
+        "iR* J31218119-7", "iS*THE FACTORY HKA, C.A.", "iF* 000000001", "iD* 28/03/2022",
+        "iI* Z7C1234567", "d0000000010000001000prueba", "BPRUEBA DESDE TITANIOPOS",
+        "d1000000010000001000prueba", "d2000000010000001000prueba", "d3000000010000001000prueba",
+        "d4000000010000001000prueba", "BPRUEBA DESDE TITANIOPOS", "124", "199"]},
+    "nota-debito": {"label": "Nota de Débito", "fiscal": True, "lines": [
+        "iF*00001234", "iD*09-09-2021", "iR*J-312171197", "iS*THE FACTORY HKA, C.A.",
+        "iI*Z7C1234567", _nd_item(0, "0,10", "1,000", "PRODUCTO 1"),
+        _nd_item(1, "0,10", "1,000", "PRODUCTO 2"), _nd_item(2, "0,10", "1,000", "PRODUCTO 3"),
+        _nd_item(3, "0,10", "1,000", "PRODUCTO 4"), _nd_item(4, "0,10", "1,000", "PRODUCTO 5"),
+        "BPRUEBA DESDE TITANIOPOS", "101", "199"]},
+    "documento-no-fiscal": {"label": "Documento No Fiscal", "fiscal": False, "lines": [
+        "800Documento de prueba para ejemplificar el uso ",
+        "80*de los Documentos NO Fiscales y de sus",
+        "80>distintas caracteristicas y efectos.....",
+        "80$dichos documentos pueden ser utilizados para",
+        "80!la impresion de reportes internos de los Sistemas Adm.",
+        "80¡y/o comandas para restaurantes, etc.",
+        "810Fin de uso....,,,,,,,,,,"]},
+    "fondo-caja": {"label": "Fondo de Caja", "fiscal": False, "lines": [
+        "9101000000000100", "t"]},
+    "retiro-caja": {"label": "Retiro de Caja", "fiscal": False, "lines": [
+        "9001000000000100", "t"]},
+}
+
+
+@app.route('/fiscal/operations', methods=['GET'])
+def listar_operaciones():
+    """Lista las operaciones de prueba disponibles (para poblar el panel)."""
+    return jsonify({"status": "ok", "operations": [
+        {"name": k, "label": v["label"], "fiscal": v["fiscal"]}
+        for k, v in OPERACIONES.items()]})
+
+
+@app.route('/fiscal/operation/<name>', methods=['POST'])
+def correr_operacion(name):
+    """Ejecuta una operación 'Fija' del Fiscalizador. Emite un documento REAL."""
+    op = OPERACIONES.get(name)
+    if not op:
+        return jsonify({"status": "error", "message": f"Operación desconocida: {name}"}), 404
+    imp, err = _nueva_impresora()
+    if err:
+        return jsonify({"status": "error", "message": err}), 400
+    # Flujo robusto (recupera doc abierto, ACK+reintento, verifica cierre).
+    diag = imp.print_invoice(op["lines"])
+    _log_fiscal_attempt(f"op:{name}", None, diag)
+    cerro_ok = diag.get("ok") and diag.get("reason") is None
+    if cerro_ok:
+        msg = f"{op['label']}: procesada correctamente"
+        if diag.get("recovered_open_doc"):
+            msg += " (se canceló un documento abierto previo)"
+    elif diag.get("ok") and diag.get("reason") == "warn_not_closed":
+        msg = f"{op['label']}: salió pero la impresora no confirmó el cierre"
+    else:
+        msg = f"{op['label']}: {_mensaje_fallo_impresion(diag)}"
+
+    # Leer S1 tras imprimir: serial de la máquina + número fiscal asignado al documento.
+    maquina = None
+    numero_fiscal = None
+    try:
+        s1 = imp.get_s1_data()
+        if s1:
+            maquina = {
+                "serial": s1.get("registered_machine_number"),
+                "rif": s1.get("rif"),
+                "ultima_factura": s1.get("last_invoice_number"),
+                "ultima_nota_credito": s1.get("last_credit_note_number"),
+                "ultima_nota_debito": s1.get("last_debit_note_number"),
+                "ultimo_no_fiscal": s1.get("last_non_fiscal_doc_number"),
+                "fecha_hora": s1.get("current_printer_datetime"),
+            }
+            # El "número fiscal" del documento depende del tipo de operación.
+            if name in ("nota-credito", "nc-igtf"):
+                numero_fiscal = maquina["ultima_nota_credito"]
+            elif name == "nota-debito":
+                numero_fiscal = maquina["ultima_nota_debito"]
+            elif name == "documento-no-fiscal":
+                numero_fiscal = maquina["ultimo_no_fiscal"]
+            elif name.startswith("factura"):
+                numero_fiscal = maquina["ultima_factura"]
+    except Exception:
+        pass
+
+    return jsonify({"status": "ok" if cerro_ok else "error", "message": msg,
+                    "operation": name, "label": op["label"], "diagnostico": diag,
+                    "printer_status": diag.get("post_status") or diag.get("pre_status"),
+                    "machine": maquina, "numero_fiscal": numero_fiscal})
+
+
+# --------------------------------------------------------------------------
+#  Endpoints: configuracion / pruebas / salud
+# --------------------------------------------------------------------------
 @app.route('/fiscal/config', methods=['GET'])
 def obtener_config():
-    """Devuelve la configuración actual del servidor"""
-    return jsonify({
-        "base_dir": BASE_DIR,
-        "data_dir": DATA_DIR,
-        "ruta_programa": get_programa_path(),
-        "programa_dir": get_programa_dir(),
-        "programa_existe": os.path.exists(get_programa_path()),
-        "archivo_factura": get_factura_path(),
-        "archivo_puerto": get_puerto_dat_path(),
-        "puerto_com": leer_puerto_com(),
-        "archivo_ids": ARCHIVO_IDS_EJECUTADOS,
-        "puerto_servidor": PUERTO
-    })
+    return jsonify({"base_dir": BASE_DIR, "data_dir": DATA_DIR, "runtime_dir": RUNTIME_DIR,
+                    "archivo_factura": get_factura_path(), "archivo_puerto": get_puerto_dat_path(),
+                    "puerto_com": leer_puerto_com(), "archivo_ids": ARCHIVO_IDS_EJECUTADOS,
+                    "puerto_servidor": PUERTO, "backend": "tfhka"})
 
-@app.route('/fiscal/config/programa', methods=['POST'])
-def configurar_programa():
-    """Configura la ruta del programa IntTFHKA"""
-    global RUTA_PROGRAMA
-    try:
-        data = request.get_json()
-        nueva_ruta = data.get("ruta", "")
-        
-        if not nueva_ruta:
-            return jsonify({"status": "error", "message": "Ruta no especificada"}), 400
-        
-        if not os.path.exists(nueva_ruta):
-            return jsonify({"status": "error", "message": f"El programa no existe en: {nueva_ruta}"}), 400
-        
-        os.environ['INTFHKA_PATH'] = nueva_ruta
-        RUTA_PROGRAMA = nueva_ruta
-        
-        return jsonify({
-            "status": "ok",
-            "message": "Ruta configurada correctamente",
-            "ruta_programa": nueva_ruta
-        })
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/fiscal/config/puerto', methods=['POST'])
 def configurar_puerto():
-    """Configura el puerto COM en Puerto.dat"""
     try:
-        data = request.get_json()
-        puerto = data.get("puerto", "")
-        
+        puerto = (request.get_json() or {}).get("puerto", "")
         if not puerto:
             return jsonify({"status": "error", "message": "Puerto no especificado"}), 400
-        
-        # Validar formato del puerto (COM1, COM2, etc.)
         if not puerto.upper().startswith("COM"):
-            return jsonify({"status": "error", "message": "Formato de puerto inválido. Use COM1, COM2, etc."}), 400
-        
+            return jsonify({"status": "error", "message": "Formato invalido. Use COM1, COM2, etc."}), 400
         if configurar_puerto_com(puerto.upper()):
-            return jsonify({
-                "status": "ok",
-                "message": f"Puerto {puerto.upper()} configurado correctamente",
-                "puerto_com": puerto.upper(),
-                "archivo_puerto": get_puerto_dat_path()
-            })
-        else:
-            return jsonify({"status": "error", "message": "Error al escribir Puerto.dat"}), 500
-            
+            return jsonify({"status": "ok", "message": f"Puerto {puerto.upper()} configurado",
+                            "puerto_com": puerto.upper(), "archivo_puerto": get_puerto_dat_path()})
+        return jsonify({"status": "error", "message": "Error al escribir Puerto.dat"}), 500
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
 
 @app.route('/fiscal/config/puerto', methods=['GET'])
 def obtener_puerto():
-    """Obtiene el puerto COM actual"""
-    try:
-        puerto = leer_puerto_com()
-        return jsonify({
-            "status": "ok",
-            "puerto_com": puerto,
-            "archivo_puerto": get_puerto_dat_path()
-        })
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+    return jsonify({"status": "ok", "puerto_com": leer_puerto_com(), "archivo_puerto": get_puerto_dat_path()})
+
 
 @app.route('/fiscal/test-printer', methods=['POST'])
 def test_printer():
-    """Prueba la conexión con la impresora fiscal"""
-    try:
-        puerto = leer_puerto_com()
-        if not puerto:
-            return jsonify({"status": "error", "message": "Puerto COM no configurado. Configure Puerto.dat primero."}), 400
-        
-        # Usar comunicación serial directa si está disponible
-        if HKA_SERIAL_AVAILABLE:
-            print(f"[FISCAL] Test printer usando hka_serial en {puerto}")
-            result = check_printer(puerto)
-            
-            return jsonify({
-                "status": "ok" if result['connected'] else "error",
-                "message": "Impresora conectada" if result['connected'] else "Impresora no detectada",
-                "printer_connected": result['connected'],
-                "puerto_com": puerto,
-                "method": "hka_serial",
-                "error": result.get('error')
-            })
-        
-        # Fallback a IntTFHKA.exe si hka_serial no está disponible
-        ruta_programa = get_programa_path()
-        programa_dir = get_programa_dir()
-        
-        if not os.path.exists(ruta_programa):
-            return jsonify({"status": "error", "message": f"Programa no encontrado: {ruta_programa}"}), 400
-        
-        # CheckFprinter SIN paréntesis (con paréntesis IntTFHKA.exe devuelve -1).
-        # El resultado va a stdout: "Retorno: TRUE  Status: 0  Error: 0"
-        comando = "IntTFHKA.exe CheckFprinter"
-        print(f"[FISCAL] Test: {comando} en {programa_dir}", flush=True)
-
-        with _INTTFHKA_LOCK:
-            proceso = subprocess.Popen(
-                comando,
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                cwd=programa_dir
-            )
-            stdout, stderr = proceso.communicate(timeout=30)
-
-        out_str = stdout.decode('latin-1', errors='ignore').strip() if stdout else ""
-        print(f"[FISCAL] CheckFprinter stdout: {out_str!r} returncode={proceso.returncode}", flush=True)
-
-        import re as _re
-        m_ret = _re.search(r'Retorno:\s*(\S+)', out_str)
-        retorno_val = m_ret.group(1).upper() if m_ret else ""
-        printer_connected = retorno_val in ('TRUE', '1', 'T')
-
-        return jsonify({
-            "status": "ok" if printer_connected else "error",
-            "message": "Impresora conectada" if printer_connected else "Impresora no detectada",
-            "printer_connected": printer_connected,
-            "return_code": proceso.returncode,
-            "stdout": out_str,
-            "puerto_com": puerto,
-            "method": "IntTFHKA.exe"
-        })
-        
-    except subprocess.TimeoutExpired:
-        return jsonify({"status": "error", "message": "Timeout esperando respuesta de la impresora"}), 500
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+    imp, err = _nueva_impresora()
+    if err:
+        return jsonify({"status": "error", "message": err + ". Configure Puerto.dat primero."}), 400
+    conectada = imp.check_fprinter()
+    return jsonify({"status": "ok" if conectada else "error",
+                    "message": "Impresora conectada" if conectada else "Impresora no detectada",
+                    "printer_connected": conectada, "puerto_com": imp.port, "method": "tfhka",
+                    "error": imp.last_error if not conectada else None})
 
 
 @app.route('/fiscal/test-print', methods=['POST'])
 def test_print():
     """Imprime una factura de prueba: 1 producto exento de 1 Bs, pago efectivo.
-    OJO: esto genera un documento fiscal REAL con numero consecutivo."""
-    try:
-        puerto = leer_puerto_com()
-        if not puerto:
-            return jsonify({"status": "error", "message": "Puerto COM no configurado."}), 400
+    OJO: genera un documento fiscal REAL con numero consecutivo."""
+    imp, err = _nueva_impresora()
+    if err:
+        return jsonify({"status": "error", "message": err}), 400
+    test_uuid = str(uuid.uuid4())
+    short_id = test_uuid.split('-')[-1]
+    # Formato HKA80: [TaxCode 1][Price 10][Qty 8][Desc <=20]
+    tax, price, qty = " ", "0000000100", "00001000"
+    desc = f"PRUEBA {short_id}"[:20]
+    lineas = [f"i05Caja: TEST-{short_id[:8]}", f"{tax}{price}{qty}{desc}", "101"]
 
-        # Factura minima: 1 producto exento, 1.00 Bs, qty 1, efectivo
-        # Formato HKA80: [TaxCode 1][Price 10 centavos][Qty 8 milesimas][Desc <=20]
-        # OJO: el precio es de 10 digitos (no 12). Con 12 la HKA80 lee mal los
-        # campos y sale 0.01 x 0.01. Verificado con hardware real.
-        test_uuid = str(uuid.uuid4())
-        short_id  = test_uuid.split('-')[-1]  # ultimos 12 chars del UUID
+    # Flujo robusto: recupera un documento abierto de un intento previo (causa del
+    # "1ra incompleta / 2da completa"), envía con ACK+reintento y CONFIRMA el cierre.
+    diag = imp.print_invoice(lineas)
+    _log_fiscal_attempt("test-print", f"TEST-{short_id[:8]}", diag)
 
-        tax   = " "                          # espacio = exento (0% IVA)
-        price = "0000000100"                 # 10 digitos: 100 centavos = 1.00 Bs
-        qty   = "00001000"                   # 8 digitos: 1000 milesimas = 1.000
-        desc  = f"PRUEBA {short_id}"[:20]     # max 20 chars, sin relleno
-        product_line = f"{tax}{price}{qty}{desc}"
-        print(f"[FISCAL] Test print product line: {product_line!r} (len={len(product_line)})", flush=True)
-        print(f"[FISCAL] Test print UUID: {test_uuid} -> short: {short_id}", flush=True)
+    # Éxito real = imprimió Y cerró (cortó). warn_not_closed => salió pero no cerró.
+    cerro_ok = diag.get("ok") and diag.get("reason") is None
+    if cerro_ok:
+        msg = f"Factura de prueba impresa y cerrada (UUID: {short_id})"
+        if diag.get("recovered_open_doc"):
+            msg += ". Se canceló un documento abierto previo antes de imprimir."
+    elif diag.get("ok") and diag.get("reason") == "warn_not_closed":
+        msg = ("La prueba salió pero la impresora NO confirmó el cierre del documento "
+               "(quedó en transacción). Revisa que no haya otro programa usando el puerto "
+               "COM (p.ej. el Fiscalizador oficial abierto).")
+    else:
+        msg = _mensaje_fallo_impresion(diag)
 
-        # Comentario + producto + pago efectivo (formato estándar del README).
-        lineas = [
-            f"i05Caja: TEST-{short_id[:8]}",
-            product_line,
-            "101",
-        ]
-
-        archivo_factura = get_factura_path()
-        if os.path.exists(archivo_factura):
-            os.remove(archivo_factura)
-        with open(archivo_factura, "w", encoding="latin-1") as fp:
-            for linea in lineas:
-                fp.write(f"{linea}\n")
-
-        print(f"[FISCAL] Test print file: {archivo_factura}", flush=True)
-        for i, l in enumerate(lineas):
-            print(f"[FISCAL] Test print linea {i}: {l!r}", flush=True)
-
-        # Solo IntTFHKA.exe (driver oficial; maneja el protocolo completo).
-        ruta_programa = get_programa_path()
-        programa_dir = get_programa_dir()
-        if not os.path.exists(ruta_programa):
-            return jsonify({"status": "error", "message": f"IntTFHKA.exe no encontrado en {programa_dir}"}), 400
-
-        import shutil
-        exe_factura = os.path.join(programa_dir, 'Factura.txt')
-        if archivo_factura != exe_factura:
-            shutil.copy2(archivo_factura, exe_factura)
-
-        import re as _re
-
-        def _run_inttfhka(comando, timeout=60):
-            """Ejecuta IntTFHKA.exe; devuelve (retorno_str, error_int, stdout_str).
-            stdout: 'Retorno: X  Status: Y  Error: Z'.
-            El exito real se mide por Error == 0 (Error 128 = falla en cierre)."""
-            p = subprocess.Popen(f"IntTFHKA.exe {comando}", shell=True,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=programa_dir)
-            out, _err = p.communicate(timeout=timeout)
-            out_s = out.decode('latin-1', errors='ignore').strip()
-            m_ret = _re.search(r'Retorno:\s*(\S+)', out_s)
-            m_err = _re.search(r'Error:\s*(\d+)', out_s)
-            retorno = m_ret.group(1).upper() if m_ret else ""
-            error = int(m_err.group(1)) if m_err else -1
-            return retorno, error, out_s
-
-        diagnostico = {}
-        with _INTTFHKA_LOCK:
-            retorno, error, out_str = _run_inttfhka("SendFileCmd(Factura.txt)")
-            print(f"[FISCAL] SendFileCmd -> Retorno={retorno} Error={error} stdout={out_str!r}", flush=True)
-            success = error == 0 and retorno not in ("", "FALSE")
-
-            # Higiene: si falló, SendFileCmd pudo dejar un documento fiscal
-            # abierto que bloquearía los próximos (Error 128). Cancelarlo UNA
-            # vez deja la impresora limpia. Solo se hace si hubo fallo.
-            if not success:
-                try:
-                    _cr, _ce, cout = _run_inttfhka("SendCmd(7)", timeout=20)
-                    print(f"[FISCAL] Limpieza post-fallo (cancel) -> {cout!r}", flush=True)
-                except Exception as ce:
-                    print(f"[FISCAL] Limpieza post-fallo error: {ce}", flush=True)
-
-        return jsonify({
-            "status": "ok" if success else "error",
-            "message": (f"Factura de prueba impresa (UUID: {short_id})" if success
-                        else f"Error al imprimir. IntTFHKA Error={error}. Salida: {out_str}"),
-            "method": "IntTFHKA.exe",
-            "diagnostico": diagnostico,
-            "uuid": test_uuid,
-            "retorno": retorno,
-            "error": error,
-        })
-
-    except subprocess.TimeoutExpired:
-        return jsonify({"status": "error", "message": "Timeout esperando respuesta de la impresora"}), 500
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+    return jsonify({"status": "ok" if cerro_ok else "error", "message": msg,
+                    "method": "tfhka", "uuid": test_uuid, "diagnostico": diag,
+                    "printer_status": diag.get("post_status") or diag.get("pre_status")})
 
 
 @app.route('/fiscal/ids-ejecutados', methods=['GET'])
 def obtener_ids_ejecutados():
-    """Devuelve la lista de IDs de caja ya ejecutados"""
-    return jsonify({
-        "ids_ejecutados": list(ids_caja_ejecutados),
-        "total": len(ids_caja_ejecutados)
-    })
+    return jsonify({"ids_ejecutados": list(ids_caja_ejecutados), "total": len(ids_caja_ejecutados)})
+
 
 @app.route('/fiscal/ids-ejecutados', methods=['DELETE'])
 def limpiar_ids_ejecutados():
-    """Limpia todos los IDs de caja ejecutados"""
     global ids_caja_ejecutados
     try:
         ids_caja_ejecutados.clear()
         with open(ARCHIVO_IDS_EJECUTADOS, 'w') as f:
             f.write("")
-        return jsonify({
-            "status": "ok",
-            "message": "IDs ejecutados limpiados correctamente"
-        })
+        return jsonify({"status": "ok", "message": "IDs ejecutados limpiados"})
     except Exception as e:
-        return jsonify({
-            "status": "error",
-            "message": f"Error limpiando IDs: {str(e)}"
-        }), 500
+        return jsonify({"status": "error", "message": f"Error limpiando IDs: {e}"}), 500
+
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Endpoint de salud para verificar que el servidor está corriendo"""
-    return jsonify({
-        "status": "ok",
-        "timestamp": datetime.now().isoformat(),
-        "programa_fiscal": get_programa_path(),
-        "programa_existe": os.path.exists(get_programa_path())
-    })
+    return jsonify({"status": "ok", "timestamp": datetime.now().isoformat(),
+                    "backend": "tfhka", "puerto_com": leer_puerto_com()})
 
-# Inicializar el procesador de cola en un hilo separado
-hilo_procesador = threading.Thread(target=procesar_cola_fiscal, daemon=True)
-hilo_procesador.start()
+
+# --------------------------------------------------------------------------
+#  Arranque
+# --------------------------------------------------------------------------
+threading.Thread(target=procesar_cola_fiscal, daemon=True).start()
+
 
 def limpieza_periodica_duplicados():
-    """Hilo que limpia periódicamente las peticiones expiradas"""
     while True:
         try:
             time.sleep(60)
             limpiar_peticiones_expiradas()
         except Exception as e:
-            print(f"Error en limpieza periódica: {e}")
+            print(f"Error en limpieza periodica: {e}")
 
-# Inicializar el limpiador de duplicados en un hilo separado
-hilo_limpiador = threading.Thread(target=limpieza_periodica_duplicados, daemon=True)
-hilo_limpiador.start()
 
-# Cargar IDs de caja ya ejecutados
+threading.Thread(target=limpieza_periodica_duplicados, daemon=True).start()
 cargar_ids_ejecutados()
 
 if __name__ == '__main__':
-    print(f"=== Servidor Fiscal TitanioPOS ===")
-    print(f"Base Dir: {BASE_DIR}")
-    print(f"Data Dir: {DATA_DIR}")
-    print(f"Ruta Programa: {get_programa_path()}")
-    print(f"Programa Existe: {os.path.exists(get_programa_path())}")
-    print(f"Puerto: {PUERTO}")
-    print(f"================================")
+    print("=== Servidor Fiscal TitanioPOS (backend tfhka) ===")
+    print(f"Runtime Dir: {RUNTIME_DIR}")
+    print(f"Puerto COM: {leer_puerto_com()}")
+    print(f"Puerto servidor: {PUERTO}")
+    print("==================================================")
     app.run(host='0.0.0.0', port=PUERTO)

@@ -2,6 +2,13 @@
 
 Servidor Python para comunicación con impresora fiscal HKA integrado con Electron.
 
+> **⚠️ ACTUALIZADO (backend `tfhka.py`).** El servidor ya no usa `IntTFHKA.exe`
+> ni `hka_serial.py`: ahora habla directo con la impresora vía `tfhka.py` (port
+> del SDK TfhkaNet.dll), con lectura de status y reportes. La documentación
+> vigente del protocolo y los endpoints está en **[`TFHKA_PROTOCOLO.md`](TFHKA_PROTOCOLO.md)**.
+> Las secciones de abajo que mencionan `IntTFHKA.exe`, `Retorno.txt`,
+> `Status_Error.txt` e `INTFHKA_PATH` son **legado** y ya no aplican.
+
 ## Requisitos
 
 - Python 3.8+ instalado (con la opción **"Add Python to PATH"** marcada)

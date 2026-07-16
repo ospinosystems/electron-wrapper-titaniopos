@@ -2,6 +2,15 @@ const { app, BrowserWindow, ipcMain, Menu, dialog, nativeImage, Notification, sh
 const path = require('path');
 const fs = require('fs');
 
+// Endurecimiento: si stdout/stderr es una tubería que se rompe (la consola/proceso
+// que capturaba la salida se cerró), un console.log lanzaría EPIPE y, SIN manejador
+// de error, se vuelve una excepción no capturada que tumba el proceso principal
+// (diálogo "A JavaScript error occurred in the main process"). Con un listener de
+// 'error', Node emite en vez de lanzar, así que ignoramos EPIPE y seguimos.
+for (const stream of [process.stdout, process.stderr]) {
+  try { stream.on('error', (err) => { if (err && err.code === 'EPIPE') return; }); } catch (_) { /* noop */ }
+}
+
 // ── Carga de .env ANTES de cualquier require local ───────────────────────────
 // Varios módulos (local-proxy, etc.) leen TITANIOPOS_* en CONSTANTES al cargar
 // el módulo. Si el env se carga después de los requires, capturan los defaults

@@ -6,7 +6,7 @@
  * Salida: dist-standalone/titaniopos-fiscal-server-vX.Y.Z.zip
  * Contenido:
  *   - python-embed/        (Python 3.11 + flask + pyserial)
- *   - fiscal-server/       (fiscal.py, hka_serial.py, etc)
+ *   - fiscal-server/       (fiscal.py, tfhka.py, etc)
  *   - Iniciar Servidor Fiscal.bat
  *   - LEEME.txt
  */

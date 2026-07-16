@@ -49,6 +49,10 @@ const DEFAULT_FISCAL = {
   // (ej. '120') y la impresora calcula e imprime el IGTF sola.
   // NOTA: validar contra la máquina real (modelo/firmware) en la pre-instalación.
   igtfDivisaCode: '20',
+  // IGTF activo: manda el código de divisa (arriba) para disparar el 3% en la HKA
+  // SOLO cuando la máquina tiene ese medio de pago programado. OFF hasta la
+  // pre-instalación; mientras, los pagos en divisa cierran como efectivo (01).
+  igtfEnabled: false,
   // Serial de la impresora fiscal (ej. 'ZPA2000343'). Requerido en la NOTA DE
   // CRÉDITO (campo iI*): identifica la máquina que emitió la factura original.
   // Se configura una vez por caja en Ajustes → Caja.
@@ -106,6 +110,7 @@ function normalizeFiscal(raw) {
   return {
     ...base,
     forceFiscal: Boolean(base.forceFiscal),
+    igtfEnabled: Boolean(base.igtfEnabled),
     // Solo dígitos; si queda vacío cae al default (20 = divisa).
     igtfDivisaCode: String(base.igtfDivisaCode ?? '').replace(/\D/g, '') || DEFAULT_FISCAL.igtfDivisaCode,
     // Serial alfanumérico, en mayúsculas, sin espacios.

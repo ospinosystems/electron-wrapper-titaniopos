@@ -337,12 +337,13 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null) => {
 //   - Sin payments (o vacío): back-compat → una sola línea '1' + (paymentType || '01').
 //   - Un solo pago: cierre por total completo '1'+code (sin monto). Robusto: no
 //     depende de que el monto cuadre al céntimo con lo que calculó la impresora.
-//   - Varios pagos (mixto): una línea parcial por pago '1'+code+monto(12 díg, céntimos).
-//     El IGTF se dispara igual en las líneas con código de divisa (20-24).
-//
-// OJO HARDWARE: el formato de la línea parcial con monto (mixto) debe validarse
-// contra la máquina real en la pre-instalación. El caso de un solo pago (que es
-// el que valida SENIAT al pagar todo en divisa o todo en Bs) es el camino seguro.
+//   - Varios pagos (mixto): PARCIALES '2'+code+monto(12 díg) para todos menos el
+//     último, y cierre '1'+code SIN monto para el último (absorbe el restante).
+//     El comando '1' con monto NO es un pago parcial: cierra el documento, y la
+//     línea siguiente da NAK (visto en HW el 15-07: '120...' ACK, '101...' NAK).
+//     El patrón 2XX/2XX/.../1XX es el validado por la prueba op:factura-pago-parcial.
+//     El pago en divisa (20-24) va como parcial: la impresora registra el monto y
+//     calcula el IGTF; el cierre final en el medio no-divisa cubre ese IGTF.
 const buildCloseLines = (invoiceData) => {
   const payments = Array.isArray(invoiceData.payments) ? invoiceData.payments : [];
 
@@ -351,23 +352,36 @@ const buildCloseLines = (invoiceData) => {
     return digits.length ? digits.padStart(2, '0').slice(-2) : fallback;
   };
 
+  let closeLines;
   if (payments.length === 0) {
     // Compatibilidad con el flujo previo: paymentType podía venir ya como '101'.
-    const legacy = invoiceData.paymentType || '101';
-    return [String(legacy)];
+    closeLines = [String(invoiceData.paymentType || '101')];
+  } else if (payments.length === 1) {
+    closeLines = [`1${normCode(payments[0].code, '01')}`];
+  } else {
+    // Pago mixto: parciales '2'+code+monto y UN solo cierre '1'+code sin monto.
+    // El cierre final debe ser preferiblemente un medio NO-divisa (efectivo/punto):
+    // la divisa como parcial explícito registra su monto exacto (base del IGTF),
+    // y el medio local absorbe el restante (IGTF + desfases de céntimos).
+    const isDivisa = (p) => {
+      const n = parseInt(normCode(p.code, '04'), 10);
+      return n >= 20 && n <= 24;
+    };
+    const ordered = [...payments].sort((a, b) => Number(isDivisa(b)) - Number(isDivisa(a)));
+    const closer = ordered[ordered.length - 1];
+    closeLines = ordered.slice(0, -1).map((p) => {
+      const code = normCode(p.code, '04'); // sin código claro → "otros"
+      const cents = Math.max(0, Math.round((parseFloat(p.amountBs) || 0) * 100));
+      const amountStr = cents.toString().padStart(12, '0');
+      return `2${code}${amountStr}`;
+    });
+    closeLines.push(`1${normCode(closer.code, '01')}`);
   }
 
-  if (payments.length === 1) {
-    return [`1${normCode(payments[0].code, '01')}`];
-  }
-
-  // Pago mixto: línea parcial por cada pago, con el monto en céntimos (12 díg).
-  return payments.map((p) => {
-    const code = normCode(p.code, '04'); // sin código claro → "otros"
-    const cents = Math.max(0, Math.round((parseFloat(p.amountBs) || 0) * 100));
-    const amountStr = cents.toString().padStart(12, '0');
-    return `1${code}${amountStr}`;
-  });
+  // '199' = cerrar/finalizar el documento (corta el papel). SIN esto la HKA80
+  // paga pero deja la factura a la mitad y no corta (validado en hardware).
+  closeLines.push('199');
+  return closeLines;
 };
 
 // Función auxiliar para limpiar texto (eliminar acentos y caracteres especiales)
@@ -636,8 +650,10 @@ const registerFiscalHandlers = (app) => {
   ipcMain.handle('fiscal-get-pending-responses', async () => {
     try {
       const responses = loadFiscalResponses(app);
-      const pending = responses.filter(r => 
-        !r.syncedToBackend && 
+      const pending = responses.filter(r =>
+        !r.syncedToBackend &&
+        !r.simulated &&                 // las simuladas nunca sincronizan (orden falsa)
+        !r.syncPermanentlyFailed &&     // errores permanentes (422) ya no cuentan
         (r.status === 'completed' || r.status === 'completado' || r.status === 'error')
       );
       return { success: true, responses: pending };
@@ -663,8 +679,10 @@ const registerFiscalHandlers = (app) => {
     }
   });
 
-  // Marcar error de sincronización
-  ipcMain.handle('fiscal-mark-sync-error', async (event, responseId, errorMessage) => {
+  // Marcar error de sincronización. `permanent` (o demasiados intentos) marca la
+  // respuesta como fallo permanente para dejar de reintentarla eternamente (422 =
+  // la orden no existe/payload inválido; reintentar no lo va a arreglar).
+  ipcMain.handle('fiscal-mark-sync-error', async (event, responseId, errorMessage, permanent = false) => {
     try {
       const responses = loadFiscalResponses(app);
       const idx = responses.findIndex(r => r.id === responseId);
@@ -672,10 +690,28 @@ const registerFiscalHandlers = (app) => {
         responses[idx].syncAttempts = (responses[idx].syncAttempts || 0) + 1;
         responses[idx].lastSyncAttempt = new Date().toISOString();
         responses[idx].syncError = errorMessage;
+        if (permanent || responses[idx].syncAttempts >= 20) {
+          responses[idx].syncPermanentlyFailed = true;
+        }
         saveFiscalResponses(app, responses);
-        return { success: true };
+        return { success: true, permanent: responses[idx].syncPermanentlyFailed === true };
       }
       return { success: false, error: 'Response not found' };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Purga respuestas atascadas. mode 'stuck' (default): sincronizadas + simuladas +
+  // fallos permanentes. mode 'all': todas. Devuelve cuántas se eliminaron.
+  ipcMain.handle('fiscal-purge-responses', async (event, mode = 'stuck') => {
+    try {
+      const responses = loadFiscalResponses(app);
+      const keep = mode === 'all' ? [] : responses.filter(r =>
+        !r.syncedToBackend && !r.simulated && !r.syncPermanentlyFailed);
+      const removed = responses.length - keep.length;
+      saveFiscalResponses(app, keep);
+      return { success: true, removed };
     } catch (error) {
       return { success: false, error: error.message };
     }
@@ -768,6 +804,41 @@ const registerFiscalHandlers = (app) => {
       return { success: false, error: result.data?.message || 'Error al enviar Reporte Z' };
     } catch (error) {
       console.error('[FISCAL] Report Z error:', error.message);
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Documento NO FISCAL (presupuesto / comprobante interno). Recibe un array de
+  // líneas de texto ya formateadas; el server las envuelve en 80/81/82. NO asigna
+  // número fiscal ni afecta la memoria fiscal.
+  ipcMain.handle('fiscal-print-non-fiscal', async (event, payload) => {
+    try {
+      const config = loadFiscalConfig(app);
+      if (!config.enabled) {
+        return { success: false, error: 'Máquina fiscal no habilitada' };
+      }
+      const lines = Array.isArray(payload?.lines) ? payload.lines : [];
+      if (lines.length === 0) {
+        return { success: false, error: 'Documento no fiscal vacío' };
+      }
+      if (!config.fiscalMode) {
+        console.log('[FISCAL] Documento no fiscal simulado (modo no fiscal)');
+        return { success: true, message: 'Documento no fiscal simulado (modo no fiscal)', simulated: true };
+      }
+      const result = await makeFiscalRequest(`${config.serverUrl}/fiscal`, 'POST', {
+        parametros: lines,
+        type: 'documentonofiscal',
+      });
+      console.log('[FISCAL] Documento no fiscal statusCode:', result.statusCode, 'data:', JSON.stringify(result.data));
+      if (result.statusCode === 409) {
+        return { success: true, message: 'Documento no fiscal ya fue enviado (duplicado)', duplicated: true };
+      }
+      if (result.statusCode === 200 && result.data?.status === 'ok') {
+        return { success: true, message: 'Documento no fiscal enviado a la cola', job_id: result.data.job_id };
+      }
+      return { success: false, error: result.data?.message || 'Error al imprimir documento no fiscal' };
+    } catch (error) {
+      console.error('[FISCAL] Documento no fiscal error:', error.message);
       return { success: false, error: error.message };
     }
   });
@@ -940,6 +1011,65 @@ const registerFiscalHandlers = (app) => {
     }
   });
 
+  // Estado decodificado de la impresora (GET /fiscal/status): esperando, sin papel,
+  // memoria llena, en transacción, etc. Sirve para mostrar estado en vivo en la config.
+  ipcMain.handle('fiscal-get-status', async () => {
+    try {
+      const config = loadFiscalConfig(app);
+      if (!config.enabled) {
+        return { success: false, error: 'Máquina fiscal no habilitada' };
+      }
+      const result = await makeFiscalRequest(`${config.serverUrl}/fiscal/status`, 'GET');
+      return { success: result.data?.status === 'ok', ...result.data };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Datos de la máquina fiscal (GET /fiscal/s1): RIF, serial registrado, contadores,
+  // fecha/hora. Permite autocompletar el serial leyéndolo de la impresora.
+  ipcMain.handle('fiscal-get-machine-data', async () => {
+    try {
+      const config = loadFiscalConfig(app);
+      if (!config.enabled) {
+        return { success: false, error: 'Máquina fiscal no habilitada' };
+      }
+      const result = await makeFiscalRequest(`${config.serverUrl}/fiscal/s1`, 'GET');
+      return { success: result.data?.status === 'ok', ...result.data };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Lista las operaciones de prueba disponibles (Fijas del Fiscalizador).
+  ipcMain.handle('fiscal-list-operations', async () => {
+    try {
+      const config = loadFiscalConfig(app);
+      if (!config.enabled) {
+        return { success: false, error: 'Máquina fiscal no habilitada' };
+      }
+      const result = await makeFiscalRequest(`${config.serverUrl}/fiscal/operations`, 'GET');
+      return { success: result.data?.status === 'ok', ...result.data };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Ejecuta una operación de prueba. OJO: emite un documento fiscal REAL.
+  ipcMain.handle('fiscal-run-operation', async (event, name) => {
+    try {
+      const config = loadFiscalConfig(app);
+      if (!config.enabled) {
+        return { success: false, error: 'Máquina fiscal no habilitada' };
+      }
+      const url = `${config.serverUrl}/fiscal/operation/${encodeURIComponent(name)}`;
+      const result = await makeFiscalRequest(url, 'POST');
+      return { success: result.data?.status === 'ok', ...result.data };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
   // ==================== FISCAL SERVER MANAGEMENT ====================
 
   // Obtener estado del servidor fiscal Python
@@ -1000,4 +1130,10 @@ const registerFiscalHandlers = (app) => {
   console.log('[FISCAL] Handlers registered successfully');
 };
 
-module.exports = { registerFiscalHandlers };
+module.exports = {
+  registerFiscalHandlers,
+  // Builders puros expuestos para pruebas (no tocan IPC ni disco).
+  buildCloseLines,
+  generateFiscalContent,
+  generateCreditNoteContent,
+};
