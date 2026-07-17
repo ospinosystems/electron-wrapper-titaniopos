@@ -441,10 +441,9 @@ const wrapWords = (text, firstW, restW) => {
 /** Compat: envoltura a 40 para texto libre (motivo, etc.). */
 const wrapText40 = (text) => wrapWords(text, EXTRA_LINE_LEN, EXTRA_LINE_LEN);
 
-// Sangría de las líneas de continuación del nombre. Cuelgan del producto (hanging
-// indent) para que el listado se lea por bloques: la línea con el precio arriba y el
-// resto del nombre indentado debajo, no como renglones sueltos.
-const CONT_INDENT = '  ';
+// Sin sangría en la continuación: la HKA ya enmarca las líneas '@' entre '|', y
+// agregarle espacios se veía peor. El texto de continuación va pegado a la izquierda.
+const CONT_INDENT = '';
 
 /**
  * Parte la descripción del producto: `itemDesc` (≤20, va en la línea del ítem junto
