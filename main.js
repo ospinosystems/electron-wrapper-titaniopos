@@ -849,6 +849,15 @@ function createWindow() {
       return;
     }
 
+    // BLINDAJE FISCAL: Ctrl+P / Cmd+P (con o sin Shift) quedan MUERTOS. La única vía de
+    // impresión de este sistema es la máquina fiscal (HKA); el diálogo de impresión de
+    // Chromium dejaría mandar un documento a una tickera o al spooler del SO, lo que es
+    // ilegal para SENIAT. No hay excepción.
+    if (mod && keyLower === 'p') {
+      event.preventDefault();
+      return;
+    }
+
     // Ctrl+Shift+G → abrir chrome://gpu en ventana aparte para diagnóstico
     // del pipeline GPU. Sólo accesible vía atajo (no toca menú ni UI).
     if (input.control && input.shift && !input.alt && !input.meta && keyLower === 'g') {
@@ -2124,6 +2133,50 @@ ipcMain.handle('backup-admin-resign', async (event, filePath, data) => {
     console.error('❌ [BACKUP] Error re-firmando:', error);
     return { success: false, error: error.message };
   }
+});
+
+// BLINDAJE FISCAL: neutraliza window.print en TODO webContents que exista o se cree
+// (ventana principal, iframes, ventanas hijas, webviews). La única vía de impresión
+// legal de este sistema es la máquina fiscal (HKA); dejar viva window.print permitiría
+// mandar un documento a una tickera o al spooler del SO conectado por el auditor.
+// Se redefine como propiedad NO reconfigurable para que ningún script la restaure.
+const KILL_PRINT_JS = `(function(){
+  try {
+    Object.defineProperty(window, 'print', {
+      value: function(){ return undefined; },
+      writable: false, configurable: false,
+    });
+  } catch (e) { try { window.print = function(){}; } catch (_) {} }
+})();`;
+
+function hardenPrint(contents) {
+  if (!contents || contents.isDestroyed?.()) return;
+  const run = () => {
+    try { contents.executeJavaScript(KILL_PRINT_JS, true).catch(() => {}); } catch (_) {}
+    try {
+      const frames = contents.mainFrame ? contents.mainFrame.framesInSubtree : [];
+      for (const f of frames) {
+        try { f.executeJavaScript(KILL_PRINT_JS, true).catch(() => {}); } catch (_) {}
+      }
+    } catch (_) {}
+  };
+  contents.on('dom-ready', run);
+  contents.on('did-frame-finish-load', run);
+
+  // Ctrl+P / Cmd+P muerto en CUALQUIER webContents (la ventana principal tiene su
+  // propio handler más completo; esto cubre ventanas hijas / popups). Sin esto, una
+  // ventana secundaria abriría el diálogo de impresión de Chromium.
+  contents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return;
+    const mod = process.platform === 'darwin' ? input.meta : input.control;
+    if (mod && String(input.key).toLowerCase() === 'p') {
+      event.preventDefault();
+    }
+  });
+}
+
+app.on('web-contents-created', (_event, contents) => {
+  hardenPrint(contents);
 });
 
 app.whenReady().then(() => {
