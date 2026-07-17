@@ -308,6 +308,9 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null) => {
       for (const extra of extraLines) {
         lines.push(extra);
       }
+      // Descuento (informativo): precio de lista vs cobrado. No toca el cálculo fiscal.
+      const descLine = buildDiscountLine(product.listPrice, product.price, product.quantity);
+      if (descLine) lines.push(descLine);
     }
   }
 
@@ -456,6 +459,25 @@ const buildProductDescLines = (fullDescription) => {
   };
 };
 
+/** Monto en Bs con separador de miles y 2 decimales (es-VE: 1.234,56). */
+const fmtBs = (n) =>
+  (Number(n) || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/**
+ * Línea '@' informativa del DESCUENTO de un producto. El precio de lista y el precio
+ * cobrado se calculan afuera; acá solo se imprime. Se muestra como texto y NO afecta
+ * el cálculo fiscal (la línea del ítem ya lleva el precio descontado, lo que mantiene
+ * el total exacto al céntimo). Devuelve null si no hay descuento.
+ * `listUnit` y `paidUnit` son el precio UNITARIO de lista y el cobrado, en Bs.
+ */
+const buildDiscountLine = (listUnit, paidUnit, qty) => {
+  const list = Number(listUnit) || 0;
+  const paid = Number(paidUnit) || 0;
+  if (list <= paid + 0.005) return null; // sin descuento
+  const descTotal = (list - paid) * (Number(qty) || 1);
+  return `@${CONT_INDENT}Lista ${fmtBs(list)}  Desc -${fmtBs(descTotal)}`;
+};
+
 // Función auxiliar para limpiar texto (eliminar acentos y caracteres especiales)
 const sanitizeText = (text, maxLength = 20) => {
   return (text || '')
@@ -563,6 +585,9 @@ const generateCreditNoteContent = (creditNoteData) => {
       for (const extra of extraLines) {
         lines.push(extra);
       }
+      // Descuento (informativo), igual que la factura.
+      const descLine = buildDiscountLine(product.listPrice, product.price, product.quantity);
+      if (descLine) lines.push(descLine);
     }
   }
   
