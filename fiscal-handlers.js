@@ -295,14 +295,20 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null) => {
       const qtyInThousandths = Math.round((product.quantity || 1) * 1000);
       const qtyStr = qtyInThousandths.toString().padStart(8, '0');
 
-      // Descripción: máximo 20 caracteres, sin caracteres especiales
-      const description = sanitizeText(product.description || 'PRODUCTO', 20);
+      // Descripción: en la línea del ítem solo caben 20 caracteres; el resto sale en
+      // líneas '@' debajo, para que el producto se lea completo (ver
+      // buildDescriptionOverflowLines).
+      const fullDescription = sanitizeText(product.description || 'PRODUCTO', 200);
+      const description = fullDescription.substring(0, ITEM_DESC_LEN);
 
       // Formato final: [TasaIVA][Precio10][Cantidad8][Descripción]
       const productLine = `${taxCode}${priceStr}${qtyStr}${description}`;
       console.log(`[FISCAL] VALIDATION: taxCode="${taxCode}" (len=${taxCode.length}) | priceStr="${priceStr}" (len=${priceStr.length}) | qtyStr="${qtyStr}" (len=${qtyStr.length}) | description="${description}" (len=${description.length})`);
       console.log(`[FISCAL] Product line: price=${product.price} -> cents=${priceInCents} -> "${priceStr}" | qty=${product.quantity} -> thousandths=${qtyInThousandths} -> "${qtyStr}" | LINE="${productLine}"`);
       lines.push(productLine);
+      for (const extra of buildDescriptionOverflowLines(fullDescription)) {
+        lines.push(extra);
+      }
     }
   }
 
@@ -382,6 +388,40 @@ const buildCloseLines = (invoiceData) => {
   // paga pero deja la factura a la mitad y no corta (validado en hardware).
   closeLines.push('199');
   return closeLines;
+};
+
+// La línea del ítem solo admite 20 caracteres de descripción, así que un nombre
+// largo salía cortado en la factura. El resto se imprime en líneas adicionales con
+// el comando '@' (texto libre en el cuerpo del documento). Validado contra la
+// máquina: la prueba op:factura-cliente de THE FACTORY intercala '@PRUEBA DESDE
+// TITANIOPOS' entre los ítems y la HKA la ACKea.
+const ITEM_DESC_LEN = 20;   // lo que cabe en la propia línea del producto
+const EXTRA_LINE_LEN = 40;  // ancho del papel para las líneas '@'
+
+/**
+ * Líneas '@' con lo que no cupo en la descripción del ítem. Corta por palabras para
+ * no partir nombres a la mitad; una palabra más larga que la línea se parte igual.
+ */
+const buildDescriptionOverflowLines = (fullDescription) => {
+  const rest = (fullDescription || '').substring(ITEM_DESC_LEN).trim();
+  if (!rest) return [];
+
+  const out = [];
+  let current = '';
+  for (const word of rest.split(/\s+/)) {
+    let w = word;
+    // Palabra sola más larga que la línea: se trocea.
+    while (w.length > EXTRA_LINE_LEN) {
+      if (current) { out.push(current); current = ''; }
+      out.push(w.substring(0, EXTRA_LINE_LEN));
+      w = w.substring(EXTRA_LINE_LEN);
+    }
+    if (!current) current = w;
+    else if (current.length + 1 + w.length <= EXTRA_LINE_LEN) current += ' ' + w;
+    else { out.push(current); current = w; }
+  }
+  if (current) out.push(current);
+  return out.map((l) => `@${l}`);
 };
 
 // Función auxiliar para limpiar texto (eliminar acentos y caracteres especiales)
@@ -482,11 +522,15 @@ const generateCreditNoteContent = (creditNoteData) => {
       const qtyInThousandths = Math.round((product.quantity || 1) * 1000);
       const qtyStr = qtyInThousandths.toString().padStart(8, '0');
       
-      // Descripción
-      const description = sanitizeText(product.description || 'PRODUCTO', 20);
-      
+      // Descripción: igual que la factura, el sobrante va en líneas '@' debajo.
+      const fullDescription = sanitizeText(product.description || 'PRODUCTO', 200);
+      const description = fullDescription.substring(0, ITEM_DESC_LEN);
+
       // Formato: d[TasaIVA][Precio][Cantidad][Descripción]
       lines.push(`d${taxCode}${priceStr}${qtyStr}${description}`);
+      for (const extra of buildDescriptionOverflowLines(fullDescription)) {
+        lines.push(extra);
+      }
     }
   }
   
