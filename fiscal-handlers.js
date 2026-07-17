@@ -299,15 +299,16 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null) => {
       // líneas '@' debajo, para que el producto se lea completo (ver
       // buildDescriptionOverflowLines).
       const fullDescription = sanitizeText(product.description || 'PRODUCTO', 200);
-      const description = fullDescription.substring(0, ITEM_DESC_LEN);
+      // Nombre envuelto POR PALABRA: 1ª línea (con el ítem) 20 chars, resto en '@' 40.
+      const descLines = wrapWords(fullDescription, ITEM_DESC_LEN, EXTRA_LINE_LEN);
+      const description = descLines[0] || 'PRODUCTO';
 
       // Formato final: [TasaIVA][Precio10][Cantidad8][Descripción]
       const productLine = `${taxCode}${priceStr}${qtyStr}${description}`;
-      console.log(`[FISCAL] VALIDATION: taxCode="${taxCode}" (len=${taxCode.length}) | priceStr="${priceStr}" (len=${priceStr.length}) | qtyStr="${qtyStr}" (len=${qtyStr.length}) | description="${description}" (len=${description.length})`);
-      console.log(`[FISCAL] Product line: price=${product.price} -> cents=${priceInCents} -> "${priceStr}" | qty=${product.quantity} -> thousandths=${qtyInThousandths} -> "${qtyStr}" | LINE="${productLine}"`);
+      console.log(`[FISCAL] Product line: price=${product.price} -> "${priceStr}" | qty=${product.quantity} -> "${qtyStr}" | LINE="${productLine}"`);
       lines.push(productLine);
-      for (const extra of buildDescriptionOverflowLines(fullDescription)) {
-        lines.push(extra);
+      for (const extra of descLines.slice(1)) {
+        lines.push(`@${extra}`);
       }
     }
   }
@@ -402,34 +403,38 @@ const EXTRA_LINE_LEN = 40;  // ancho del papel para las líneas '@'
  * Envuelve un texto en líneas de EXTRA_LINE_LEN caracteres cortando por palabras;
  * una palabra sola más larga que la línea se trocea. Devuelve el texto SIN prefijo.
  */
-const wrapText40 = (text) => {
-  const rest = (text || '').trim();
-  if (!rest) return [];
-  const out = [];
-  let current = '';
-  for (const word of rest.split(/\s+/)) {
-    let w = word;
-    while (w.length > EXTRA_LINE_LEN) {
-      if (current) { out.push(current); current = ''; }
-      out.push(w.substring(0, EXTRA_LINE_LEN));
-      w = w.substring(EXTRA_LINE_LEN);
+/**
+ * Envuelve un texto en líneas cortando POR PALABRA. La primera línea admite hasta
+ * `firstW` caracteres (la de la línea del ítem, 20) y las siguientes hasta `restW`
+ * (las '@', 40). Antes se cortaban 20 chars a lo bruto y una palabra quedaba partida
+ * a la mitad ("...GALV" / "ANIZADA..."); ahora la primera línea rompe en el último
+ * espacio que cabe ("PAR BISAGRA 3X3" / "GALVANIZADA PARA..."). Una palabra sola más
+ * larga que la línea sí se trocea (no hay alternativa).
+ */
+const wrapWords = (text, firstW, restW) => {
+  const words = String(text || '').trim().split(/\s+/).filter(Boolean);
+  const lines = [];
+  let cur = '';
+  for (let word of words) {
+    let limit = lines.length === 0 ? firstW : restW;
+    // Palabra que no cabe ni en una línea vacía: trocearla.
+    while (word.length > limit) {
+      if (cur) { lines.push(cur); cur = ''; }
+      limit = lines.length === 0 ? firstW : restW;
+      lines.push(word.substring(0, limit));
+      word = word.substring(limit);
+      limit = lines.length === 0 ? firstW : restW;
     }
-    if (!current) current = w;
-    else if (current.length + 1 + w.length <= EXTRA_LINE_LEN) current += ' ' + w;
-    else { out.push(current); current = w; }
+    if (!cur) cur = word;
+    else if (cur.length + 1 + word.length <= limit) cur += ' ' + word;
+    else { lines.push(cur); cur = word; }
   }
-  if (current) out.push(current);
-  return out;
+  if (cur) lines.push(cur);
+  return lines;
 };
 
-/**
- * Líneas '@' con lo que no cupo en la descripción del ítem (los primeros
- * ITEM_DESC_LEN caracteres van en la propia línea del producto; el resto acá).
- */
-const buildDescriptionOverflowLines = (fullDescription) => {
-  const rest = (fullDescription || '').substring(ITEM_DESC_LEN);
-  return wrapText40(rest).map((l) => `@${l}`);
-};
+/** Compat: envoltura a 40 para texto libre (motivo, etc.). */
+const wrapText40 = (text) => wrapWords(text, EXTRA_LINE_LEN, EXTRA_LINE_LEN);
 
 // Función auxiliar para limpiar texto (eliminar acentos y caracteres especiales)
 const sanitizeText = (text, maxLength = 20) => {
@@ -529,14 +534,15 @@ const generateCreditNoteContent = (creditNoteData) => {
       const qtyInThousandths = Math.round((product.quantity || 1) * 1000);
       const qtyStr = qtyInThousandths.toString().padStart(8, '0');
       
-      // Descripción: igual que la factura, el sobrante va en líneas '@' debajo.
+      // Descripción: igual que la factura, envuelta por palabra (1ª línea 20, resto @40).
       const fullDescription = sanitizeText(product.description || 'PRODUCTO', 200);
-      const description = fullDescription.substring(0, ITEM_DESC_LEN);
+      const descLines = wrapWords(fullDescription, ITEM_DESC_LEN, EXTRA_LINE_LEN);
+      const description = descLines[0] || 'PRODUCTO';
 
       // Formato: d[TasaIVA][Precio][Cantidad][Descripción]
       lines.push(`d${taxCode}${priceStr}${qtyStr}${description}`);
-      for (const extra of buildDescriptionOverflowLines(fullDescription)) {
-        lines.push(extra);
+      for (const extra of descLines.slice(1)) {
+        lines.push(`@${extra}`);
       }
     }
   }
@@ -621,10 +627,12 @@ const registerFiscalHandlers = (app) => {
         console.log('[FISCAL] Non-fiscal mode - printing with NO FISCAL indicator');
       }
 
-      // Opciones de código de barras desde la config (opt-in, default OFF).
+      // Código de barras SIEMPRE, con el nº de orden (últimos dígitos del UUID). Se
+      // puede apagar poniendo printBarcode:false explícito en la config. La plantilla
+      // 'j211{code}' está validada en HW (CODE128, al pie, con número).
       const barcodeOpts = {
-        enabled: config.printBarcode === true,
-        raw: config.barcodeRaw || null,
+        enabled: config.printBarcode !== false,
+        raw: config.barcodeRaw || 'j211{code}',
       };
 
       // Enviar factura (pasando fiscalMode para agregar indicador si es prueba).

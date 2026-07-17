@@ -32,8 +32,9 @@ const DEFAULT_FISCAL = {
   // Controla si el server Python arranca con la app. OFF por defecto para
   // no afectar rendimiento en PCs viejas que no usan facturación fiscal.
   serverEnabled: false,
-  // Código de barras en la factura fiscal HKA80 (autopago). OFF por defecto.
-  printBarcode: false,
+  // Código de barras en la factura fiscal HKA80 con el nº de orden (últimos dígitos
+  // del UUID). ON por defecto; se apaga poniendo printBarcode:false en Ajustes.
+  printBarcode: true,
   // Comando exacto del código de barras. Formato HKA80 validado:
   // 'j<tipo><posición><texto>{code}' (tipo 2=CODE128, posición 0=cuerpo 1=pie,
   // texto 0=sin número 1=con número). {code} = número de orden.
