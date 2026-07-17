@@ -399,18 +399,16 @@ const ITEM_DESC_LEN = 20;   // lo que cabe en la propia línea del producto
 const EXTRA_LINE_LEN = 40;  // ancho del papel para las líneas '@'
 
 /**
- * Líneas '@' con lo que no cupo en la descripción del ítem. Corta por palabras para
- * no partir nombres a la mitad; una palabra más larga que la línea se parte igual.
+ * Envuelve un texto en líneas de EXTRA_LINE_LEN caracteres cortando por palabras;
+ * una palabra sola más larga que la línea se trocea. Devuelve el texto SIN prefijo.
  */
-const buildDescriptionOverflowLines = (fullDescription) => {
-  const rest = (fullDescription || '').substring(ITEM_DESC_LEN).trim();
+const wrapText40 = (text) => {
+  const rest = (text || '').trim();
   if (!rest) return [];
-
   const out = [];
   let current = '';
   for (const word of rest.split(/\s+/)) {
     let w = word;
-    // Palabra sola más larga que la línea: se trocea.
     while (w.length > EXTRA_LINE_LEN) {
       if (current) { out.push(current); current = ''; }
       out.push(w.substring(0, EXTRA_LINE_LEN));
@@ -421,7 +419,16 @@ const buildDescriptionOverflowLines = (fullDescription) => {
     else { out.push(current); current = w; }
   }
   if (current) out.push(current);
-  return out.map((l) => `@${l}`);
+  return out;
+};
+
+/**
+ * Líneas '@' con lo que no cupo en la descripción del ítem (los primeros
+ * ITEM_DESC_LEN caracteres van en la propia línea del producto; el resto acá).
+ */
+const buildDescriptionOverflowLines = (fullDescription) => {
+  const rest = (fullDescription || '').substring(ITEM_DESC_LEN);
+  return wrapText40(rest).map((l) => `@${l}`);
 };
 
 // Función auxiliar para limpiar texto (eliminar acentos y caracteres especiales)
@@ -487,12 +494,12 @@ const generateCreditNoteContent = (creditNoteData) => {
     lines.push(`iI*${creditNoteData.originalPrinterSerial}`);
   }
   
-  // Comentario de la nota de crédito (opcional)
-  if (creditNoteData.comment) {
-    const comment = sanitizeText(creditNoteData.comment, 40);
-    lines.push(`A${comment}`);
-  }
-  
+  // El MOTIVO de la NC va DESPUÉS de los productos, con el comando '@' (texto libre
+  // en el cuerpo), no con 'A' antes de ellos: así lo hace la NC de referencia
+  // validada por THE FACTORY en la máquina (d0..d3, luego '@PRUEBA DESDE TITANIOPOS',
+  // luego el cierre). Con 'A' antes salía pegado a los productos, en el área de
+  // cabecera. Ver `motivoLines` más abajo, junto al cierre.
+
   // Línea de referencia con caja y número de orden
   const orderComment = `Caja: ${creditNoteData.cashRegisterNumber || 'N/A'} - ${creditNoteData.orderNumber || 'N/A'}`;
   lines.push(`i05${orderComment}`);
@@ -534,6 +541,16 @@ const generateCreditNoteContent = (creditNoteData) => {
     }
   }
   
+  // Motivo de la NC como texto libre '@' DESPUÉS de los productos y ANTES del cierre
+  // (posición validada por THE FACTORY). Se envuelve en líneas '@' de 40 caracteres,
+  // cortando por palabras (wrapText40 respeta palabras y trocea las muy largas).
+  if (creditNoteData.comment) {
+    const motivo = sanitizeText(creditNoteData.comment, 200);
+    for (const chunk of wrapText40(`Motivo: ${motivo}`)) {
+      lines.push(`@${chunk}`);
+    }
+  }
+
   // Cierre (mismo contrato que la factura: reversa el IGTF si el pago era divisa)
   for (const line of buildCloseLines(creditNoteData)) {
     lines.push(line);
