@@ -299,16 +299,14 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null) => {
       // líneas '@' debajo, para que el producto se lea completo (ver
       // buildDescriptionOverflowLines).
       const fullDescription = sanitizeText(product.description || 'PRODUCTO', 200);
-      // Nombre envuelto POR PALABRA: 1ª línea (con el ítem) 20 chars, resto en '@' 40.
-      const descLines = wrapWords(fullDescription, ITEM_DESC_LEN, EXTRA_LINE_LEN);
-      const description = descLines[0] || 'PRODUCTO';
+      const { itemDesc, extraLines } = buildProductDescLines(fullDescription);
 
       // Formato final: [TasaIVA][Precio10][Cantidad8][Descripción]
-      const productLine = `${taxCode}${priceStr}${qtyStr}${description}`;
+      const productLine = `${taxCode}${priceStr}${qtyStr}${itemDesc}`;
       console.log(`[FISCAL] Product line: price=${product.price} -> "${priceStr}" | qty=${product.quantity} -> "${qtyStr}" | LINE="${productLine}"`);
       lines.push(productLine);
-      for (const extra of descLines.slice(1)) {
-        lines.push(`@${extra}`);
+      for (const extra of extraLines) {
+        lines.push(extra);
       }
     }
   }
@@ -440,6 +438,24 @@ const wrapWords = (text, firstW, restW) => {
 /** Compat: envoltura a 40 para texto libre (motivo, etc.). */
 const wrapText40 = (text) => wrapWords(text, EXTRA_LINE_LEN, EXTRA_LINE_LEN);
 
+// Sangría de las líneas de continuación del nombre. Cuelgan del producto (hanging
+// indent) para que el listado se lea por bloques: la línea con el precio arriba y el
+// resto del nombre indentado debajo, no como renglones sueltos.
+const CONT_INDENT = '  ';
+
+/**
+ * Parte la descripción del producto: `itemDesc` (≤20, va en la línea del ítem junto
+ * al precio) y `extraLines` (el resto como líneas '@' SANGRADAS). El ancho de la
+ * continuación descuenta la sangría para no pasarse del papel (40).
+ */
+const buildProductDescLines = (fullDescription) => {
+  const wrapped = wrapWords(fullDescription, ITEM_DESC_LEN, EXTRA_LINE_LEN - CONT_INDENT.length);
+  return {
+    itemDesc: wrapped[0] || 'PRODUCTO',
+    extraLines: wrapped.slice(1).map((l) => `@${CONT_INDENT}${l}`),
+  };
+};
+
 // Función auxiliar para limpiar texto (eliminar acentos y caracteres especiales)
 const sanitizeText = (text, maxLength = 20) => {
   return (text || '')
@@ -538,15 +554,14 @@ const generateCreditNoteContent = (creditNoteData) => {
       const qtyInThousandths = Math.round((product.quantity || 1) * 1000);
       const qtyStr = qtyInThousandths.toString().padStart(8, '0');
       
-      // Descripción: igual que la factura, envuelta por palabra (1ª línea 20, resto @40).
+      // Descripción: igual que la factura (1ª línea 20 + continuación sangrada).
       const fullDescription = sanitizeText(product.description || 'PRODUCTO', 200);
-      const descLines = wrapWords(fullDescription, ITEM_DESC_LEN, EXTRA_LINE_LEN);
-      const description = descLines[0] || 'PRODUCTO';
+      const { itemDesc, extraLines } = buildProductDescLines(fullDescription);
 
       // Formato: d[TasaIVA][Precio][Cantidad][Descripción]
-      lines.push(`d${taxCode}${priceStr}${qtyStr}${description}`);
-      for (const extra of descLines.slice(1)) {
-        lines.push(`@${extra}`);
+      lines.push(`d${taxCode}${priceStr}${qtyStr}${itemDesc}`);
+      for (const extra of extraLines) {
+        lines.push(extra);
       }
     }
   }
