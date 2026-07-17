@@ -310,6 +310,7 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null) => {
       for (const extra of descLines.slice(1)) {
         lines.push(`@${extra}`);
       }
+      lines.push(ITEM_SEPARATOR);
     }
   }
 
@@ -398,6 +399,10 @@ const buildCloseLines = (invoiceData) => {
 // TITANIOPOS' entre los ítems y la HKA la ACKea.
 const ITEM_DESC_LEN = 20;   // lo que cabe en la propia línea del producto
 const EXTRA_LINE_LEN = 40;  // ancho del papel para las líneas '@'
+// Separador entre productos: agrupa cada ítem (nombre + precio + continuación) para
+// que se lea como un bloque y no queden precio y descripción "regados". El último
+// sirve de línea entre los productos y el total.
+const ITEM_SEPARATOR = `@${'-'.repeat(EXTRA_LINE_LEN)}`;
 
 /**
  * Envuelve un texto en líneas de EXTRA_LINE_LEN caracteres cortando por palabras;
@@ -544,6 +549,7 @@ const generateCreditNoteContent = (creditNoteData) => {
       for (const extra of descLines.slice(1)) {
         lines.push(`@${extra}`);
       }
+      lines.push(ITEM_SEPARATOR);
     }
   }
   
