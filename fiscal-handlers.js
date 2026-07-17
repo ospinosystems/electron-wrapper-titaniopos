@@ -310,14 +310,17 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null) => {
       for (const extra of descLines.slice(1)) {
         lines.push(`@${extra}`);
       }
-      lines.push(ITEM_SEPARATOR);
     }
   }
 
-  // Código de barras (autopago, opt-in). Codifica el número de orden (segmento
-  // final del UUID). Va DESPUÉS de los productos y ANTES del cierre, así sale
-  // al pie del documento. El comando 'j' debe enviarse con el documento abierto.
-  const barcodeLine = buildBarcodeLine(invoiceData.orderNumber, barcodeOpts);
+  // Código de barras: codifica el ÚLTIMO SEGMENTO del UUID de la orden (lo que va
+  // después del último guion, ej. '...-fb1ee5833e35' → 'fb1ee5833e35'). Es más
+  // específico que el short_id de 4 chars. Va DESPUÉS de los productos y ANTES del
+  // cierre (al pie); el comando 'j' debe enviarse con el documento abierto.
+  const barcodeCode = invoiceData.orderUuid
+    ? String(invoiceData.orderUuid).split('-').pop()
+    : invoiceData.orderNumber;
+  const barcodeLine = buildBarcodeLine(barcodeCode, barcodeOpts);
   if (barcodeLine) {
     console.log('[FISCAL] Barcode line:', barcodeLine);
     lines.push(barcodeLine);
@@ -399,10 +402,6 @@ const buildCloseLines = (invoiceData) => {
 // TITANIOPOS' entre los ítems y la HKA la ACKea.
 const ITEM_DESC_LEN = 20;   // lo que cabe en la propia línea del producto
 const EXTRA_LINE_LEN = 40;  // ancho del papel para las líneas '@'
-// Separador entre productos: agrupa cada ítem (nombre + precio + continuación) para
-// que se lea como un bloque y no queden precio y descripción "regados". El último
-// sirve de línea entre los productos y el total.
-const ITEM_SEPARATOR = `@${'-'.repeat(EXTRA_LINE_LEN)}`;
 
 /**
  * Envuelve un texto en líneas de EXTRA_LINE_LEN caracteres cortando por palabras;
@@ -549,7 +548,6 @@ const generateCreditNoteContent = (creditNoteData) => {
       for (const extra of descLines.slice(1)) {
         lines.push(`@${extra}`);
       }
-      lines.push(ITEM_SEPARATOR);
     }
   }
   
