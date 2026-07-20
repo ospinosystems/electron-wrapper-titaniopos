@@ -835,9 +835,13 @@ def correr_operacion(name):
             s1_op = imp.get_s1_data()
         except Exception:
             s1_op = None
-    cerro_ok = diag.get("ok") and diag.get("reason") is None
+    # warn_tail_failed / warn_close_ack_lost = el documento SÍ cerró (solo falló
+    # una línea posterior o el ACK llegó tarde): éxito con aviso, no error.
+    cerro_ok = diag.get("ok") and diag.get("reason") in (None, "warn_tail_failed", "warn_close_ack_lost")
     if cerro_ok:
         msg = f"{op['label']}: procesada correctamente"
+        if diag.get("reason"):
+            msg += f" (aviso: {diag.get('reason')})"
         if diag.get("recovered_open_doc"):
             msg += " (se canceló un documento abierto previo)"
     elif diag.get("ok") and diag.get("reason") == "warn_not_closed":
@@ -944,7 +948,8 @@ def test_print():
     _log_fiscal_attempt("test-print", f"TEST-{short_id[:8]}", diag)
 
     # Éxito real = imprimió Y cerró (cortó). warn_not_closed => salió pero no cerró.
-    cerro_ok = diag.get("ok") and diag.get("reason") is None
+    # warn_close_ack_lost => cerró (el ACK del pago llegó tarde, verificado por status).
+    cerro_ok = diag.get("ok") and diag.get("reason") in (None, "warn_close_ack_lost")
     if cerro_ok:
         msg = f"Factura de prueba impresa y cerrada (UUID: {short_id})"
         if diag.get("recovered_open_doc"):
