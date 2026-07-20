@@ -308,8 +308,8 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null) => {
       for (const extra of extraLines) {
         lines.push(extra);
       }
-      // Descuento (informativo): precio de lista vs cobrado. No toca el cálculo fiscal.
-      const descLine = buildDiscountLine(product.listPrice, product.price, product.quantity);
+      // Descuento (informativo): precio de lista vs cobrado, CON IVA. No toca el cálculo fiscal.
+      const descLine = buildDiscountLine(product.listPrice, product.price, product.quantity, product.taxRate);
       if (descLine) lines.push(descLine);
     }
   }
@@ -469,12 +469,16 @@ const fmtBs = (n) =>
  * el total exacto al céntimo). Devuelve null si no hay descuento.
  * `listUnit` y `paidUnit` son el precio UNITARIO de lista y el cobrado, en Bs.
  */
-const buildDiscountLine = (listUnit, paidUnit, qty) => {
-  const list = Number(listUnit) || 0;
-  const paid = Number(paidUnit) || 0;
+const buildDiscountLine = (listUnit, paidUnit, qty, taxRate = 0) => {
+  // Se muestra CON IVA: es lo que percibe el cliente (la línea del ítem va en base
+  // sin IVA porque la HKA suma el impuesto aparte, pero el ahorro que "siente" el
+  // cliente es sobre el precio final con IVA). factor = 1 + alícuota.
+  const f = 1 + (Number(taxRate) || 0) / 100;
+  const list = (Number(listUnit) || 0) * f;
+  const paid = (Number(paidUnit) || 0) * f;
   if (list <= paid + 0.005) return null; // sin descuento
   const descTotal = (list - paid) * (Number(qty) || 1);
-  return `@${CONT_INDENT}Lista ${fmtBs(list)}  Desc -${fmtBs(descTotal)}`;
+  return `@${CONT_INDENT}Lista ${fmtBs(list)}  Ahorro -${fmtBs(descTotal)}`;
 };
 
 // Función auxiliar para limpiar texto (eliminar acentos y caracteres especiales)
@@ -540,16 +544,19 @@ const generateCreditNoteContent = (creditNoteData) => {
     lines.push(`iI*${creditNoteData.originalPrinterSerial}`);
   }
   
-  // El MOTIVO de la NC va DESPUÉS de los productos, con el comando '@' (texto libre
-  // en el cuerpo), no con 'A' antes de ellos: así lo hace la NC de referencia
-  // validada por THE FACTORY en la máquina (d0..d3, luego '@PRUEBA DESDE TITANIOPOS',
-  // luego el cierre). Con 'A' antes salía pegado a los productos, en el área de
-  // cabecera. Ver `motivoLines` más abajo, junto al cierre.
-
   // Línea de referencia con caja y número de orden
   const orderComment = `Caja: ${creditNoteData.cashRegisterNumber || 'N/A'} - ${creditNoteData.orderNumber || 'N/A'}`;
   lines.push(`i05${orderComment}`);
-  
+
+  // MOTIVO de la NC: va ANTES de los productos (texto libre '@'), como lo pidió caja.
+  // Se envuelve a 40 caracteres cortando por palabras.
+  if (creditNoteData.comment) {
+    const motivo = sanitizeText(creditNoteData.comment, 200);
+    for (const chunk of wrapText40(`Motivo: ${motivo}`)) {
+      lines.push(`@${chunk}`);
+    }
+  }
+
   // Productos para devolución
   // Formato: d[TasaIVA][Precio12dig][Cantidad8dig][Descripción]
   // d0 = Exento, d1 = Tasa General, d2 = Tasa Reducida, d3 = Tasa Adicional
@@ -584,22 +591,12 @@ const generateCreditNoteContent = (creditNoteData) => {
       for (const extra of extraLines) {
         lines.push(extra);
       }
-      // Descuento (informativo), igual que la factura.
-      const descLine = buildDiscountLine(product.listPrice, product.price, product.quantity);
+      // Descuento (informativo), igual que la factura: CON IVA.
+      const descLine = buildDiscountLine(product.listPrice, product.price, product.quantity, product.taxRate);
       if (descLine) lines.push(descLine);
     }
   }
   
-  // Motivo de la NC como texto libre '@' DESPUÉS de los productos y ANTES del cierre
-  // (posición validada por THE FACTORY). Se envuelve en líneas '@' de 40 caracteres,
-  // cortando por palabras (wrapText40 respeta palabras y trocea las muy largas).
-  if (creditNoteData.comment) {
-    const motivo = sanitizeText(creditNoteData.comment, 200);
-    for (const chunk of wrapText40(`Motivo: ${motivo}`)) {
-      lines.push(`@${chunk}`);
-    }
-  }
-
   // Cierre (mismo contrato que la factura: reversa el IGTF si el pago era divisa)
   for (const line of buildCloseLines(creditNoteData)) {
     lines.push(line);
