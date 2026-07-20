@@ -302,13 +302,15 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null) => {
       const { itemDesc, extraLines } = buildProductDescLines(fullDescription);
 
       // Formato final: [TasaIVA][Precio10][Cantidad8][Descripción]
+      // El nombre va SOLO en la línea del ítem (la HKA lo recorta a su ancho). Se
+      // eliminaron las líneas '@' de continuación del nombre porque la HKA las enmarca
+      // con '|' (se veía cargado) y separaban el descuento de su producto. El nombre
+      // queda recortado a propósito (elección de caja).
+      void extraLines;
       const productLine = `${taxCode}${priceStr}${qtyStr}${itemDesc}`;
       console.log(`[FISCAL] Product line: price=${product.price} -> "${priceStr}" | qty=${product.quantity} -> "${qtyStr}" | LINE="${productLine}"`);
       lines.push(productLine);
-      for (const extra of extraLines) {
-        lines.push(extra);
-      }
-      // Descuento (informativo): precio de lista vs cobrado, CON IVA. No toca el cálculo fiscal.
+      // Descuento (informativo) JUSTO debajo del ítem, CON IVA. No toca el cálculo fiscal.
       const descLine = buildDiscountLine(product.listPrice, product.price, product.quantity, product.taxRate);
       if (descLine) lines.push(descLine);
     }
@@ -586,12 +588,11 @@ const generateCreditNoteContent = (creditNoteData) => {
       const fullDescription = sanitizeText(product.description || 'PRODUCTO', 200);
       const { itemDesc, extraLines } = buildProductDescLines(fullDescription);
 
-      // Formato: d[TasaIVA][Precio][Cantidad][Descripción]
+      // Formato: d[TasaIVA][Precio][Cantidad][Descripción]. Nombre solo en la línea del
+      // ítem (sin líneas '@' de continuación → sin '|'), igual que la factura.
+      void extraLines;
       lines.push(`d${taxCode}${priceStr}${qtyStr}${itemDesc}`);
-      for (const extra of extraLines) {
-        lines.push(extra);
-      }
-      // Descuento (informativo), igual que la factura: CON IVA.
+      // Descuento (informativo) JUSTO debajo del ítem, CON IVA.
       const descLine = buildDiscountLine(product.listPrice, product.price, product.quantity, product.taxRate);
       if (descLine) lines.push(descLine);
     }
