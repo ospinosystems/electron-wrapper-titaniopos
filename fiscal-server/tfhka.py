@@ -632,8 +632,10 @@ class Tfhka:
                 n = len(lines_clean)
                 for idx, t in enumerate(lines_clean):
                     # "80" imprime/abre; "81" en la ÚLTIMA línea imprime y CIERRA. '0' = formato normal.
+                    # Truncar a 64 (no 40): el [:40] recortaba el layout del POS y el
+                    # presupuesto salía angosto aunque el papel admite más columnas.
                     prefix = "81" if idx == n - 1 else "80"
-                    seq.append(prefix + "0" + t[:40])
+                    seq.append(prefix + "0" + t[:64])
 
                 sent = []
                 for line in seq:

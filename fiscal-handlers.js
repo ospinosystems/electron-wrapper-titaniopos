@@ -493,14 +493,15 @@ const TAX_CHARS_FACTURA = { exento: ' ', general: '!', reducida: '"', adicional:
 const TAX_CHARS_NC = { exento: '0', general: '1', reducida: '2', adicional: '3' };
 
 // PERCIBIDO: 0% como el exento, pero la factura debe marcarlo (P), no (E). La ranura
-// de tasa que la máquina imprime como P depende de su programación PT — en la HKA80
-// de homologación (modo entrenamiento) es la tasa 3 ('#'). Configurable con
-// fiscal.percibidoChar (' ', '!', '"', '#' o '$') por si el técnico la programa en
-// otra ranura. El char de NC equivalente sale de FACTURA_TO_NC_CHAR.
+// de tasa que la máquina imprime como P depende de su programación PT. VALIDADO EN
+// HW 20-07: la tasa 3 ('#') imprime (A) adicional — la P es la tasa 4 ('$'), el
+// quinto char del protocolo (la op oficial factura-igtf lo usa). Configurable con
+// fiscal.percibidoChar por si otra máquina la tiene en otra ranura. El char de NC
+// equivalente sale de FACTURA_TO_NC_CHAR.
 const FACTURA_TO_NC_CHAR = { ' ': '0', '!': '1', '"': '2', '#': '3', '$': '4' };
 const normalizePercibidoChar = (raw) => {
-  const c = typeof raw === 'string' && raw.length ? raw[0] : '#';
-  return FACTURA_TO_NC_CHAR[c] ? c : '#';
+  const c = typeof raw === 'string' && raw.length ? raw[0] : '$';
+  return FACTURA_TO_NC_CHAR[c] ? c : '$';
 };
 
 const taxCodeFor = (taxRate, chars) => {

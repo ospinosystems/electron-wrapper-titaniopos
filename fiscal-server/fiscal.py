@@ -800,6 +800,20 @@ OPERACIONES = {
         _nd_item(1, "0,10", "1,000", "PRODUCTO 2"), _nd_item(2, "0,10", "1,000", "PRODUCTO 3"),
         _nd_item(3, "0,10", "1,000", "PRODUCTO 4"), _nd_item(4, "0,10", "1,000", "PRODUCTO 5"),
         "BPRUEBA DESDE TITANIOPOS", "101", "199"]},
+    # Muestrario de formatos '80x': cada línea sale con un char de formato distinto
+    # (fuente/estilo). Sirve para MEDIR cuántas columnas imprime cada fuente (la
+    # regla de dígitos) y elegir el formato/ancho del presupuesto sin adivinar.
+    "no-fiscal-fuentes": {"label": "Fuentes No Fiscal (80x)", "fiscal": False, "lines": [
+        "800FORMATO 0 |123456789012345678901234567890123456789012345678901234567890",
+        "801FORMATO 1 |123456789012345678901234567890123456789012345678901234567890",
+        "802FORMATO 2 |123456789012345678901234567890123456789012345678901234567890",
+        "803FORMATO 3 |123456789012345678901234567890123456789012345678901234567890",
+        "804FORMATO 4 |123456789012345678901234567890123456789012345678901234567890",
+        "80*FORMATO * |123456789012345678901234567890123456789012345678901234567890",
+        "80>FORMATO > |123456789012345678901234567890123456789012345678901234567890",
+        "80$FORMATO $ |123456789012345678901234567890123456789012345678901234567890",
+        "80!FORMATO ! |123456789012345678901234567890123456789012345678901234567890",
+        "810FIN: cuenta los digitos visibles de cada fila"]},
     "documento-no-fiscal": {"label": "Documento No Fiscal", "fiscal": False, "lines": [
         "800Documento de prueba para ejemplificar el uso ",
         "80*de los Documentos NO Fiscales y de sus",
