@@ -258,6 +258,7 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null, formatOpts = nul
     ? 'none'
     : (formatOpts && formatOpts.discountMode) || 'amount';
   const descLeaders = !formatOpts || formatOpts.descLeaders !== false;
+  const percibidoChar = normalizePercibidoChar(formatOpts && formatOpts.percibidoChar);
   
   // Datos del cliente (opcional)
   // Soporta tanto customerName/customerRif como client.name/client.rif
@@ -295,7 +296,9 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null, formatOpts = nul
   let docTotalCents = 0; // neto + IVA (modelo de la máquina) para el clamp del cierre
   if (invoiceData.products && Array.isArray(invoiceData.products)) {
     for (const product of invoiceData.products) {
-      const taxCode = taxCodeFor(product.taxRate, TAX_CHARS_FACTURA);
+      const taxCode = product.percibido
+        ? percibidoChar
+        : taxCodeFor(product.taxRate, TAX_CHARS_FACTURA);
 
       // Precio en centavos (sin decimales), 10 dígitos
       // IMPORTANTE: Es el precio UNITARIO, no el total
@@ -344,11 +347,13 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null, formatOpts = nul
         if (fit.discountLine) lines.push(fit.discountLine);
       }
 
-      // Neto de la línea según el mismo target que garantiza fitExactLine.
+      // Neto de la línea según el mismo target que garantiza fitExactLine. La
+      // alícuota del modelo sale del PRODUCTO (percibido = 0%), no del char de
+      // tasa (cuyo % real depende de la programación de la máquina).
       const netCents = product.lineTotalBs != null
         ? Math.round((parseFloat(product.lineTotalBs) || 0) * 100)
         : Math.round(priceInCents * (parseFloat(product.quantity) || 1));
-      docTotalCents += netCents + Math.round((netCents * (TAX_RATE_BY_CHAR[taxCode] || 0)) / 100);
+      docTotalCents += netCents + Math.round((netCents * (Number(product.taxRate) || 0)) / 100);
     }
   }
 
@@ -486,9 +491,17 @@ const normalizeItemDescLen = (raw) => {
 // rama era inalcanzable y un producto al 31% se facturaba como general (16%).
 const TAX_CHARS_FACTURA = { exento: ' ', general: '!', reducida: '"', adicional: '#' };
 const TAX_CHARS_NC = { exento: '0', general: '1', reducida: '2', adicional: '3' };
-// Alícuota que la máquina aplica por código de tasa (para predecir el total del
-// documento y recortar parciales que lo excederían).
-const TAX_RATE_BY_CHAR = { ' ': 0, '!': 16, '"': 8, '#': 31, '0': 0, '1': 16, '2': 8, '3': 31 };
+
+// PERCIBIDO: 0% como el exento, pero la factura debe marcarlo (P), no (E). La ranura
+// de tasa que la máquina imprime como P depende de su programación PT — en la HKA80
+// de homologación (modo entrenamiento) es la tasa 3 ('#'). Configurable con
+// fiscal.percibidoChar (' ', '!', '"', '#' o '$') por si el técnico la programa en
+// otra ranura. El char de NC equivalente sale de FACTURA_TO_NC_CHAR.
+const FACTURA_TO_NC_CHAR = { ' ': '0', '!': '1', '"': '2', '#': '3', '$': '4' };
+const normalizePercibidoChar = (raw) => {
+  const c = typeof raw === 'string' && raw.length ? raw[0] : '#';
+  return FACTURA_TO_NC_CHAR[c] ? c : '#';
+};
 
 const taxCodeFor = (taxRate, chars) => {
   const rate = Number(taxRate) || 0;
@@ -716,6 +729,7 @@ const generateCreditNoteContent = (creditNoteData, formatOpts = null) => {
   const lines = [];
   const descLen = normalizeItemDescLen(formatOpts && formatOpts.itemDescLen);
   const descLeaders = !formatOpts || formatOpts.descLeaders !== false;
+  const percibidoChar = normalizePercibidoChar(formatOpts && formatOpts.percibidoChar);
   
   // Datos del cliente (requeridos para nota de crédito)
   if (creditNoteData.customerRif) {
@@ -781,7 +795,9 @@ const generateCreditNoteContent = (creditNoteData, formatOpts = null) => {
   let docTotalCents = 0; // neto + IVA para el clamp del cierre (igual que la factura)
   if (creditNoteData.products && Array.isArray(creditNoteData.products)) {
     for (const product of creditNoteData.products) {
-      const taxCode = taxCodeFor(product.taxRate, TAX_CHARS_NC);
+      const taxCode = product.percibido
+        ? (FACTURA_TO_NC_CHAR[percibidoChar] || '3')
+        : taxCodeFor(product.taxRate, TAX_CHARS_NC);
 
       // Precio en centavos, 10 dígitos (formato HKA80, ver generateFiscalContent).
       // La NC va al precio NETO cobrado (devuelve exacto lo facturado). No se usa
@@ -804,7 +820,7 @@ const generateCreditNoteContent = (creditNoteData, formatOpts = null) => {
       lines.push(`d${taxCode}${priceStr}${qtyStr}${descField}`);
 
       const netCents = Math.round(priceInCents * (parseFloat(product.quantity) || 1));
-      docTotalCents += netCents + Math.round((netCents * (TAX_RATE_BY_CHAR[taxCode] || 0)) / 100);
+      docTotalCents += netCents + Math.round((netCents * (Number(product.taxRate) || 0)) / 100);
     }
   }
 
@@ -891,10 +907,13 @@ const registerFiscalHandlers = (app) => {
       //   fiscal.discountMode — 'amount' (q-, exacto, default) | 'percent' (p-) |
       //                         'none' (sin descuento nativo, renglón al neto).
       //   fiscal.descLeaders  — false apaga los puntos de guía 'NOMBRE ....'.
+      //   fiscal.percibidoChar — ranura de tasa que la máquina imprime como (P)
+      //                          (default '#'; depende de la programación PT).
       const formatOpts = {
         itemDescLen: config.itemDescLen,
         discountMode: config.discountMode,
         descLeaders: config.descLeaders !== false,
+        percibidoChar: config.percibidoChar,
       };
 
       // Enviar factura (pasando fiscalMode para agregar indicador si es prueba).
