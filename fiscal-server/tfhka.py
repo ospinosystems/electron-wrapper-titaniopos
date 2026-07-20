@@ -692,7 +692,21 @@ class Tfhka:
                         continue
                     ok = self.send_cmd(line, _keep_open=True)
                     enviadas.append({"line": line, "ok": ok})
+                    es_cierre = len(line) == 3 and line[0] == '1' and line[1:].isdigit()
                     if not ok:
+                        if es_cierre and not cierre_ack:
+                            # El ACK del pago total puede perderse (el equipo esta
+                            # ocupado imprimiendo/cortando y responde tarde). Antes
+                            # de dar el documento por fallido — y que el POS lo
+                            # reenvie generando una factura DUPLICADA — constatar
+                            # con el status si realmente quedo abierto.
+                            for _ in range(6):
+                                time.sleep(0.5)
+                                post = self._read_status_locked()
+                                if not (post and post.get("status") in _IN_TRANSACTION):
+                                    return {"ok": True, "reason": "warn_close_ack_lost",
+                                            "line": line, "sent": enviadas, "pre_status": pre,
+                                            "post_status": post, "recovered_open_doc": recovered}
                         if cierre_ack:
                             # El pago total ya ACKeo: el documento fiscal esta
                             # CERRADO con numero asignado. Reportar error aqui
@@ -711,7 +725,7 @@ class Tfhka:
                                 "recovered_open_doc": recovered}
                     # Pago total = '1' + 2 digitos del medio (ej. '101', '120');
                     # el '199' posterior tambien matchea pero cierre_ack ya es True.
-                    if len(line) == 3 and line[0] == '1' and line[1:].isdigit():
+                    if es_cierre:
                         cierre_ack = True
                 # 4. Post-flight (diagnóstico). NO se cancela ni se falla por esto:
                 #    si todas las líneas dieron ACK, reimprimir sería peor (doble factura).

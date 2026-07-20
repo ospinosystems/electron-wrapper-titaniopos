@@ -535,7 +535,10 @@ def fiscal_command():
     cmd = (request.get_json() or {}).get("cmd", "")
     if not cmd:
         return jsonify({"status": "error", "message": "Falta 'cmd'"}), 400
-    ok = imp.send_cmd(cmd)
+    # lock_fiscal: un comando crudo no debe intercalarse dentro de la impresión
+    # de una factura de la cola (línea ajena en medio del documento).
+    with lock_fiscal:
+        ok = imp.send_cmd(cmd)
     return jsonify({"status": "ok" if ok else "error", "acked": ok,
                     "printer_status": imp.get_printer_status() if not ok else None, "cmd": cmd})
 
@@ -546,7 +549,8 @@ def fiscal_cancel():
     imp, err = _nueva_impresora()
     if err:
         return jsonify({"status": "error", "message": err}), 400
-    ok = imp.cancel_document()
+    with lock_fiscal:
+        ok = imp.cancel_document()
     return jsonify({"status": "ok" if ok else "error", "acked": ok})
 
 
@@ -819,8 +823,18 @@ def correr_operacion(name):
     if err:
         return jsonify({"status": "error", "message": err}), 400
     # Flujo robusto (recupera doc abierto, ACK+reintento, verifica cierre).
-    diag = imp.print_invoice(op["lines"])
-    _log_fiscal_attempt(f"op:{name}", None, diag)
+    # lock_fiscal: serializado con la cola — sin esto, esta impresión podía
+    # intercalarse entre el print de un job y su lectura de S1 (el job capturaba
+    # el número fiscal de ESTE documento en vez del suyo).
+    with lock_fiscal:
+        diag = imp.print_invoice(op["lines"])
+        _log_fiscal_attempt(f"op:{name}", None, diag)
+        # El S1 va DENTRO del lock: debe corresponder a ESTE documento.
+        s1_op = None
+        try:
+            s1_op = imp.get_s1_data()
+        except Exception:
+            s1_op = None
     cerro_ok = diag.get("ok") and diag.get("reason") is None
     if cerro_ok:
         msg = f"{op['label']}: procesada correctamente"
@@ -831,11 +845,11 @@ def correr_operacion(name):
     else:
         msg = f"{op['label']}: {_mensaje_fallo_impresion(diag)}"
 
-    # Leer S1 tras imprimir: serial de la máquina + número fiscal asignado al documento.
+    # S1 leído tras imprimir: serial de la máquina + número fiscal asignado al documento.
     maquina = None
     numero_fiscal = None
     try:
-        s1 = imp.get_s1_data()
+        s1 = s1_op
         if s1:
             maquina = {
                 "serial": s1.get("registered_machine_number"),
@@ -924,7 +938,9 @@ def test_print():
 
     # Flujo robusto: recupera un documento abierto de un intento previo (causa del
     # "1ra incompleta / 2da completa"), envía con ACK+reintento y CONFIRMA el cierre.
-    diag = imp.print_invoice(lineas)
+    # lock_fiscal: serializado con la cola de facturas reales.
+    with lock_fiscal:
+        diag = imp.print_invoice(lineas)
     _log_fiscal_attempt("test-print", f"TEST-{short_id[:8]}", diag)
 
     # Éxito real = imprimió Y cerró (cortó). warn_not_closed => salió pero no cerró.
