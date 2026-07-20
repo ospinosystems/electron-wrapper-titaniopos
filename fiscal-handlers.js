@@ -159,6 +159,22 @@ const sendFiscalInvoice = async (serverUrl, invoiceData, fiscalMode = true, barc
   try {
     const docType = invoiceData.type || 'factura';
 
+    // Identificación del cliente: si el POS mandó datos pero sanitizan a nada, la
+    // factura saldría identificada A MEDIAS (nombre sin RIF o al revés — art. 14:
+    // el crédito fiscal del adquirente exige ambos) y ya estaría en memoria fiscal.
+    // Mejor rechazar ANTES de abrir el documento.
+    const rawRif = invoiceData.customerRif || (invoiceData.client && invoiceData.client.rif);
+    const rawName = invoiceData.customerName || (invoiceData.client && invoiceData.client.name);
+    if (rawRif != null && String(rawRif).trim() !== '') {
+      const rifSan = String(rawRif).replace(/[^0-9A-Za-z]/g, '');
+      if (rifSan.length <= 1) {
+        return { success: false, error: `RIF/cédula del cliente inválido para el documento fiscal: "${rawRif}"` };
+      }
+    }
+    if (rawName != null && String(rawName).trim() !== '' && !sanitizeText(String(rawName), 40)) {
+      return { success: false, error: 'Nombre del cliente inválido para el documento fiscal (sin caracteres imprimibles)' };
+    }
+
     // Generar contenido según el tipo de documento
     let fiscalLines;
     if (docType === 'notacredito' || docType === 'creditnote') {
@@ -538,9 +554,29 @@ const fitExactLine = (product, priceInCents, mode) => {
   const targetNet = product.lineTotalBs != null
     ? Math.round((parseFloat(product.lineTotalBs) || 0) * 100)
     : Math.round(priceInCents * q);
-  if (targetNet <= 0) return null;
-
   const listCents = Math.round((parseFloat(product.listPrice) || 0) * 100);
+
+  if (targetNet <= 0) {
+    // REGALO (descuento 100%): sin esto, el renglón salía a precio 0 sin rastro
+    // del descuento ni del precio de lista (art. 14) — y un posible NAK de la
+    // HKA ante 0,00 abortaría la factura a mitad de documento. Se manda a LISTA
+    // con 'q-' por el total del renglón (neto 0). ⚠️ VALIDAR EN HW que la HKA80
+    // acepte neto 0; solo en modo 'amount' (p- no puede expresar 100%).
+    if (listCents > 0 && mode !== 'percent') {
+      const lineTotal = Math.round(listCents * q);
+      if (lineTotal > 0 && lineTotal <= 999999999) {
+        console.warn('[FISCAL] Renglón con descuento 100%: lista + q- por el total (validar neto 0 en HW)');
+        return {
+          priceStr: String(listCents).padStart(10, '0'),
+          discountLine: `q-${String(lineTotal).padStart(9, '0')}`,
+          deltaCents: 0,
+        };
+      }
+    }
+    console.warn('[FISCAL] Renglón a precio 0 sin lista: se envía tal cual (posible NAK de la HKA)');
+    return null;
+  }
+
   if (listCents > priceInCents) {
     const fit = fitNativeDiscount(product.listPrice, product.price, q, mode, targetNet);
     if (fit) return fit;
@@ -550,11 +586,19 @@ const fitExactLine = (product, priceInCents, mode) => {
   if (Math.round(priceInCents * q) === targetNet) return null;
   if (mode === 'percent') return null; // el ajuste fino requiere 'q-' por monto
 
-  // Unitario mínimo cuyo total alcanza el target; el excedente sale como 'q-'.
-  let unit = Math.max(1, Math.floor(targetNet / q));
+  // Unitario cuyo total alcanza el target; el excedente sale como 'q-'. Si el
+  // unitario ORIGINAL ya lo alcanza se conserva (descuento colapsado: unitario ==
+  // lista y el q- muestra los céntimos reales del descuento); si no, el mínimo
+  // que llegue.
+  let unit = Math.round(priceInCents * q) >= targetNet
+    ? priceInCents
+    : Math.max(1, Math.floor(targetNet / q));
   while (Math.round(unit * q) < targetNet) unit++;
   const disc = Math.round(unit * q) - targetNet;
-  if (disc > 999999999) return null;
+  if (disc > 999999999) {
+    console.warn(`[FISCAL] Ajuste de línea fuera de rango del comando q- (${disc}c): renglón al neto sin descuento visible`);
+    return null;
+  }
   return {
     priceStr: String(unit).padStart(10, '0'),
     discountLine: disc > 0 ? `q-${String(disc).padStart(9, '0')}` : null,
@@ -606,7 +650,11 @@ const fitNativeDiscount = (listUnit, paidUnit, qty, mode = 'amount', targetNetOv
     const disc = lineTotal - targetNet;
     // Fuera de rango del comando (7+2 dígitos) o sin descuento tras redondear:
     // sin línea nativa; el renglón va al neto (exacto, solo que sin mostrarlo).
-    if (disc <= 0 || disc > 999999999) return null;
+    if (disc > 999999999) {
+      console.warn(`[FISCAL] Descuento de línea fuera de rango del comando q- (${disc}c): renglón al neto sin descuento visible`);
+      return null;
+    }
+    if (disc <= 0) return null;
     return {
       priceStr: String(listCents).padStart(10, '0'),
       discountLine: `q-${String(disc).padStart(9, '0')}`,
@@ -614,31 +662,23 @@ const fitNativeDiscount = (listUnit, paidUnit, qty, mode = 'amount', targetNetOv
     };
   }
 
+  // Modo percent: la LISTA impresa NUNCA se altera (un fiscalizador conciliaría
+  // lista × cantidad − DESC% contra el precio real del establecimiento); solo se
+  // busca el % de 2 decimales que mejor aproxime el neto y el residuo se loguea.
   const basePct = Math.round((1 - paidCents / listCents) * 10000); // centésimas de %
-
+  const lineTotal = Math.round(listCents * q);
   const candidates = [];
-  for (let dl = -5; dl <= 5; dl++) {
-    const lc = listCents + dl;
-    if (lc <= paidCents) continue;
-    const lineTotal = Math.round(lc * q);
-    for (let dp = -5; dp <= 5; dp++) {
-      const pct = basePct + dp;
-      if (pct <= 0 || pct > 9999) continue;
-      const predictedNet = lineTotal - Math.round((lineTotal * pct) / 10000);
-      candidates.push({
-        lc, pct,
-        delta: Math.abs(predictedNet - targetNet),
-        dev: Math.abs(dl),
-        pctDev: Math.abs(dp),
-      });
-    }
+  for (let dp = -5; dp <= 5; dp++) {
+    const pct = basePct + dp;
+    if (pct <= 0 || pct > 9999) continue;
+    const predictedNet = lineTotal - Math.round((lineTotal * pct) / 10000);
+    candidates.push({ pct, delta: Math.abs(predictedNet - targetNet), pctDev: Math.abs(dp) });
   }
   if (!candidates.length) return null;
-  // Exactitud primero; a igual delta, la lista más fiel a la real y el % más fiel.
-  candidates.sort((a, b) => a.delta - b.delta || a.dev - b.dev || a.pctDev - b.pctDev);
+  candidates.sort((a, b) => a.delta - b.delta || a.pctDev - b.pctDev);
   const best = candidates[0];
   return {
-    priceStr: String(best.lc).padStart(10, '0'),
+    priceStr: String(listCents).padStart(10, '0'),
     discountLine: `p-${String(best.pct).padStart(4, '0')}`,
     deltaCents: best.delta,
   };

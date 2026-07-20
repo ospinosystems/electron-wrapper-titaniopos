@@ -228,10 +228,15 @@ def extraer_id_caja(parametros):
             for item in parametros:
                 if isinstance(item, str) and "i05Caja:" in item:
                     if item.startswith("i05Caja:"):
-                        return {"id_caja": item.replace("i05Caja:", ""), "linea_completa": item}
+                        # .strip(): la linea real es 'i05Caja: 2 - X' (espacio tras los
+                        # dos puntos). Guardar el id CON espacio rompia el dedup tras un
+                        # reinicio: cargar_ids_ejecutados hace line.strip() al leer el
+                        # archivo y el id re-extraido (' 2 - X') nunca coincidia -> el
+                        # reenvio de un documento YA IMPRESO se imprimia de nuevo.
+                        return {"id_caja": item.replace("i05Caja:", "").strip(), "linea_completa": item}
                     m = re.search(r'i05Caja:([^,\]\s]+)', item)
                     if m:
-                        return {"id_caja": m.group(1), "linea_completa": item}
+                        return {"id_caja": m.group(1).strip(), "linea_completa": item}
         return {"id_caja": None, "linea_completa": None}
     except Exception as e:
         print(f"Error extrayendo ID de caja: {e}")
