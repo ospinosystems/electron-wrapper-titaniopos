@@ -237,6 +237,7 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null, formatOpts = nul
   const lines = [];
   const descLen = normalizeItemDescLen(formatOpts && formatOpts.itemDescLen);
   const nativeDiscount = !formatOpts || formatOpts.nativeDiscount !== false;
+  const descLeaders = !formatOpts || formatOpts.descLeaders !== false;
   
   // Datos del cliente (opcional)
   // Soporta tanto customerName/customerRif como client.name/client.rif
@@ -304,7 +305,11 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null, formatOpts = nul
       const priceStr = fit ? fit.priceStr : priceInCents.toString().padStart(10, '0');
 
       // Formato final: [TasaIVA][Precio10][Cantidad8][Descripción]
-      const productLine = `${taxCode}${priceStr}${qtyStr}${itemDesc}`;
+      // Con puntos de guía ('NOMBRE .......') hasta el ancho del campo, para que
+      // la vista llegue fácil del nombre a los números (fiscal.descLeaders=false
+      // los apaga).
+      const descField = descLeaders ? withDotLeaders(itemDesc, descLen) : itemDesc;
+      const productLine = `${taxCode}${priceStr}${qtyStr}${descField}`;
       console.log(`[FISCAL] Product line: price=${product.price} -> "${priceStr}" | qty=${product.quantity} -> "${qtyStr}" | LINE="${productLine}"`);
       lines.push(productLine);
       if (fit) {
@@ -398,19 +403,20 @@ const buildCloseLines = (invoiceData) => {
   return closeLines;
 };
 
-// Largo de la descripción en la línea del ítem. 20 es lo único validado en HW (el
-// Factura.txt legado siempre mandó 20); la descripción es el campo FINAL de la trama,
-// así que un largo mayor no puede romper el parseo de precio/cantidad — a lo sumo la
-// impresora la recorta. `fiscal.itemDescLen` en la config permite subirlo (hasta 100)
-// para probar en la máquina real cuánto admite/imprime la HKA80.
-const ITEM_DESC_LEN = 20;   // default seguro, validado en hardware
+// Largo de la descripción en la línea del ítem. La descripción es el campo FINAL de
+// la trama, así que un largo mayor no puede romper el parseo de precio/cantidad — a
+// lo sumo la impresora la recorta. Default 40 (aprovechar el ancho del papel);
+// `fiscal.itemDescLen` en la config lo ajusta (10-100) según lo que la HKA80
+// realmente imprima en la caja.
+const ITEM_DESC_LEN = 40;   // default (pendiente confirmar el máximo real en HW)
+const ITEM_DESC_MIN = 10;
 const ITEM_DESC_MAX = 100;  // techo del override por config (evita tramas gigantes)
 const EXTRA_LINE_LEN = 40;  // ancho del papel para las líneas '@' (motivo de NC)
 
 const normalizeItemDescLen = (raw) => {
   const n = parseInt(raw, 10);
   if (!Number.isFinite(n)) return ITEM_DESC_LEN;
-  return Math.min(ITEM_DESC_MAX, Math.max(ITEM_DESC_LEN, n));
+  return Math.min(ITEM_DESC_MAX, Math.max(ITEM_DESC_MIN, n));
 };
 
 // Códigos de tasa IVA por documento. El umbral de la ADICIONAL (>20, en la práctica
@@ -466,6 +472,16 @@ const wrapText40 = (text) => wrapWords(text, EXTRA_LINE_LEN, EXTRA_LINE_LEN);
 
 /** Primera línea de un texto cortada POR PALABRA a `width` caracteres. */
 const firstLine = (text, width) => wrapWords(text, width, width)[0] || 'PRODUCTO';
+
+/**
+ * 'NOMBRE .........' — puntos de guía hasta `width` que conducen la vista del
+ * nombre a los números que la HKA imprime a continuación en el renglón. Si el
+ * nombre casi llena el campo no se agregan (menos de 3 puntos no guían nada).
+ */
+const withDotLeaders = (name, width) => {
+  if (name.length >= width - 3) return name;
+  return `${name} ${'.'.repeat(width - name.length - 1)}`;
+};
 
 /**
  * Descuento NATIVO de la HKA: el renglón se envía al precio de LISTA y detrás va
@@ -550,6 +566,7 @@ const sanitizeText = (text, maxLength = 20) => {
 const generateCreditNoteContent = (creditNoteData, formatOpts = null) => {
   const lines = [];
   const descLen = normalizeItemDescLen(formatOpts && formatOpts.itemDescLen);
+  const descLeaders = !formatOpts || formatOpts.descLeaders !== false;
   
   // Datos del cliente (requeridos para nota de crédito)
   if (creditNoteData.customerRif) {
@@ -628,12 +645,13 @@ const generateCreditNoteContent = (creditNoteData, formatOpts = null) => {
       const qtyStr = qtyInThousandths.toString().padStart(8, '0');
 
       // Descripción solo en la línea del ítem, cortada por palabra (sin líneas '@'
-      // → sin '|'), igual que la factura.
+      // → sin '|') y con puntos de guía, igual que la factura.
       const fullDescription = sanitizeText(product.description || 'PRODUCTO', 200);
       const itemDesc = firstLine(fullDescription, descLen);
+      const descField = descLeaders ? withDotLeaders(itemDesc, descLen) : itemDesc;
 
       // Formato: d[TasaIVA][Precio][Cantidad][Descripción]
-      lines.push(`d${taxCode}${priceStr}${qtyStr}${itemDesc}`);
+      lines.push(`d${taxCode}${priceStr}${qtyStr}${descField}`);
     }
   }
   
@@ -716,12 +734,14 @@ const registerFiscalHandlers = (app) => {
       };
 
       // Formato del ticket, ajustable desde el JSON de settings sin rebuild:
-      //   fiscal.itemDescLen  — largo del nombre en la línea del ítem (20-100).
+      //   fiscal.itemDescLen  — largo del nombre en la línea del ítem (10-100, def 40).
       //   fiscal.discountMode — 'none' apaga el descuento nativo 'p-' (el ítem
       //                         vuelve al precio neto) si la máquina lo rechazara.
+      //   fiscal.descLeaders  — false apaga los puntos de guía 'NOMBRE ....'.
       const formatOpts = {
         itemDescLen: config.itemDescLen,
         nativeDiscount: config.discountMode !== 'none',
+        descLeaders: config.descLeaders !== false,
       };
 
       // Enviar factura (pasando fiscalMode para agregar indicador si es prueba).
