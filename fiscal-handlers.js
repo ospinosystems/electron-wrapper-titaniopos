@@ -721,9 +721,9 @@ const registerFiscalHandlers = (app) => {
         const responses = loadFiscalResponses(app);
         const jobId = result.job_id || `local-${Date.now()}`;
         
-        // El resultado puede incluir la respuesta directa de hka_serial
+        // El resultado puede incluir la respuesta directa del servidor fiscal
         const fiscalResponse = result.result || result;
-        
+
         responses.push({
           id: jobId,
           orderUuid: invoiceData.orderUuid,
@@ -731,10 +731,13 @@ const registerFiscalHandlers = (app) => {
           storeCode: invoiceData.storeCode,
           cashRegisterNumber: invoiceData.cashRegisterNumber || config.cashRegisterNumber,
           documentType: invoiceData.type || 'factura',
-          status: result.status === 'ok' ? 'completado' : 'pending',
+          // 'ok' en el POST significa ENCOLADO, no impreso: marcarlo 'completado'
+          // aquí hacía que el sync subiera la respuesta al backend SIN
+          // numero_fiscal (el resultado real lo trae el job al terminar). Queda
+          // 'pending' y fiscal-check-job-status lo completa con el resultado.
+          status: 'pending',
           response: fiscalResponse,
           createdAt: new Date().toISOString(),
-          processedAt: result.status === 'ok' ? new Date().toISOString() : undefined,
           syncedToBackend: false,
           syncAttempts: 0,
         });
