@@ -307,12 +307,13 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null) => {
       // con '|' (se veía cargado) y separaban el descuento de su producto. El nombre
       // queda recortado a propósito (elección de caja).
       void extraLines;
+      void buildDiscountLine;
       const productLine = `${taxCode}${priceStr}${qtyStr}${itemDesc}`;
       console.log(`[FISCAL] Product line: price=${product.price} -> "${priceStr}" | qty=${product.quantity} -> "${qtyStr}" | LINE="${productLine}"`);
       lines.push(productLine);
-      // Descuento (informativo) JUSTO debajo del ítem, CON IVA. No toca el cálculo fiscal.
-      const descLine = buildDiscountLine(product.listPrice, product.price, product.quantity, product.taxRate);
-      if (descLine) lines.push(descLine);
+      // SIN línea de descuento por ítem: la HKA enmarca toda línea '@' con '|' (se veía
+      // cargado y "duplicado" cuando dos ítems tenían el mismo ahorro). El ítem ya va al
+      // precio con descuento. El ahorro total se refleja en el sistema, no en el ticket.
     }
   }
 
@@ -592,9 +593,7 @@ const generateCreditNoteContent = (creditNoteData) => {
       // ítem (sin líneas '@' de continuación → sin '|'), igual que la factura.
       void extraLines;
       lines.push(`d${taxCode}${priceStr}${qtyStr}${itemDesc}`);
-      // Descuento (informativo) JUSTO debajo del ítem, CON IVA.
-      const descLine = buildDiscountLine(product.listPrice, product.price, product.quantity, product.taxRate);
-      if (descLine) lines.push(descLine);
+      // SIN línea de descuento por ítem (igual que la factura): evita los '|' del '@'.
     }
   }
   
