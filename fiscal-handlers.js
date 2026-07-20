@@ -154,16 +154,17 @@ const checkFiscalConnection = async (serverUrl) => {
 
 // Enviar factura o nota de crédito al servidor fiscal
 // barcodeOpts: { enabled, type, format } — código de barras en la factura (autopago).
-const sendFiscalInvoice = async (serverUrl, invoiceData, fiscalMode = true, barcodeOpts = null) => {
+// formatOpts: { itemDescLen, nativeDiscount } — formato del ticket (ver el handler).
+const sendFiscalInvoice = async (serverUrl, invoiceData, fiscalMode = true, barcodeOpts = null, formatOpts = null) => {
   try {
     const docType = invoiceData.type || 'factura';
 
     // Generar contenido según el tipo de documento
     let fiscalLines;
     if (docType === 'notacredito' || docType === 'creditnote') {
-      fiscalLines = generateCreditNoteContent(invoiceData);
+      fiscalLines = generateCreditNoteContent(invoiceData, formatOpts);
     } else {
-      fiscalLines = generateFiscalContent(invoiceData, barcodeOpts);
+      fiscalLines = generateFiscalContent(invoiceData, barcodeOpts, formatOpts);
     }
     
     // Si NO es modo fiscal, agregar indicador "NO FISCAL" al inicio
@@ -229,8 +230,10 @@ const buildBarcodeLine = (code, opts) => {
     : String(opts.raw);
 };
 
-const generateFiscalContent = (invoiceData, barcodeOpts = null) => {
+const generateFiscalContent = (invoiceData, barcodeOpts = null, formatOpts = null) => {
   const lines = [];
+  const descLen = normalizeItemDescLen(formatOpts && formatOpts.itemDescLen);
+  const nativeDiscount = !formatOpts || formatOpts.nativeDiscount !== false;
   
   // Datos del cliente (opcional)
   // Soporta tanto customerName/customerRif como client.name/client.rif
@@ -266,57 +269,46 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null) => {
   // Productos
   if (invoiceData.products && Array.isArray(invoiceData.products)) {
     for (const product of invoiceData.products) {
-      // Código de tasa IVA:
-      // ' ' (espacio) = Exento (0%)
-      // '!' = Tasa General (16%)
-      // '"' = Tasa Reducida (8%)
-      // '#' = Tasa Adicional (31%)
-      let taxCode = ' '; // Exento por defecto
-      
-      if (product.taxRate !== undefined) {
-        if (product.taxRate >= 15) {
-          taxCode = '!'; // Tasa General
-        } else if (product.taxRate >= 7 && product.taxRate < 15) {
-          taxCode = '"'; // Tasa Reducida
-        } else if (product.taxRate > 20) {
-          taxCode = '#'; // Tasa Adicional
-        }
-      }
-      
+      const taxCode = taxCodeFor(product.taxRate, TAX_CHARS_FACTURA);
+
       // Precio en centavos (sin decimales), 10 dígitos
       // IMPORTANTE: Es el precio UNITARIO, no el total
       // OJO HKA80: el precio es de 10 dígitos. Con 12 la impresora lee mal
       // los campos y sale 0.01 x 0.01. Verificado con hardware real.
       const priceNum = parseFloat(product.price) || 0;
       const priceInCents = Math.round(priceNum * 100);
-      const priceStr = priceInCents.toString().padStart(10, '0');
 
       // Cantidad en milésimas, 8 dígitos (ej: 1.000 = 00001000)
       const qtyInThousandths = Math.round((product.quantity || 1) * 1000);
       const qtyStr = qtyInThousandths.toString().padStart(8, '0');
 
-      // Descripción: en la línea del ítem solo caben 20 caracteres; el resto sale en
-      // líneas '@' debajo, para que el producto se lea completo (ver
-      // buildDescriptionOverflowLines).
+      // Descripción SOLO en la línea del ítem, cortada por palabra. SIN líneas '@' de
+      // continuación: la HKA las enmarca con '|' y el ticket quedaba ilegible (no se
+      // distinguía qué línea era de qué producto). El largo es configurable
+      // (fiscal.itemDescLen) para probar en hardware cuánto admite la HKA80.
       const fullDescription = sanitizeText(product.description || 'PRODUCTO', 200);
-      const { itemDesc, extraLines } = buildProductDescLines(fullDescription);
+      const itemDesc = firstLine(fullDescription, descLen);
+
+      // DESCUENTO NATIVO: ítem al precio de LISTA + comando 'p-PPPP' (% sobre el
+      // último renglón, mismo patrón que las secuencias oficiales del Fiscalizador).
+      // La HKA imprime la línea de descuento en formato fiscal (sin '|') pegada a su
+      // producto y calcula el IVA sobre el neto. Sin descuento (o con
+      // fiscal.discountMode = 'none') el ítem va al precio neto, como antes.
+      const fit = nativeDiscount
+        ? fitNativeDiscount(product.listPrice, product.price, product.quantity || 1)
+        : null;
+      const priceStr = fit ? fit.priceStr : priceInCents.toString().padStart(10, '0');
 
       // Formato final: [TasaIVA][Precio10][Cantidad8][Descripción]
-      // El nombre va SOLO en la línea del ítem (la HKA lo recorta a su ancho). Se
-      // eliminaron las líneas '@' de continuación del nombre porque la HKA las enmarca
-      // con '|' (se veía cargado) y separaban el descuento de su producto. El nombre
-      // queda recortado a propósito (elección de caja).
       const productLine = `${taxCode}${priceStr}${qtyStr}${itemDesc}`;
       console.log(`[FISCAL] Product line: price=${product.price} -> "${priceStr}" | qty=${product.quantity} -> "${qtyStr}" | LINE="${productLine}"`);
       lines.push(productLine);
-      // Resto del nombre en líneas '@' (la HKA las enmarca con '|' — formato fiscal
-      // estándar; es la única forma de mostrar el nombre completo).
-      for (const extra of extraLines) {
-        lines.push(extra);
+      if (fit) {
+        if (fit.deltaCents !== 0) {
+          console.warn(`[FISCAL] Descuento nativo sin cuadre exacto: residuo ${fit.deltaCents} centavo(s) en "${itemDesc}"`);
+        }
+        lines.push(fit.discountLine);
       }
-      // Descuento (informativo) debajo del ítem, CON IVA. No toca el cálculo fiscal.
-      const descLine = buildDiscountLine(product.listPrice, product.price, product.quantity, product.taxRate);
-      if (descLine) lines.push(descLine);
     }
   }
 
@@ -402,13 +394,34 @@ const buildCloseLines = (invoiceData) => {
   return closeLines;
 };
 
-// La línea del ítem solo admite 20 caracteres de descripción, así que un nombre
-// largo salía cortado en la factura. El resto se imprime en líneas adicionales con
-// el comando '@' (texto libre en el cuerpo del documento). Validado contra la
-// máquina: la prueba op:factura-cliente de THE FACTORY intercala '@PRUEBA DESDE
-// TITANIOPOS' entre los ítems y la HKA la ACKea.
-const ITEM_DESC_LEN = 20;   // lo que cabe en la propia línea del producto
-const EXTRA_LINE_LEN = 40;  // ancho del papel para las líneas '@'
+// Largo de la descripción en la línea del ítem. 20 es lo único validado en HW (el
+// Factura.txt legado siempre mandó 20); la descripción es el campo FINAL de la trama,
+// así que un largo mayor no puede romper el parseo de precio/cantidad — a lo sumo la
+// impresora la recorta. `fiscal.itemDescLen` en la config permite subirlo (hasta 100)
+// para probar en la máquina real cuánto admite/imprime la HKA80.
+const ITEM_DESC_LEN = 20;   // default seguro, validado en hardware
+const ITEM_DESC_MAX = 100;  // techo del override por config (evita tramas gigantes)
+const EXTRA_LINE_LEN = 40;  // ancho del papel para las líneas '@' (motivo de NC)
+
+const normalizeItemDescLen = (raw) => {
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n)) return ITEM_DESC_LEN;
+  return Math.min(ITEM_DESC_MAX, Math.max(ITEM_DESC_LEN, n));
+};
+
+// Códigos de tasa IVA por documento. El umbral de la ADICIONAL (>20, en la práctica
+// 31% = 16+15 suntuario) se evalúa PRIMERO: con el orden viejo (general primero) esa
+// rama era inalcanzable y un producto al 31% se facturaba como general (16%).
+const TAX_CHARS_FACTURA = { exento: ' ', general: '!', reducida: '"', adicional: '#' };
+const TAX_CHARS_NC = { exento: '0', general: '1', reducida: '2', adicional: '3' };
+
+const taxCodeFor = (taxRate, chars) => {
+  const rate = Number(taxRate) || 0;
+  if (rate > 20) return chars.adicional;
+  if (rate >= 15) return chars.general;
+  if (rate >= 7) return chars.reducida;
+  return chars.exento;
+};
 
 /**
  * Envuelve un texto en líneas de EXTRA_LINE_LEN caracteres cortando por palabras;
@@ -447,44 +460,59 @@ const wrapWords = (text, firstW, restW) => {
 /** Compat: envoltura a 40 para texto libre (motivo, etc.). */
 const wrapText40 = (text) => wrapWords(text, EXTRA_LINE_LEN, EXTRA_LINE_LEN);
 
-// Sin sangría en la continuación: la HKA ya enmarca las líneas '@' entre '|', y
-// agregarle espacios se veía peor. El texto de continuación va pegado a la izquierda.
-const CONT_INDENT = '';
+/** Primera línea de un texto cortada POR PALABRA a `width` caracteres. */
+const firstLine = (text, width) => wrapWords(text, width, width)[0] || 'PRODUCTO';
 
 /**
- * Parte la descripción del producto: `itemDesc` (≤20, va en la línea del ítem junto
- * al precio) y `extraLines` (el resto como líneas '@' SANGRADAS). El ancho de la
- * continuación descuenta la sangría para no pasarse del papel (40).
+ * Descuento NATIVO de la HKA: el renglón se envía al precio de LISTA y detrás va
+ * 'p-PPPP' (% con 2 enteros + 2 decimales sobre el último renglón — la sintaxis de
+ * las secuencias "Fijas" del Fiscalizador oficial, ej. 'p-5000' = 50,00%). La
+ * impresora imprime la línea de descuento en formato fiscal y calcula el IVA sobre
+ * el neto.
+ *
+ * El % tiene granularidad 0,01%, así que el neto que calcule la impresora puede
+ * desviarse unos céntimos del neto EXACTO que cobró el POS. Para cuadrar, se busca
+ * el par (lista en centavos ±3, %±0,01) cuyo neto predicho — total del renglón menos
+ * round half-up del descuento, el modelo de redondeo asumido de la HKA, VALIDAR EN
+ * HW — coincida con el neto exacto; si ningún par cuadra se usa el más cercano y el
+ * caller loguea el residuo (`deltaCents`).
+ *
+ * Devuelve null si no hay descuento real (sin listPrice, o lista <= neto).
  */
-const buildProductDescLines = (fullDescription) => {
-  const wrapped = wrapWords(fullDescription, ITEM_DESC_LEN, EXTRA_LINE_LEN - CONT_INDENT.length);
+const fitNativeDiscount = (listUnit, paidUnit, qty) => {
+  const listCents = Math.round((parseFloat(listUnit) || 0) * 100);
+  const paidCents = Math.round((parseFloat(paidUnit) || 0) * 100);
+  if (listCents <= 0 || paidCents <= 0 || listCents <= paidCents) return null;
+  const q = parseFloat(qty) || 1;
+  const targetNet = Math.round(paidCents * q); // neto exacto del renglón, en centavos
+  const basePct = Math.round((1 - paidCents / listCents) * 10000); // centésimas de %
+
+  const candidates = [];
+  for (let dl = -5; dl <= 5; dl++) {
+    const lc = listCents + dl;
+    if (lc <= paidCents) continue;
+    const lineTotal = Math.round(lc * q);
+    for (let dp = -5; dp <= 5; dp++) {
+      const pct = basePct + dp;
+      if (pct <= 0 || pct > 9999) continue;
+      const predictedNet = lineTotal - Math.round((lineTotal * pct) / 10000);
+      candidates.push({
+        lc, pct,
+        delta: Math.abs(predictedNet - targetNet),
+        dev: Math.abs(dl),
+        pctDev: Math.abs(dp),
+      });
+    }
+  }
+  if (!candidates.length) return null;
+  // Exactitud primero; a igual delta, la lista más fiel a la real y el % más fiel.
+  candidates.sort((a, b) => a.delta - b.delta || a.dev - b.dev || a.pctDev - b.pctDev);
+  const best = candidates[0];
   return {
-    itemDesc: wrapped[0] || 'PRODUCTO',
-    extraLines: wrapped.slice(1).map((l) => `@${CONT_INDENT}${l}`),
+    priceStr: String(best.lc).padStart(10, '0'),
+    discountLine: `p-${String(best.pct).padStart(4, '0')}`,
+    deltaCents: best.delta,
   };
-};
-
-/** Monto en Bs con separador de miles y 2 decimales (es-VE: 1.234,56). */
-const fmtBs = (n) =>
-  (Number(n) || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-/**
- * Línea '@' informativa del DESCUENTO de un producto. El precio de lista y el precio
- * cobrado se calculan afuera; acá solo se imprime. Se muestra como texto y NO afecta
- * el cálculo fiscal (la línea del ítem ya lleva el precio descontado, lo que mantiene
- * el total exacto al céntimo). Devuelve null si no hay descuento.
- * `listUnit` y `paidUnit` son el precio UNITARIO de lista y el cobrado, en Bs.
- */
-const buildDiscountLine = (listUnit, paidUnit, qty, taxRate = 0) => {
-  // Se muestra CON IVA: es lo que percibe el cliente (la línea del ítem va en base
-  // sin IVA porque la HKA suma el impuesto aparte, pero el ahorro que "siente" el
-  // cliente es sobre el precio final con IVA). factor = 1 + alícuota.
-  const f = 1 + (Number(taxRate) || 0) / 100;
-  const list = (Number(listUnit) || 0) * f;
-  const paid = (Number(paidUnit) || 0) * f;
-  if (list <= paid + 0.005) return null; // sin descuento
-  const descTotal = (list - paid) * (Number(qty) || 1);
-  return `@${CONT_INDENT}Lista ${fmtBs(list)}  Ahorro -${fmtBs(descTotal)}`;
 };
 
 // Función auxiliar para limpiar texto (eliminar acentos y caracteres especiales)
@@ -506,8 +534,9 @@ const sanitizeText = (text, maxLength = 20) => {
 // iI* = Serial de la impresora que emitió la factura original
 // A = Comentario de nota de crédito
 // d0 = Producto exento, d1 = Tasa general, d2 = Tasa reducida, d3 = Tasa adicional
-const generateCreditNoteContent = (creditNoteData) => {
+const generateCreditNoteContent = (creditNoteData, formatOpts = null) => {
   const lines = [];
+  const descLen = normalizeItemDescLen(formatOpts && formatOpts.itemDescLen);
   
   // Datos del cliente (requeridos para nota de crédito)
   if (creditNoteData.customerRif) {
@@ -568,39 +597,26 @@ const generateCreditNoteContent = (creditNoteData) => {
   // d0 = Exento, d1 = Tasa General, d2 = Tasa Reducida, d3 = Tasa Adicional
   if (creditNoteData.products && Array.isArray(creditNoteData.products)) {
     for (const product of creditNoteData.products) {
-      let taxCode = '0'; // Exento por defecto
-      
-      if (product.taxRate !== undefined) {
-        if (product.taxRate >= 15) {
-          taxCode = '1'; // Tasa General
-        } else if (product.taxRate >= 7 && product.taxRate < 15) {
-          taxCode = '2'; // Tasa Reducida
-        } else if (product.taxRate > 20) {
-          taxCode = '3'; // Tasa Adicional
-        }
-      }
-      
-      // Precio en centavos, 10 dígitos (formato HKA80, ver generateFiscalContent)
+      const taxCode = taxCodeFor(product.taxRate, TAX_CHARS_NC);
+
+      // Precio en centavos, 10 dígitos (formato HKA80, ver generateFiscalContent).
+      // La NC va al precio NETO cobrado (devuelve exacto lo facturado). No se usa
+      // 'p-' aquí: el Fiscalizador oficial nunca lo combina con renglones 'd' y un
+      // NAK dejaría la devolución a medias.
       const priceInCents = Math.round((product.price || 0) * 100);
       const priceStr = priceInCents.toString().padStart(10, '0');
-      
+
       // Cantidad en milésimas, 8 dígitos
       const qtyInThousandths = Math.round((product.quantity || 1) * 1000);
       const qtyStr = qtyInThousandths.toString().padStart(8, '0');
-      
-      // Descripción: igual que la factura (1ª línea 20 + continuación sangrada).
-      const fullDescription = sanitizeText(product.description || 'PRODUCTO', 200);
-      const { itemDesc, extraLines } = buildProductDescLines(fullDescription);
 
-      // Formato: d[TasaIVA][Precio][Cantidad][Descripción]. Nombre solo en la línea del
-      // ítem (sin líneas '@' de continuación → sin '|'), igual que la factura.
+      // Descripción solo en la línea del ítem, cortada por palabra (sin líneas '@'
+      // → sin '|'), igual que la factura.
+      const fullDescription = sanitizeText(product.description || 'PRODUCTO', 200);
+      const itemDesc = firstLine(fullDescription, descLen);
+
+      // Formato: d[TasaIVA][Precio][Cantidad][Descripción]
       lines.push(`d${taxCode}${priceStr}${qtyStr}${itemDesc}`);
-      for (const extra of extraLines) {
-        lines.push(extra);
-      }
-      // Descuento (informativo) debajo del ítem, CON IVA (igual que la factura).
-      const descLine = buildDiscountLine(product.listPrice, product.price, product.quantity, product.taxRate);
-      if (descLine) lines.push(descLine);
     }
   }
   
@@ -682,6 +698,15 @@ const registerFiscalHandlers = (app) => {
         raw: config.barcodeRaw || 'j211{code}',
       };
 
+      // Formato del ticket, ajustable desde el JSON de settings sin rebuild:
+      //   fiscal.itemDescLen  — largo del nombre en la línea del ítem (20-100).
+      //   fiscal.discountMode — 'none' apaga el descuento nativo 'p-' (el ítem
+      //                         vuelve al precio neto) si la máquina lo rechazara.
+      const formatOpts = {
+        itemDescLen: config.itemDescLen,
+        nativeDiscount: config.discountMode !== 'none',
+      };
+
       // Enviar factura (pasando fiscalMode para agregar indicador si es prueba).
       // Para NOTA DE CRÉDITO, el serial de la máquina (iI*) sale de la config si
       // el frontend no lo envió — es un dato fijo de la caja.
@@ -689,7 +714,7 @@ const registerFiscalHandlers = (app) => {
         ...invoiceData,
         cashRegisterNumber: invoiceData.cashRegisterNumber || config.cashRegisterNumber,
         originalPrinterSerial: invoiceData.originalPrinterSerial || config.machineSerial || undefined,
-      }, isFiscalMode, barcodeOpts);
+      }, isFiscalMode, barcodeOpts, formatOpts);
 
       if (result.success) {
         // Guardar respuesta con los datos del resultado del servidor fiscal
