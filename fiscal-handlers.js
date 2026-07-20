@@ -225,9 +225,12 @@ const checkFiscalJobStatus = async (serverUrl, jobId) => {
 const buildBarcodeLine = (code, opts) => {
   if (!opts || !opts.enabled || !opts.raw) return null;
   const clean = String(code || '').replace(/[^0-9A-Za-z]/g, '');
-  return String(opts.raw).includes('{code}')
-    ? String(opts.raw).replace('{code}', clean)
-    : String(opts.raw);
+  if (String(opts.raw).includes('{code}')) {
+    // Sin dato que codificar no se manda un 'j211' pelado (comando malformado).
+    if (!clean) return null;
+    return String(opts.raw).replace('{code}', clean);
+  }
+  return String(opts.raw);
 };
 
 const generateFiscalContent = (invoiceData, barcodeOpts = null, formatOpts = null) => {
@@ -241,9 +244,10 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null, formatOpts = nul
   const clientRif = invoiceData.customerRif || (invoiceData.client && invoiceData.client.rif);
   
   if (clientName) {
-    // iS* = Nombre del cliente
+    // iS* = Nombre del cliente. Si la sanitización lo deja vacío (nombre 100%
+    // no-ASCII) se omite la línea: un 'iS*' pelado es un comando malformado.
     const sanitizedName = sanitizeText(clientName, 40);
-    lines.push(`iS*${sanitizedName}`);
+    if (sanitizedName) lines.push(`iS*${sanitizedName}`);
   }
   
   if (clientRif) {
@@ -519,6 +523,15 @@ const fitNativeDiscount = (listUnit, paidUnit, qty) => {
 const sanitizeText = (text, maxLength = 20) => {
   return (text || '')
     .substring(0, maxLength)
+    // Transliteraciones ANTES del filtro ASCII: en ferreter\u00eda '\u00bd'/'\u00be'/'\u00d8' son
+    // parte del nombre ('TUBO \u00bd', 'BROCA \u00d88') y borrarlos dejaba productos
+    // distintos con descripci\u00f3n id\u00e9ntica en la factura fiscal.
+    .replace(/\u00bd/g, '1/2')
+    .replace(/\u00bc/g, '1/4')
+    .replace(/\u00be/g, '3/4')
+    .replace(/[\u00d8\u00f8\u2300]/g, 'O')
+    .replace(/\u00b0/g, 'o')
+    .replace(/[\u00d7\u2715]/g, 'X')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '') // Eliminar acentos
     .replace(/[^\x20-\x7E]/g, '')    // Solo caracteres ASCII imprimibles
@@ -546,14 +559,18 @@ const generateCreditNoteContent = (creditNoteData, formatOpts = null) => {
   
   if (creditNoteData.customerName) {
     const customerName = sanitizeText(creditNoteData.customerName, 40);
-    lines.push(`iS*${customerName}`);
+    if (customerName) lines.push(`iS*${customerName}`);
   }
   
   // Datos de la factura original (requeridos)
   if (creditNoteData.originalInvoiceNumber) {
-    // Formato: 11 dígitos con ceros a la izquierda
-    const invoiceNum = creditNoteData.originalInvoiceNumber.toString().padStart(11, '0');
-    lines.push(`iF*${invoiceNum}`);
+    // Formato: EXACTAMENTE 11 dígitos. Solo dígitos ('F-00001234' → '00001234')
+    // y truncado por la izquierda si viene más largo — la HKA rechaza el campo
+    // con letras/guiones o con más de 11 dígitos.
+    const digits = String(creditNoteData.originalInvoiceNumber).replace(/\D/g, '');
+    if (digits) {
+      lines.push(`iF*${digits.padStart(11, '0').slice(-11)}`);
+    }
   }
   
   if (creditNoteData.originalInvoiceDate) {

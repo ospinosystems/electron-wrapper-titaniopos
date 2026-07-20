@@ -180,20 +180,29 @@ def limpiar_peticiones_expiradas():
         print(f"Error limpiando peticiones: {e}")
 
 
-def verificar_peticion_duplicada(h):
+def verificar_o_registrar_peticion(h, job_id):
+    """Chequeo de duplicado + registro en UNA seccion critica: con verificar y
+    registrar por separado, dos POST identicos casi simultaneos (doble clic /
+    reintento de red) pasaban ambos la verificacion y se encolaban los dos.
+    Devuelve (es_duplicada, info_original)."""
     if not h:
         return False, None
     with lock_duplicados:
         if h in peticiones_procesadas:
             return True, peticiones_procesadas[h]
+        peticiones_procesadas[h] = {"timestamp": datetime.now(), "job_id": job_id, "estado": "pendiente"}
     return False, None
 
 
-def registrar_peticion(h, job_id, estado="pendiente"):
+def liberar_peticion(h):
+    """Libera la entrada anti-duplicados cuando el job termina en ERROR: un
+    intento fallido no debe responder 409 al reintento legitimo de la MISMA
+    factura (contrato con el POS: reenviar solo reimprime si no salio; los
+    impresos con exito quedan protegidos por id_caja en ids_ejecutados)."""
     if not h:
         return
     with lock_duplicados:
-        peticiones_procesadas[h] = {"timestamp": datetime.now(), "job_id": job_id, "estado": estado}
+        peticiones_procesadas.pop(h, None)
 
 
 def actualizar_estado_peticion(h, estado):
@@ -338,20 +347,27 @@ def ejecutar_programa_fiscal(parametros, type_param, file_param):
                     guardar_id_ejecutado(id_caja)
                 # SENIAT: capturar el número fiscal asignado + serial de la máquina
                 # (leyendo S1). Es lo que una futura nota de crédito debe referenciar.
+                # OJO: con el cierre NO confirmado (warn_not_closed) el S1 devolvería
+                # el número del documento ANTERIOR — mejor sin número que uno ajeno
+                # sincronizado al backend (una NC referenciaría la factura equivocada).
                 numero_fiscal = None
                 maquina = None
-                try:
-                    s1 = impresora.get_s1_data()
-                    if s1:
-                        maquina = {"serial": s1.get("registered_machine_number"),
-                                   "rif": s1.get("rif"),
-                                   "fecha_hora": s1.get("current_printer_datetime")}
-                        numero_fiscal = (s1.get("last_credit_note_number")
-                                         if type_param == "notacredito"
-                                         else s1.get("last_invoice_number"))
-                except Exception:
-                    pass
-                return {"status": "ok", "message": "Documento impreso correctamente",
+                cierre_confirmado = diag.get("reason") not in ("warn_not_closed",)
+                if cierre_confirmado:
+                    try:
+                        s1 = impresora.get_s1_data()
+                        if s1:
+                            maquina = {"serial": s1.get("registered_machine_number"),
+                                       "rif": s1.get("rif"),
+                                       "fecha_hora": s1.get("current_printer_datetime")}
+                            numero_fiscal = (s1.get("last_credit_note_number")
+                                             if type_param == "notacredito"
+                                             else s1.get("last_invoice_number"))
+                    except Exception:
+                        pass
+                mensaje = ("Documento impreso correctamente" if cierre_confirmado
+                           else "Documento impreso; cierre no confirmado (numero fiscal no capturado)")
+                return {"status": "ok", "message": mensaje,
                         "id_caja": id_caja, "linea_completa": linea_completa, "fecha_hora": fecha,
                         "puerto_com": impresora.port, "diagnostico": diag,
                         "numero_fiscal": numero_fiscal, "machine": maquina}
@@ -411,11 +427,11 @@ def procesar_cola_fiscal():
                     trabajos_estado[job_id]['estado'] = 'error'
                     trabajos_estado[job_id]['error'] = resultado['message']
                     trabajos_estado[job_id]['resultado'] = resultado
-                    actualizar_estado_peticion(h, 'error')
+                    liberar_peticion(h)  # que el reintento legitimo no reciba 409
             except Exception as e:
                 trabajos_estado[job_id]['estado'] = 'error'
                 trabajos_estado[job_id]['error'] = str(e)
-                actualizar_estado_peticion(h, 'error')
+                liberar_peticion(h)
             trabajos_estado[job_id]['fecha_fin'] = datetime.now()
             cola_fiscal.task_done()
         except queue.Empty:
@@ -438,15 +454,13 @@ def agregar_a_cola():
         file_param = data.get("file", "")
 
         h = generar_hash_peticion(parametros, type_param, file_param)
-        es_dup, info = verificar_peticion_duplicada(h)
+        job_id = str(uuid.uuid4())
+        es_dup, info = verificar_o_registrar_peticion(h, job_id)
         if es_dup:
             return jsonify({"status": "duplicada",
                             "message": f"Peticion duplicada. Job original: {info['job_id']}",
                             "job_id_original": info['job_id'], "estado_original": info['estado'],
                             "hash_peticion": h}), 409
-
-        job_id = str(uuid.uuid4())
-        registrar_peticion(h, job_id, "pendiente")
         trabajo = {'job_id': job_id, 'parametros': parametros, 'type': type_param,
                    'file': file_param, 'timestamp': datetime.now(), 'hash_peticion': h}
         trabajos_estado[job_id] = {'estado': 'pendiente', 'fecha_creacion': datetime.now(),
@@ -545,8 +559,11 @@ def fiscal_sdata(cmd):
     imp, err = _nueva_impresora()
     if err:
         return jsonify({"status": "error", "message": err}), 400
-    if not re.match(r'^[A-Za-z0-9]{1,4}$', cmd):
-        return jsonify({"status": "error", "message": "Comando invalido"}), 400
+    # SOLO comandos de LECTURA Sx: el patron viejo [A-Za-z0-9]{1,4} dejaba pasar
+    # comandos de ACCION por un endpoint GET ('I0Z' = cierre Z REAL e irreversible,
+    # '7' = cancelar el documento en curso).
+    if not re.match(r'^[Ss][A-Za-z0-9]{1,3}$', cmd):
+        return jsonify({"status": "error", "message": "Comando invalido (solo status Sx)"}), 400
     raw = imp.get_status_data(cmd.upper())
     if raw is None:
         return jsonify({"status": "error", "message": "Sin respuesta de la impresora",
