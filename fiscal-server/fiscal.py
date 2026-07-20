@@ -769,6 +769,11 @@ OPERACIONES = {
         _prod(1, "0,10", "1,000", "Producto 2"), _CM,
         _prod(2, "0,10", "1,000", "Producto 3"), _prod(3, "0,10", "2,000", "Producto 4"),
         "k", "101", "199"]},
+    "factura-descuento": {"label": "Factura Descuento (p- % y q- monto)", "fiscal": True, "lines": [
+        "iS*PRUEBA TITANIOPOS", "iR*J-312171197",
+        _prod(1, "10,00", "1,000", "PRODUCTO DESC PORCENTUAL"), "p-1000",
+        _prod(1, "10,00", "1,000", "PRODUCTO DESC MONTO"), "q-000000100",
+        "3", "101", "199"]},
     "factura-anulacion": {"label": "Factura con Anulación", "fiscal": True, "lines": [
         "i01Juan Pablo Segundo", "i02San jose", "i03 ", "i04 ", "@Producto en Promocion",
         _prod(0, "0,20", "1,000", "Producto 1"), _prod(1, "0,40", "3,000", "Producto 2"),

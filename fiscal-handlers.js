@@ -236,7 +236,8 @@ const buildBarcodeLine = (code, opts) => {
 const generateFiscalContent = (invoiceData, barcodeOpts = null, formatOpts = null) => {
   const lines = [];
   const descLen = normalizeItemDescLen(formatOpts && formatOpts.itemDescLen);
-  const nativeDiscount = !formatOpts || formatOpts.nativeDiscount !== false;
+  // 'amount' (q-, default) | 'percent' (p-) | 'none'
+  const discountMode = (formatOpts && formatOpts.discountMode) || 'amount';
   const descLeaders = !formatOpts || formatOpts.descLeaders !== false;
   
   // Datos del cliente (opcional)
@@ -294,13 +295,17 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null, formatOpts = nul
       const fullDescription = sanitizeText(product.description || 'PRODUCTO', 200);
       const itemDesc = firstLine(fullDescription, descLen);
 
-      // DESCUENTO NATIVO: ítem al precio de LISTA + comando 'p-PPPP' (% sobre el
-      // último renglón, mismo patrón que las secuencias oficiales del Fiscalizador).
-      // La HKA imprime la línea de descuento en formato fiscal (sin '|') pegada a su
-      // producto y calcula el IVA sobre el neto. Sin descuento (o con
-      // fiscal.discountMode = 'none') el ítem va al precio neto, como antes.
-      const fit = nativeDiscount
-        ? fitNativeDiscount(product.listPrice, product.price, product.quantity || 1)
+      // DESCUENTO NATIVO: ítem al precio de LISTA + comando 'q-'/'p-' sobre el
+      // último renglón (manual oficial). La HKA imprime la línea de descuento en
+      // formato fiscal (sin '|') pegada a su producto y calcula el IVA sobre el
+      // neto. Con fiscal.discountMode='none' el ítem va al precio neto, como antes.
+      //
+      // PRECISIÓN QUIRÚRGICA: si el frontend envía `lineTotalBs` (el total NETO
+      // exacto de la línea que cobró el POS), se garantiza ese total aunque no
+      // sea representable como unitario×cantidad (ej. total impar con qty par):
+      // se sube el unitario 1 céntimo y un 'q-' del residuo cuadra el renglón.
+      const fit = discountMode !== 'none'
+        ? fitExactLine(product, priceInCents, discountMode)
         : null;
       const priceStr = fit ? fit.priceStr : priceInCents.toString().padStart(10, '0');
 
@@ -316,7 +321,7 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null, formatOpts = nul
         if (fit.deltaCents !== 0) {
           console.warn(`[FISCAL] Descuento nativo sin cuadre exacto: residuo ${fit.deltaCents} centavo(s) en "${itemDesc}"`);
         }
-        lines.push(fit.discountLine);
+        if (fit.discountLine) lines.push(fit.discountLine);
       }
     }
   }
@@ -474,6 +479,46 @@ const wrapText40 = (text) => wrapWords(text, EXTRA_LINE_LEN, EXTRA_LINE_LEN);
 const firstLine = (text, width) => wrapWords(text, width, width)[0] || 'PRODUCTO';
 
 /**
+ * Renglón EXACTO al céntimo. Devuelve {priceStr, discountLine|null, deltaCents}
+ * o null (mandar el precio neto tal cual, sin ajuste).
+ *
+ * - Con descuento (listPrice > price): renglón a LISTA + 'q-' con el monto
+ *   exacto ('p-' en modo percent).
+ * - Sin descuento pero con `lineTotalBs` del POS que NO es unitario×cantidad
+ *   (round-late del cobro vs round-early de la impresora — ej. total impar con
+ *   cantidad par): unitario mínimo que alcance el total y 'q-' de los céntimos
+ *   sobrantes. Sin esto, UI y papel divergen por céntimos.
+ */
+const fitExactLine = (product, priceInCents, mode) => {
+  const q = parseFloat(product.quantity) || 1;
+  const targetNet = product.lineTotalBs != null
+    ? Math.round((parseFloat(product.lineTotalBs) || 0) * 100)
+    : Math.round(priceInCents * q);
+  if (targetNet <= 0) return null;
+
+  const listCents = Math.round((parseFloat(product.listPrice) || 0) * 100);
+  if (listCents > priceInCents) {
+    const fit = fitNativeDiscount(product.listPrice, product.price, q, mode, targetNet);
+    if (fit) return fit;
+  }
+
+  // Sin descuento (o no aplicó): ¿el unitario ya reproduce el total exacto?
+  if (Math.round(priceInCents * q) === targetNet) return null;
+  if (mode === 'percent') return null; // el ajuste fino requiere 'q-' por monto
+
+  // Unitario mínimo cuyo total alcanza el target; el excedente sale como 'q-'.
+  let unit = Math.max(1, Math.floor(targetNet / q));
+  while (Math.round(unit * q) < targetNet) unit++;
+  const disc = Math.round(unit * q) - targetNet;
+  if (disc > 999999999) return null;
+  return {
+    priceStr: String(unit).padStart(10, '0'),
+    discountLine: disc > 0 ? `q-${String(disc).padStart(9, '0')}` : null,
+    deltaCents: 0,
+  };
+};
+
+/**
  * 'NOMBRE .........' — puntos de guía hasta `width` que conducen la vista del
  * nombre a los números que la HKA imprime a continuación en el renglón. Si el
  * nombre casi llena el campo no se agregan (menos de 3 puntos no guían nada).
@@ -490,21 +535,41 @@ const withDotLeaders = (name, width) => {
  * impresora imprime la línea de descuento en formato fiscal y calcula el IVA sobre
  * el neto.
  *
- * El % tiene granularidad 0,01%, así que el neto que calcule la impresora puede
- * desviarse unos céntimos del neto EXACTO que cobró el POS. Para cuadrar, se busca
- * el par (lista en centavos ±3, %±0,01) cuyo neto predicho — total del renglón menos
- * round half-up del descuento, el modelo de redondeo asumido de la HKA, VALIDAR EN
- * HW — coincida con el neto exacto; si ningún par cuadra se usa el más cercano y el
- * caller loguea el residuo (`deltaCents`).
+ * Dos variantes (manual oficial v8.3/v8.5, sección DESCUENTOS Y RECARGOS; el SDK
+ * oficial de The Factory usa ambas):
+ *   'q-' + monto 9 díg (7+2) — POR MONTO (default): se envía el monto EXACTO del
+ *        descuento del renglón → el neto cuadra al céntimo POR CONSTRUCCIÓN, sin
+ *        depender del modelo de redondeo de la impresora.
+ *   'p-' + pppp (2+2)        — PORCENTUAL (fiscal.discountMode='percent', validado
+ *        en HW 20-07): imprime 'DESC (pp,pp%)'; el % de 2 decimales redondea, así
+ *        que se busca el par (lista ±5c, % ±0,05) que mejor cuadre el neto y el
+ *        caller loguea el residuo (`deltaCents`).
  *
- * Devuelve null si no hay descuento real (sin listPrice, o lista <= neto).
+ * Devuelve null si no hay descuento real (sin listPrice, o lista <= neto) — el
+ * caller manda entonces el renglón al precio neto, como siempre.
  */
-const fitNativeDiscount = (listUnit, paidUnit, qty) => {
+const fitNativeDiscount = (listUnit, paidUnit, qty, mode = 'amount', targetNetOverride = null) => {
   const listCents = Math.round((parseFloat(listUnit) || 0) * 100);
   const paidCents = Math.round((parseFloat(paidUnit) || 0) * 100);
   if (listCents <= 0 || paidCents <= 0 || listCents <= paidCents) return null;
   const q = parseFloat(qty) || 1;
-  const targetNet = Math.round(paidCents * q); // neto exacto del renglón, en centavos
+  // Neto exacto del renglón en centavos: el que cobró el POS si lo envía
+  // (lineTotalBs, round-late), si no el modelo unitario.
+  const targetNet = targetNetOverride != null ? targetNetOverride : Math.round(paidCents * q);
+
+  if (mode !== 'percent') {
+    const lineTotal = Math.round(listCents * q);
+    const disc = lineTotal - targetNet;
+    // Fuera de rango del comando (7+2 dígitos) o sin descuento tras redondear:
+    // sin línea nativa; el renglón va al neto (exacto, solo que sin mostrarlo).
+    if (disc <= 0 || disc > 999999999) return null;
+    return {
+      priceStr: String(listCents).padStart(10, '0'),
+      discountLine: `q-${String(disc).padStart(9, '0')}`,
+      deltaCents: 0,
+    };
+  }
+
   const basePct = Math.round((1 - paidCents / listCents) * 10000); // centésimas de %
 
   const candidates = [];
@@ -735,12 +800,12 @@ const registerFiscalHandlers = (app) => {
 
       // Formato del ticket, ajustable desde el JSON de settings sin rebuild:
       //   fiscal.itemDescLen  — largo del nombre en la línea del ítem (10-100, def 40).
-      //   fiscal.discountMode — 'none' apaga el descuento nativo 'p-' (el ítem
-      //                         vuelve al precio neto) si la máquina lo rechazara.
+      //   fiscal.discountMode — 'amount' (q-, exacto, default) | 'percent' (p-) |
+      //                         'none' (sin descuento nativo, renglón al neto).
       //   fiscal.descLeaders  — false apaga los puntos de guía 'NOMBRE ....'.
       const formatOpts = {
         itemDescLen: config.itemDescLen,
-        nativeDiscount: config.discountMode !== 'none',
+        discountMode: config.discountMode,
         descLeaders: config.descLeaders !== false,
       };
 
