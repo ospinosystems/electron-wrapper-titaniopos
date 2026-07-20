@@ -236,8 +236,11 @@ const buildBarcodeLine = (code, opts) => {
 const generateFiscalContent = (invoiceData, barcodeOpts = null, formatOpts = null) => {
   const lines = [];
   const descLen = normalizeItemDescLen(formatOpts && formatOpts.itemDescLen);
-  // 'amount' (q-, default) | 'percent' (p-) | 'none'
-  const discountMode = (formatOpts && formatOpts.discountMode) || 'amount';
+  // 'amount' (q-, default) | 'percent' (p-) | 'none'. Compat: nativeDiscount=false
+  // (flag previa) equivale a 'none'.
+  const discountMode = formatOpts && formatOpts.nativeDiscount === false
+    ? 'none'
+    : (formatOpts && formatOpts.discountMode) || 'amount';
   const descLeaders = !formatOpts || formatOpts.descLeaders !== false;
   
   // Datos del cliente (opcional)
@@ -273,6 +276,7 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null, formatOpts = nul
   lines.push(`i05${comment}`);
 
   // Productos
+  let docTotalCents = 0; // neto + IVA (modelo de la máquina) para el clamp del cierre
   if (invoiceData.products && Array.isArray(invoiceData.products)) {
     for (const product of invoiceData.products) {
       const taxCode = taxCodeFor(product.taxRate, TAX_CHARS_FACTURA);
@@ -323,6 +327,12 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null, formatOpts = nul
         }
         if (fit.discountLine) lines.push(fit.discountLine);
       }
+
+      // Neto de la línea según el mismo target que garantiza fitExactLine.
+      const netCents = product.lineTotalBs != null
+        ? Math.round((parseFloat(product.lineTotalBs) || 0) * 100)
+        : Math.round(priceInCents * (parseFloat(product.quantity) || 1));
+      docTotalCents += netCents + Math.round((netCents * (TAX_RATE_BY_CHAR[taxCode] || 0)) / 100);
     }
   }
 
@@ -344,7 +354,7 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null, formatOpts = nul
   // 20-24 = DIVISA (moneda extranjera): la impresora calcula e imprime el
   //         IGTF (3%) automáticamente al cerrar con uno de estos medios.
   // El comando de cierre es '1' + código de 2 dígitos (ej. '101', '120').
-  for (const line of buildCloseLines(invoiceData)) {
+  for (const line of buildCloseLines(invoiceData, docTotalCents)) {
     lines.push(line);
   }
 
@@ -368,12 +378,23 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null, formatOpts = nul
 //     El patrón 2XX/2XX/.../1XX es el validado por la prueba op:factura-pago-parcial.
 //     El pago en divisa (20-24) va como parcial: la impresora registra el monto y
 //     calcula el IGTF; el cierre final en el medio no-divisa cubre ese IGTF.
-const buildCloseLines = (invoiceData) => {
-  const payments = Array.isArray(invoiceData.payments) ? invoiceData.payments : [];
+const buildCloseLines = (invoiceData, docTotalCents = null) => {
+  const paymentsRaw = Array.isArray(invoiceData.payments) ? invoiceData.payments : [];
+  // Reembolsos/vueltos (monto <= 0) NO son parciales fiscales: el cierre '1XX' sin
+  // monto absorbe el neto. Mandarlos corrompía el cierre (el clamp de abajo no los
+  // puede representar y un negativo se colaba como parcial inflado del resto).
+  const payments = paymentsRaw.filter((p) => {
+    const n = parseFloat(p.amountBs);
+    return !(Number.isFinite(n) && n <= 0);
+  });
 
   const normCode = (c, fallback) => {
     const digits = String(c ?? '').replace(/\D/g, '');
     return digits.length ? digits.padStart(2, '0').slice(-2) : fallback;
+  };
+  const isDivisaCode = (code) => {
+    const n = parseInt(code, 10);
+    return n >= 20 && n <= 24;
   };
 
   let closeLines;
@@ -387,18 +408,38 @@ const buildCloseLines = (invoiceData) => {
     // El cierre final debe ser preferiblemente un medio NO-divisa (efectivo/punto):
     // la divisa como parcial explícito registra su monto exacto (base del IGTF),
     // y el medio local absorbe el restante (IGTF + desfases de céntimos).
-    const isDivisa = (p) => {
-      const n = parseInt(normCode(p.code, '04'), 10);
-      return n >= 20 && n <= 24;
-    };
+    const isDivisa = (p) => isDivisaCode(normCode(p.code, '04'));
     const ordered = [...payments].sort((a, b) => Number(isDivisa(b)) - Number(isDivisa(a)));
     const closer = ordered[ordered.length - 1];
-    closeLines = ordered.slice(0, -1).map((p) => {
+    closeLines = [];
+    // CLAMP contra el total del documento (neto + IVA de las líneas, mismo modelo
+    // validado contra papel): un parcial que cubra el saldo CIERRA el documento y
+    // las líneas siguientes NAKean (visto en HW 15-07). El saldo incluye el IGTF
+    // (3% half-up) que el propio parcial divisa agrega. Se deja >= 1 céntimo para
+    // el cierre final. Sin docTotalCents (llamadas viejas) no se recorta.
+    let dueCents = docTotalCents;
+    let paidCents = 0;
+    for (const p of ordered.slice(0, -1)) {
       const code = normCode(p.code, '04'); // sin código claro → "otros"
-      const cents = Math.max(0, Math.round((parseFloat(p.amountBs) || 0) * 100));
-      const amountStr = cents.toString().padStart(12, '0');
-      return `2${code}${amountStr}`;
-    });
+      let cents = Math.max(0, Math.round((parseFloat(p.amountBs) || 0) * 100));
+      if (cents <= 0) continue; // sin monto real no hay parcial: lo absorbe el cierre
+      const dv = isDivisaCode(code);
+      if (dueCents != null) {
+        let igtf = dv ? Math.round(cents * 0.03) : 0;
+        if (paidCents + cents >= dueCents + igtf) {
+          cents = Math.max(0, dueCents + igtf - paidCents - 1);
+          igtf = dv ? Math.round(cents * 0.03) : 0;
+          if (paidCents + cents >= dueCents + igtf) {
+            cents = Math.max(0, dueCents + igtf - paidCents - 1);
+          }
+          console.warn(`[FISCAL] Parcial ${code} recortado al saldo del documento (evita cierre prematuro)`);
+        }
+        if (cents <= 0) continue;
+        dueCents += dv ? Math.round(cents * 0.03) : 0;
+        paidCents += cents;
+      }
+      closeLines.push(`2${code}${cents.toString().padStart(12, '0')}`);
+    }
     closeLines.push(`1${normCode(closer.code, '01')}`);
   }
 
@@ -429,6 +470,9 @@ const normalizeItemDescLen = (raw) => {
 // rama era inalcanzable y un producto al 31% se facturaba como general (16%).
 const TAX_CHARS_FACTURA = { exento: ' ', general: '!', reducida: '"', adicional: '#' };
 const TAX_CHARS_NC = { exento: '0', general: '1', reducida: '2', adicional: '3' };
+// Alícuota que la máquina aplica por código de tasa (para predecir el total del
+// documento y recortar parciales que lo excederían).
+const TAX_RATE_BY_CHAR = { ' ': 0, '!': 16, '"': 8, '#': 31, '0': 0, '1': 16, '2': 8, '3': 31 };
 
 const taxCodeFor = (taxRate, chars) => {
   const rate = Number(taxRate) || 0;
@@ -694,6 +738,7 @@ const generateCreditNoteContent = (creditNoteData, formatOpts = null) => {
   // Productos para devolución
   // Formato: d[TasaIVA][Precio12dig][Cantidad8dig][Descripción]
   // d0 = Exento, d1 = Tasa General, d2 = Tasa Reducida, d3 = Tasa Adicional
+  let docTotalCents = 0; // neto + IVA para el clamp del cierre (igual que la factura)
   if (creditNoteData.products && Array.isArray(creditNoteData.products)) {
     for (const product of creditNoteData.products) {
       const taxCode = taxCodeFor(product.taxRate, TAX_CHARS_NC);
@@ -717,11 +762,14 @@ const generateCreditNoteContent = (creditNoteData, formatOpts = null) => {
 
       // Formato: d[TasaIVA][Precio][Cantidad][Descripción]
       lines.push(`d${taxCode}${priceStr}${qtyStr}${descField}`);
+
+      const netCents = Math.round(priceInCents * (parseFloat(product.quantity) || 1));
+      docTotalCents += netCents + Math.round((netCents * (TAX_RATE_BY_CHAR[taxCode] || 0)) / 100);
     }
   }
-  
+
   // Cierre (mismo contrato que la factura: reversa el IGTF si el pago era divisa)
-  for (const line of buildCloseLines(creditNoteData)) {
+  for (const line of buildCloseLines(creditNoteData, docTotalCents)) {
     lines.push(line);
   }
 
