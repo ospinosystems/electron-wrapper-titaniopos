@@ -250,12 +250,11 @@ const startFiscalServer = async (options = {}) => {
   const env = { ...process.env };
   env.FISCAL_SERVER_PORT = port.toString();
   env.PYTHONUNBUFFERED = '1'; // Forzar flush inmediato de stdout/stderr
-  // Desactivar hka_serial: solo IntTFHKA.exe maneja la impresora fiscal.
-  // hka_serial no puede cerrar documentos (NAK en pago) y compite por el
-  // puerto COM con IntTFHKA.exe causando Error 128.
-  env.USE_HKA_SERIAL = '0';
-  if (intfhkaPath) {
-    env.INTFHKA_PATH = intfhkaPath;
+  // Backend fiscal: tfhka.py (port del SDK TfhkaNet.dll). Habla directo con la
+  // impresora por serial/TCP; ya no se usa IntTFHKA.exe ni hka_serial.py.
+  // Paridad del puerto: FISCAL_PARITY (N=8N1 por defecto, E=8E1 como el SDK).
+  if (process.env.FISCAL_PARITY) {
+    env.FISCAL_PARITY = process.env.FISCAL_PARITY;
   }
 
   // Directorio escribible para Factura.txt, Puerto.dat, data/, etc.
