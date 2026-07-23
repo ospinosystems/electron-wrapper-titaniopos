@@ -135,6 +135,18 @@ function proxyToUpstream(req, res, upstreamBase, stripPrefix, spoof) {
     try { req.destroy(); } catch (_) {}
   });
 
+  // Backstop para redes SEMI-ABIERTAS (router colgado, portal cautivo): una caída
+  // franca da ECONNREFUSED al instante, pero un socket que no responde puede pender
+  // minutos hasta el timeout del SO — y mientras tanto el detector de conexión del
+  // frontend (que pinga /__backend/api/health) no ve ni respuesta ni error. 60s de
+  // inactividad del socket → destruir, que dispara el 'error' de arriba y el front
+  // lo ve como error de red. No molesta a los long-polls de Electric (~20-25s de
+  // hold máximo) ni al timeout de axios del front (25s, aborta antes).
+  upReq.setTimeout(60000, () => {
+    console.warn('[PROXY] Upstream sin respuesta (timeout 60s)', stripPrefix);
+    try { upReq.destroy(new Error('upstream timeout')); } catch (_) {}
+  });
+
   // CRÍTICO con keep-alive: si el cliente ABORTA (la navegación cancela las
   // requests en vuelo), DESTRUIR el upstream. Si no, un socket a medio consumir
   // vuelve al pool keep-alive "envenenado" y la próxima request sobre él se
