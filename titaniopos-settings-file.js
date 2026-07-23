@@ -92,11 +92,19 @@ function clone(obj) {
 
 function normalizeCaja(raw) {
   const base = { ...DEFAULT_CAJA, ...raw };
-  return {
+  const out = {
     cashRegisterNumber: base.cashRegisterNumber ?? null,
     pinpadIp: base.pinpadIp ?? null,
     operationMode: base.operationMode === 'SELF_SERVICE' ? 'SELF_SERVICE' : 'POS',
   };
+  // Toggles de habilitación (megaPos/pinpad): se incluyen SOLO si el JSON ya los
+  // trae. Así una caja que viene de una versión anterior (sin estos campos) NO
+  // recibe un default que pise el valor real que el front trae de localStorage;
+  // el front hace un backfill único con el valor bueno y a partir de ahí viven en
+  // el JSON (config de la máquina) y sobreviven a un "clear site data".
+  if (typeof base.megaPosEnabled === 'boolean') out.megaPosEnabled = base.megaPosEnabled;
+  if (typeof base.pinpadEnabled === 'boolean') out.pinpadEnabled = base.pinpadEnabled;
+  return out;
 }
 
 function normalizeThermal(raw) {
