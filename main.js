@@ -1940,10 +1940,17 @@ const normalizeBackupData = (raw, fallbackDate = getDateString()) => {
 const rotateBackupToPrevSync = (filePath) => {
   const prevPath = `${filePath}.prev`;
   try {
+    // CRÍTICO: si el archivo principal NO existe (primera escritura del día, o
+    // una restauración post-corte donde .prev es la ÚNICA copia buena), no hay
+    // nada que rotar y .prev NO SE TOCA. El orden viejo (rm .prev primero,
+    // incondicional) borraba esa única copia; si la luz se iba entre ese rm y el
+    // rename final del writer —los cortes vienen en ráfagas— no quedaba NINGUNA
+    // generación legible y el backup "se borraba por completo".
+    if (!fs.existsSync(filePath)) return;
     fs.rmSync(prevPath, { force: true });
     fs.renameSync(filePath, prevPath);
   } catch (err) {
-    // ENOENT = primera escritura del día (no hay archivo aún) — normal.
+    // ENOENT = carrera benigna con el existsSync de arriba — normal.
     if (err.code !== 'ENOENT') {
       console.warn('⚠️ [BACKUP] No se pudo rotar a .prev:', err.message);
     }
@@ -1953,6 +1960,9 @@ const rotateBackupToPrevSync = (filePath) => {
 const rotateBackupToPrevAsync = async (filePath) => {
   const prevPath = `${filePath}.prev`;
   try {
+    // Mismo guard que la versión sync: nunca borrar .prev sin un principal que
+    // lo reemplace — puede ser la única copia buena tras un corte de energía.
+    if (!fs.existsSync(filePath)) return;
     await fs.promises.rm(prevPath, { force: true });
     await fs.promises.rename(filePath, prevPath);
   } catch (err) {
@@ -1981,7 +1991,12 @@ const writeBackupFileAtomic = (filePath, backupData, useJwt = BACKUP_WRITE_JWT) 
       signature: computeBackupSignature(normalized),
     };
   }
-  const tmpPath = `${filePath}.tmp`;
+  // `.tmp-sync` (no `.tmp`): este writer corre SÍNCRONO en el hilo principal y
+  // puede intercalarse entre los await del writer async (p. ej. una restauración
+  // durante la hidratación mientras hay un flush del store en vuelo). Si
+  // compartieran el mismo .tmp, este open('w') truncaría el archivo que el otro
+  // todavía tiene abierto y el rename publicaría un JSON a medias.
+  const tmpPath = `${filePath}.tmp-sync`;
   // Sin pretty-print: en escrituras frecuentes, indentar duplica el tamaño y
   // ralentiza I/O. Los inspect tools admin parsean JSON normal — no necesitan
   // espacios. Para inspección humana, abrir en un editor que reformatee.
@@ -2000,6 +2015,34 @@ const writeBackupFileAtomic = (filePath, backupData, useJwt = BACKUP_WRITE_JWT) 
   fs.renameSync(tmpPath, filePath);
 };
 
+// Serializa las escrituras ASÍNCRONAS por archivo. Sin esto, dos escritores
+// concurrentes al mismo destino (backup-save-all-orders del renderer y
+// backup-delete-order, por ejemplo) comparten el mismo `.tmp`: el segundo
+// open('w') trunca lo que el primero está escribiendo, y el rename del primero
+// publica un archivo a medias — con rotación de por medio, podía borrar la
+// generación buena. Cadena de promesas por filePath: cada escritura espera a
+// que termine la anterior (los errores previos no bloquean la siguiente).
+const backupWriteChains = new Map();
+// Clave normalizada por archivo físico: en NTFS (case-insensitive) dos rutas con
+// distinta capitalización (p. ej. la que teclea el admin en el inspector vs la que
+// arma getBackupDir) son EL MISMO archivo y deben compartir cadena.
+const backupLockKey = (p) =>
+  process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p);
+const withBackupWriteLock = (filePath, fn) => {
+  const key = backupLockKey(filePath);
+  const tail = backupWriteChains.get(key) ?? Promise.resolve();
+  const run = tail.catch(() => {}).then(fn);
+  // Auto-poda: cuando esta operación termina Y nadie encadenó después, borrar la
+  // entrada (evita que el Map acumule una clave por cada día/rango tocado). El
+  // chequeo de identidad preserva el FIFO: si alguien encadenó mientras corría,
+  // get(key) !== chained y no se borra.
+  const chained = run.catch(() => {}).then(() => {
+    if (backupWriteChains.get(key) === chained) backupWriteChains.delete(key);
+  });
+  backupWriteChains.set(key, chained);
+  return run;
+};
+
 // Versión ASÍNCRONA del writer atómico — para el path caliente de "guardar el
 // store completo". No bloquea el event loop de Electron, lo cual es crítico en
 // Celeron con HDD donde `writeFileSync` de 500KB-1MB puede tomar 100-300ms y
@@ -2008,30 +2051,31 @@ const writeBackupFileAtomic = (filePath, backupData, useJwt = BACKUP_WRITE_JWT) 
 // Mantiene la misma semántica de atomicidad: escribe a `.tmp` con fsync, rota el
 // archivo anterior a `.prev` y hace rename atómico al destino. Si algo falla
 // antes del rename final, el destino o su `.prev` quedan intactos.
-const writeBackupFileAtomicAsync = async (filePath, backupData, useJwt = BACKUP_WRITE_JWT) => {
-  const normalized = normalizeBackupData(backupData);
-  let payload;
-  if (useJwt) {
-    payload = { token: encodeToJWT(normalized) };
-  } else {
-    payload = {
-      version: BACKUP_FORMAT_VERSION,
-      data: normalized,
-      signature: computeBackupSignature(normalized),
-    };
-  }
-  const tmpPath = `${filePath}.tmp`;
-  const fh = await fs.promises.open(tmpPath, 'w');
-  try {
-    await fh.writeFile(JSON.stringify(payload), 'utf-8');
-    // fsync antes del rename — ver nota en writeBackupFileAtomic.
-    await fh.sync();
-  } finally {
-    await fh.close();
-  }
-  await rotateBackupToPrevAsync(filePath);
-  await fs.promises.rename(tmpPath, filePath);
-};
+const writeBackupFileAtomicAsync = (filePath, backupData, useJwt = BACKUP_WRITE_JWT) =>
+  withBackupWriteLock(filePath, async () => {
+    const normalized = normalizeBackupData(backupData);
+    let payload;
+    if (useJwt) {
+      payload = { token: encodeToJWT(normalized) };
+    } else {
+      payload = {
+        version: BACKUP_FORMAT_VERSION,
+        data: normalized,
+        signature: computeBackupSignature(normalized),
+      };
+    }
+    const tmpPath = `${filePath}.tmp`;
+    const fh = await fs.promises.open(tmpPath, 'w');
+    try {
+      await fh.writeFile(JSON.stringify(payload), 'utf-8');
+      // fsync antes del rename — ver nota en writeBackupFileAtomic.
+      await fh.sync();
+    } finally {
+      await fh.close();
+    }
+    await rotateBackupToPrevAsync(filePath);
+    await fs.promises.rename(tmpPath, filePath);
+  });
 
 // Lee y normaliza un backup, aceptando tres formatos:
 //   v2 firmado:  { version: 2, data, signature }     → verifica HMAC, falla si fue manipulado
@@ -2078,14 +2122,21 @@ const readBackupFileNormalized = (backupPath, opts = {}) => {
     return normalized;
   }
 
-  // Legado v1 (JSON plano sin firma). Lo aceptamos solo si `allowUnsigned` y migramos a v2.
+  // Legado v1 (JSON plano sin firma). Lo aceptamos solo si `allowUnsigned`.
   if (allowUnsigned) {
     const normalized = normalizeBackupData(fileContent);
-    try {
-      writeBackupFileAtomic(backupPath, normalized, false);
-      console.log(`♻️ [BACKUP] Migrado v1 sin firma → firmado v2: ${path.basename(backupPath)}`);
-    } catch (migrationError) {
-      console.warn('⚠️ [BACKUP] No se pudo migrar v1 a v2:', migrationError.message);
+    // La reescritura EN SITIO solo cuando el caller lo pide (migrateJwtToPlain).
+    // readBackupFileWithRecovery lee `.prev` con migrateJwtToPlain:false justo
+    // porque NO quiere que se reescriba la generación de recuperación: migrar el
+    // .prev en sitio rota (.prev → .prev.prev) y abre una ventana donde ni el
+    // principal (ya cuarentenado) ni .prev existen — un corte ahí lo pierde todo.
+    if (migrateJwtToPlain) {
+      try {
+        writeBackupFileAtomic(backupPath, normalized, false);
+        console.log(`♻️ [BACKUP] Migrado v1 sin firma → firmado v2: ${path.basename(backupPath)}`);
+      } catch (migrationError) {
+        console.warn('⚠️ [BACKUP] No se pudo migrar v1 a v2:', migrationError.message);
+      }
     }
     return normalized;
   }
@@ -2121,12 +2172,13 @@ const quarantineCorruptBackup = (backupPath) => {
 };
 
 // Lee un backup con recuperación ante corrupción por corte de energía:
-//  - JSON ilegible → cuarentena + intento con la generación anterior `.prev`
-//  - archivo principal ausente pero `.prev` presente (corte entre los dos
-//    rename del writer) → usa `.prev`
-//  - `.prev` legible → se restaura como archivo principal
+//  - JSON ilegible → cuarentena + intento con `.tmp` firmado y luego `.prev`
+//  - archivo principal ausente → `.tmp` firmado (corte entre el fsync y el
+//    rename final del writer: es la escritura MÁS RECIENTE, completa en disco)
+//    y si no, `.prev` (generación anterior)
+//  - lo recuperado se restaura como archivo principal
 // Lanza con código:
-//  - BACKUP_NOT_FOUND  → no hay archivo ni .prev (día sin backup, caso normal)
+//  - BACKUP_NOT_FOUND  → no hay archivo, ni .tmp válido, ni .prev (día sin backup)
 //  - BACKUP_CORRUPT    → había datos pero ninguna generación es legible
 //  - códigos de manipulación (firma/JWT) → se propagan sin auto-recuperar
 const readBackupFileWithRecovery = (backupPath, opts = {}) => {
@@ -2139,8 +2191,38 @@ const readBackupFileWithRecovery = (backupPath, opts = {}) => {
     } catch (error) {
       if (BACKUP_TAMPER_CODES.has(error?.code)) throw error;
       hadCorruption = true;
-      console.error('⚠️ [BACKUP] Backup ilegible (posible corte de energía), intentando .prev:', error.message);
+      console.error('⚠️ [BACKUP] Backup ilegible (posible corte de energía), intentando .tmp/.prev:', error.message);
       quarantineCorruptBackup(backupPath);
+    }
+  }
+
+  // Un `.tmp` solo sobrevive si la ÚLTIMA escritura murió después del fsync y
+  // antes del rename (toda escritura exitosa lo consume al renombrarlo): si su
+  // firma verifica, es la foto más nueva que existe — más fresca que `.prev`.
+  // Solo se acepta FIRMADO (allowUnsigned:false): una escritura a medias no
+  // parsea o no verifica, y jamás debe "recuperarse".
+  const tmpPath = `${backupPath}.tmp`;
+  if (fs.existsSync(tmpPath)) {
+    try {
+      const data = readBackupFileNormalized(tmpPath, {
+        ...opts,
+        migrateJwtToPlain: false,
+        allowUnsigned: false,
+      });
+      try {
+        writeBackupFileAtomic(backupPath, data, BACKUP_WRITE_JWT);
+        console.log('♻️ [BACKUP] Restaurado desde .tmp (escritura interrumpida por corte):', path.basename(backupPath));
+        // Consumirlo: su contenido ya vive en el principal. Si quedara, una
+        // corrupción futura podría "recuperar" este estado ya viejo por encima
+        // de un .prev más nuevo.
+        fs.rmSync(tmpPath, { force: true });
+      } catch (restoreError) {
+        console.warn('⚠️ [BACKUP] No se pudo restaurar desde .tmp:', restoreError.message);
+      }
+      return data;
+    } catch (tmpError) {
+      // .tmp roto/no firmado = escritura a medias, caso esperado: se ignora.
+      console.warn('⚠️ [BACKUP] .tmp descartado (escritura a medias):', tmpError.message);
     }
   }
 
@@ -2240,7 +2322,12 @@ ipcMain.handle('backup-get-all-orders', async (event, range) => {
       const backupPath = path.join(backupDir, `backup_${dateStr}.json`);
       let data;
       try {
-        data = readBackupFileWithRecovery(backupPath, { migrateJwtToPlain: !BACKUP_WRITE_JWT });
+        // Serializado contra las escrituras del mismo archivo: leer (y sobre todo
+        // recuperar/cuarentenar) en paralelo con un flush en vuelo podía tomar un
+        // estado a medias como "corrupto".
+        data = await withBackupWriteLock(backupPath, async () =>
+          readBackupFileWithRecovery(backupPath, { migrateJwtToPlain: !BACKUP_WRITE_JWT }),
+        );
       } catch (readError) {
         const code = readError?.code;
         if (code === 'BACKUP_NOT_FOUND') continue;
@@ -2324,19 +2411,28 @@ ipcMain.handle('backup-delete-order', async (event, orderId) => {
     const dateStr = getDateString();
     const todayBackupPath = path.join(backupDir, `backup_${dateStr}.json`);
 
-    let todayData = null;
-    try {
-      todayData = readBackupFileWithRecovery(todayBackupPath, { migrateJwtToPlain: !BACKUP_WRITE_JWT });
-    } catch (readError) {
-      // Sin backup de hoy (o irrecuperable): no hay nada que borrar del diario.
-      if (readError?.code !== 'BACKUP_NOT_FOUND' && readError?.code !== 'BACKUP_CORRUPT') throw readError;
-    }
-    if (todayData) {
-      todayData.orders = todayData.orders.filter((o) => String(o.id) !== String(orderId));
-      todayData.count = todayData.orders.length;
-      todayData.lastSync = new Date().toISOString();
-      await writeBackupFileAtomicAsync(todayBackupPath, todayData, BACKUP_WRITE_JWT);
-    }
+    // Read-modify-write bajo UNA sola adquisición del lock: leer y escribir en
+    // dos locks separados dejaba una ventana donde un flush del renderer se
+    // intercalaba y su versión (con la orden aún presente) pisaba el borrado
+    // (lost update). Dentro del lock se usa el writer SÍNCRONO writeBackupFileAtomic
+    // — NO writeBackupFileAtomicAsync, que re-entraría en withBackupWriteLock sobre
+    // la misma clave y haría deadlock (la op interna esperaría a la externa).
+    await withBackupWriteLock(todayBackupPath, async () => {
+      let todayData = null;
+      try {
+        todayData = readBackupFileWithRecovery(todayBackupPath, { migrateJwtToPlain: !BACKUP_WRITE_JWT });
+      } catch (readError) {
+        // Sin backup de hoy (o irrecuperable): no hay nada que borrar del diario.
+        if (readError?.code !== 'BACKUP_NOT_FOUND' && readError?.code !== 'BACKUP_CORRUPT') throw readError;
+        return;
+      }
+      if (todayData) {
+        todayData.orders = todayData.orders.filter((o) => String(o.id) !== String(orderId));
+        todayData.count = todayData.orders.length;
+        todayData.lastSync = new Date().toISOString();
+        writeBackupFileAtomic(todayBackupPath, todayData, BACKUP_WRITE_JWT);
+      }
+    });
 
     // También eliminar archivo individual si existe
     const individualPath = path.join(backupDir, `order_${orderId}.json`);
@@ -2438,8 +2534,18 @@ ipcMain.handle('backup-admin-list-files', async () => {
   try {
     const backupDir = getBackupDir();
     const entries = fs.readdirSync(backupDir, { withFileTypes: true });
+    // Además de los .json: las generaciones de recuperación — `.prev` (anterior),
+    // `.tmp` (escritura interrumpida por corte, puede tener la foto más nueva) y
+    // `.tmp-sync` (writer síncrono). Los `.corrupt-*.json` de cuarentena ya
+    // entran por el sufijo .json. Todos se pueden abrir con el inspector (el
+    // parseo/verificación de firma se reporta por archivo sin lanzar).
+    const isInspectable = (name) =>
+      name.endsWith('.json') ||
+      name.endsWith('.json.prev') ||
+      name.endsWith('.json.tmp') ||
+      name.endsWith('.json.tmp-sync');
     const files = entries
-      .filter((e) => e.isFile() && e.name.endsWith('.json'))
+      .filter((e) => e.isFile() && isInspectable(e.name))
       .map((e) => {
         const full = path.join(backupDir, e.name);
         const stat = fs.statSync(full);
@@ -2536,11 +2642,205 @@ ipcMain.handle('backup-admin-resign', async (event, filePath, data) => {
     if (!data || typeof data !== 'object') {
       return { success: false, error: 'data inválido' };
     }
-    writeBackupFileAtomic(resolved, data, false);
+    // BAJO EL LOCK: si un flush del renderer sobre el mismo backup_HOY.json está
+    // en vuelo (rotación a medias, principal inexistente por un instante), su
+    // rename final pisaría esta re-firma sin dejar rastro. El lock serializa esta
+    // escritura sync contra los writers async del mismo archivo.
+    await withBackupWriteLock(resolved, async () => {
+      writeBackupFileAtomic(resolved, data, false);
+    });
     console.log(`✍️ [BACKUP] Re-firmado por admin: ${path.basename(resolved)}`);
     return { success: true };
   } catch (error) {
     console.error('❌ [BACKUP] Error re-firmando:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// ==================== RESTAURACIÓN MANUAL DE GENERACIONES ====================
+// Base canónica de un archivo de recuperación: quita los sufijos de generación
+// para obtener el backup_YYYY-MM-DD.json al que pertenece.
+//   backup_2026-07-24.json.prev              → backup_2026-07-24.json
+//   backup_2026-07-24.json.tmp               → backup_2026-07-24.json
+//   backup_2026-07-24.json.tmp-sync          → backup_2026-07-24.json
+//   backup_2026-07-24.json.corrupt-<stamp>.json → backup_2026-07-24.json
+const canonicalBackupTarget = (filePath) => {
+  let name = path.basename(filePath);
+  // El nombre de cuarentena es `${backup_...json}.corrupt-<stamp>.json`, es decir
+  // el sufijo se AÑADE sobre un nombre que YA termina en `.json`. Por eso se quita
+  // a vacío (no a '.json'): reemplazar por '.json' dejaba `backup_....json.json`
+  // (un destino fantasma que la app nunca lee). Tras quitarlo, un compuesto
+  // `....json.prev.corrupt-<stamp>.json` queda en `....json.prev`, que la línea
+  // siguiente reduce al principal.
+  name = name.replace(/\.corrupt-[0-9TZ:.-]+\.json$/i, '');
+  name = name.replace(/\.json\.(prev|tmp|tmp-sync)$/i, '.json');
+  return path.join(path.dirname(filePath), name);
+};
+
+// Lista, para un backup base, TODAS sus generaciones de recuperación con estado.
+// Alimenta la utilidad "Restaurar" del inspector: el operador ve de un vistazo
+// cuál generación tiene más órdenes / firma válida y elige cuál restaurar.
+ipcMain.handle('backup-admin-list-generations', async (event, basePath) => {
+  const locked = requireInspectorUnlocked();
+  if (locked) return { ...locked, generations: [] };
+  try {
+    const backupDir = getBackupDir();
+    const canonical = path.resolve(canonicalBackupTarget(basePath || ''));
+    if (!canonical.startsWith(path.resolve(backupDir) + path.sep)) {
+      return { success: false, error: 'Ruta fuera del directorio de backups', generations: [] };
+    }
+    const baseName = path.basename(canonical); // backup_YYYY-MM-DD.json
+    const entries = fs.readdirSync(backupDir, { withFileTypes: true });
+    // Todas las generaciones de ESE día: el principal, .tmp/.prev/.tmp-sync y las
+    // cuarentenas *.corrupt-*.json.
+    const genRe = new RegExp(
+      '^' + baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
+        '(\\.prev|\\.tmp|\\.tmp-sync|\\.corrupt-[0-9TZ:.-]+\\.json)?$',
+      'i',
+    );
+    const generations = [];
+    for (const e of entries) {
+      if (!e.isFile() || !genRe.test(e.name)) continue;
+      const full = path.join(backupDir, e.name);
+      // throwIfNoEntry:false — si el archivo se esfumó entre readdir y stat (un
+      // flush/cuarentena concurrente lo renombró), saltar SOLO esa entrada en vez
+      // de abortar el listado completo.
+      const stat = fs.statSync(full, { throwIfNoEntry: false });
+      if (!stat) continue;
+      let kind = 'principal';
+      if (e.name.endsWith('.prev')) kind = 'anterior (.prev)';
+      else if (e.name.endsWith('.tmp-sync')) kind = 'escritura sync (.tmp-sync)';
+      else if (e.name.endsWith('.tmp')) kind = 'escritura interrumpida (.tmp)';
+      else if (/\.corrupt-/i.test(e.name)) kind = 'cuarentena';
+      // Estado sin lanzar: firma, formato, nº de órdenes, lastSync.
+      let ordersCount = null;
+      let lastSync = null;
+      let signatureValid = false;
+      let readable = false;
+      try {
+        const raw = fs.readFileSync(full, 'utf-8');
+        const parsed = JSON.parse(raw);
+        let data = null;
+        if (parsed && typeof parsed === 'object' && typeof parsed.signature === 'string' && parsed.data) {
+          signatureValid = verifyBackupSignature(parsed.data, parsed.signature);
+          data = normalizeBackupData(parsed.data);
+        } else if (parsed && typeof parsed === 'object' && parsed.token) {
+          const decoded = decodeBackupTokenSafely(parsed.token);
+          signatureValid = Boolean(decoded);
+          data = decoded ? normalizeBackupData(decoded) : null;
+        } else if (parsed && typeof parsed === 'object') {
+          data = normalizeBackupData(parsed);
+        }
+        if (data) {
+          readable = true;
+          ordersCount = Array.isArray(data.orders) ? data.orders.length : 0;
+          lastSync = data.lastSync ?? null;
+        }
+      } catch {
+        readable = false;
+      }
+      generations.push({
+        name: e.name,
+        path: full,
+        kind,
+        isPrincipal: e.name === baseName,
+        size: stat.size,
+        mtime: stat.mtimeMs,
+        readable,
+        signatureValid,
+        ordersCount,
+        lastSync,
+      });
+    }
+    // Orden: principal primero, luego por nº de órdenes desc, luego por mtime desc.
+    generations.sort((a, b) => {
+      if (a.isPrincipal !== b.isPrincipal) return a.isPrincipal ? -1 : 1;
+      if ((b.ordersCount ?? -1) !== (a.ordersCount ?? -1)) return (b.ordersCount ?? -1) - (a.ordersCount ?? -1);
+      return b.mtime - a.mtime;
+    });
+    return { success: true, target: canonical, targetName: baseName, generations };
+  } catch (error) {
+    console.error('❌ [BACKUP] Error listando generaciones:', error);
+    return { success: false, error: error.message, generations: [] };
+  }
+});
+
+// Restaura una generación (`sourcePath`) como el backup principal del día.
+// Lee la fuente (aceptando firmada, JWT o v1 plano — una copia de recuperación
+// puede no estar firmada), y la reescribe firmada v2 en el archivo canónico,
+// BAJO EL LOCK (serializa contra flushes del renderer) y de forma atómica (el
+// principal previo se conserva en .prev por la rotación del writer).
+ipcMain.handle('backup-admin-restore-generation', async (event, sourcePath) => {
+  const locked = requireInspectorUnlocked();
+  if (locked) return locked;
+  try {
+    if (typeof sourcePath !== 'string' || !sourcePath) {
+      return { success: false, error: 'Ruta inválida' };
+    }
+    const backupDir = getBackupDir();
+    const resolvedSrc = path.resolve(sourcePath);
+    if (!resolvedSrc.startsWith(path.resolve(backupDir) + path.sep)) {
+      return { success: false, error: 'Ruta fuera del directorio de backups' };
+    }
+    if (!fs.existsSync(resolvedSrc)) {
+      return { success: false, error: 'La generación seleccionada no existe' };
+    }
+    const target = canonicalBackupTarget(resolvedSrc);
+    if (path.resolve(target) === resolvedSrc) {
+      return { success: false, error: 'La fuente ya es el archivo principal' };
+    }
+
+    // Leer la fuente sin migrarla en sitio (allowUnsigned para aceptar .tmp/.prev
+    // legado o plano). Si no parsea/verifica, se rechaza — no restauramos basura.
+    let data;
+    try {
+      data = readBackupFileNormalized(resolvedSrc, { migrateJwtToPlain: false, allowUnsigned: true });
+    } catch (readErr) {
+      return { success: false, error: `La generación no es legible: ${readErr.message}` };
+    }
+    // OJO: normalizeBackupData SIEMPRE devuelve {orders:[...]}, así que
+    // `Array.isArray(data.orders)` nunca es falso — no sirve de guard. Hay que
+    // mirar el CONTEO real.
+    const srcCount = Array.isArray(data.orders) ? data.orders.length : 0;
+    if (srcCount === 0) {
+      return {
+        success: false,
+        error: 'La generación seleccionada no contiene órdenes; no se restaura sobre el principal.',
+      };
+    }
+
+    // Protección contra restaurar una copia MÁS PEQUEÑA sobre el principal: el
+    // principal anterior solo sobrevive en .prev y el próximo flush del renderer
+    // lo pisa, así que un restore que encoge = pérdida permanente. Se permite si
+    // el principal es ilegible/inexistente (count 0) — ese ES el caso de
+    // recuperación — o si la fuente trae MÁS o IGUAL órdenes.
+    let principalCount = 0;
+    try {
+      if (fs.existsSync(target)) {
+        const cur = readBackupFileNormalized(target, { migrateJwtToPlain: false, allowUnsigned: true });
+        principalCount = Array.isArray(cur?.orders) ? cur.orders.length : 0;
+      }
+    } catch {
+      principalCount = 0; // principal ilegible → tratamos como recuperación válida
+    }
+    if (principalCount > srcCount) {
+      return {
+        success: false,
+        error:
+          `El archivo principal tiene ${principalCount} órdenes y esta generación solo ${srcCount}. ` +
+          `No se restaura una copia con menos para no perder órdenes. Elige otra generación o usa Re-firmar.`,
+      };
+    }
+
+    await withBackupWriteLock(target, async () => {
+      writeBackupFileAtomic(target, data, false);
+    });
+    console.log(
+      `♻️ [BACKUP] Restaurado ${path.basename(resolvedSrc)} → ${path.basename(target)} (${data.orders.length} órdenes)`,
+    );
+    return { success: true, target, count: data.orders.length };
+  } catch (error) {
+    console.error('❌ [BACKUP] Error restaurando generación:', error);
     return { success: false, error: error.message };
   }
 });
