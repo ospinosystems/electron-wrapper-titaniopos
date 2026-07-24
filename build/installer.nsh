@@ -66,13 +66,22 @@
 !macroend
 
 !macro customUnInstall
-  ; Clean up Defender exclusions on uninstall so we don't leave a dangling
-  ; rule pointing at a missing path. Power plan stays — the user may want
-  ; High Performance anyway.
-  nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-MpPreference -ExclusionPath \"$INSTDIR\" -ErrorAction SilentlyContinue"'
-  Pop $0
-  nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-MpPreference -ExclusionProcess \"TitanioPOS.exe\" -ErrorAction SilentlyContinue"'
-  Pop $0
-  nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-MpPreference -ExclusionPath \"$APPDATA\TitanioPOS\" -ErrorAction SilentlyContinue"'
-  Pop $0
+  ; CLAVE PARA UPDATES RÁPIDOS: una actualización oneClick corre el desinstalador
+  ; de la versión vieja ANTES de extraer la nueva. Si aquí quitáramos la exclusión
+  ; de Defender (como se hacía antes SIEMPRE), la versión nueva se extraería SIN
+  ; exclusión y Defender re-escanearía los ~3000 archivos estáticos (vpos 268 MB,
+  ; python) en cada update — el grueso del tiempo. `${isUpdated}` es true cuando
+  ; el desinstalador corre como parte de un update: en ese caso NO tocamos la
+  ; exclusión, que persiste y hace la extracción de la nueva versión instantánea
+  ; para Defender. Solo en una desinstalación REAL limpiamos la regla para no
+  ; dejarla apuntando a un directorio que ya no existe. No agrega ningún cambio
+  ; nuevo a la caja: mantiene la misma exclusión que el install ya dejó puesta.
+  ${ifNot} ${isUpdated}
+    nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-MpPreference -ExclusionPath \"$INSTDIR\" -ErrorAction SilentlyContinue"'
+    Pop $0
+    nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-MpPreference -ExclusionProcess \"TitanioPOS.exe\" -ErrorAction SilentlyContinue"'
+    Pop $0
+    nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-MpPreference -ExclusionPath \"$APPDATA\TitanioPOS\" -ErrorAction SilentlyContinue"'
+    Pop $0
+  ${endIf}
 !macroend
