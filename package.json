@@ -72,7 +72,9 @@
         "from": "python-embed",
         "to": "python-embed",
         "filter": [
-          "**/*"
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
         ]
       },
       {
