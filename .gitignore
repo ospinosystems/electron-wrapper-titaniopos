@@ -88,3 +88,6 @@ dist-standalone/
 
 # Distribución VPOS: gana a los ignores globales de arriba (*.exe, *.log, .env*).
 !vpos-rest/**
+
+# Runtime empaquetado (fast updates) — se genera con make-runtime-archive.js
+runtime-dist/
