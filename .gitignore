@@ -88,3 +88,5 @@ dist-standalone/
 
 # Distribución VPOS: gana a los ignores globales de arriba (*.exe, *.log, .env*).
 !vpos-rest/**
+
+/.vscode
