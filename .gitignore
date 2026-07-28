@@ -90,3 +90,5 @@ dist-standalone/
 !vpos-rest/**
 
 /.vscode
+# Runtime empaquetado (fast updates) — se genera con make-runtime-archive.js
+runtime-dist/

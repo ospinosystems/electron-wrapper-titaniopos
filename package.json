@@ -6,11 +6,12 @@
   "scripts": {
     "start": "electron .",
     "prebuild": "node prebuild.js",
+    "make:runtime": "node make-runtime-archive.js",
     "bundle:frontend": "node bundle-frontend.js",
-    "build": "npm run prebuild && npm run bundle:frontend && electron-builder --win --publish never",
-    "build:portable": "npm run prebuild && npm run bundle:frontend && electron-builder --win portable --publish never",
-    "release": "npm run prebuild && npm run bundle:frontend && electron-builder --win --publish always",
-    "publish": "npm run prebuild && npm run bundle:frontend && electron-builder --win --publish always",
+    "build": "npm run prebuild && npm run make:runtime && npm run bundle:frontend && electron-builder --win --publish never",
+    "build:portable": "npm run prebuild && npm run make:runtime && npm run bundle:frontend && electron-builder --win portable --publish never",
+    "release": "npm run prebuild && npm run make:runtime && npm run bundle:frontend && electron-builder --win --publish always",
+    "publish": "npm run prebuild && npm run make:runtime && npm run bundle:frontend && electron-builder --win --publish always",
     "start:local": "electron . --env=local",
     "start:prod": "electron . --env=prod"
   },
@@ -69,11 +70,16 @@
         ]
       },
       {
-        "from": "python-embed",
-        "to": "python-embed",
-        "filter": [
-          "**/*"
-        ]
+        "from": "runtime-dist/runtime.7z",
+        "to": "runtime.7z"
+      },
+      {
+        "from": "runtime-dist/runtime.version",
+        "to": "runtime.version"
+      },
+      {
+        "from": "node_modules/7zip-bin/win/x64/7za.exe",
+        "to": "7za.exe"
       },
       {
         "from": "bin",
@@ -93,13 +99,6 @@
       {
         "from": "drivers/verifone",
         "to": "drivers/verifone",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "vpos-rest",
-        "to": "vpos-rest",
         "filter": [
           "**/*"
         ]
