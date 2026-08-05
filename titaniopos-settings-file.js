@@ -76,6 +76,27 @@ const DEFAULT_MEGA_POS = {
   lastConfigUpdate: '',
 };
 
+// Impresión en red entre cajas.
+//   mode 'share'   — esta caja expone sus impresoras (ticket + fiscal) en la LAN
+//                    vía un mini servidor HTTP (POST /print, GET /health).
+//   mode 'receive' — esta caja manda los tickets a la caja anfitriona (hostIp) y,
+//                    si useRemoteFiscal, también las peticiones fiscales van al
+//                    servidor fiscal de la anfitriona.
+//   hostFiscal     — último snapshot de los parámetros fiscales de la anfitriona
+//                    (fiscalMode, barcode, formato, serial, puerto flask); se usa
+//                    para imprimir con el formato de ALLÁ aunque no responda el
+//                    /health en el momento de la venta.
+const DEFAULT_PRINT_SHARE = {
+  mode: 'off',
+  sharePort: 3020,
+  hostIp: '',
+  hostPort: 3020,
+  useRemoteTicket: true,
+  useRemoteFiscal: false,
+  hostFiscal: null,
+  lastUpdated: null,
+};
+
 const DEFAULT_SETTINGS = {
   schemaVersion: 1,
   caja: { ...DEFAULT_CAJA },
@@ -83,6 +104,7 @@ const DEFAULT_SETTINGS = {
   fiscal: { ...DEFAULT_FISCAL },
   ui: { ...DEFAULT_UI },
   megaPos: { ...DEFAULT_MEGA_POS },
+  printShare: { ...DEFAULT_PRINT_SHARE },
 };
 
 
@@ -135,6 +157,24 @@ function normalizeMegaPos(raw) {
   };
 }
 
+function normalizePrintShare(raw) {
+  const base = { ...DEFAULT_PRINT_SHARE, ...(raw || {}) };
+  const toPort = (v, def) => {
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) && n > 0 && n <= 65535 ? n : def;
+  };
+  return {
+    mode: base.mode === 'share' || base.mode === 'receive' ? base.mode : 'off',
+    sharePort: toPort(base.sharePort, DEFAULT_PRINT_SHARE.sharePort),
+    hostIp: String(base.hostIp || '').trim(),
+    hostPort: toPort(base.hostPort, DEFAULT_PRINT_SHARE.hostPort),
+    useRemoteTicket: base.useRemoteTicket !== false,
+    useRemoteFiscal: base.useRemoteFiscal === true,
+    hostFiscal: base.hostFiscal && typeof base.hostFiscal === 'object' ? base.hostFiscal : null,
+    lastUpdated: base.lastUpdated ?? null,
+  };
+}
+
 function normalizeSettings(raw) {
   if (!raw || typeof raw !== 'object') return clone(DEFAULT_SETTINGS);
   return {
@@ -144,6 +184,7 @@ function normalizeSettings(raw) {
     fiscal: normalizeFiscal(raw.fiscal || {}),
     ui: normalizeUi(raw.ui || {}),
     megaPos: normalizeMegaPos(raw.megaPos || raw.smartPos || {}),
+    printShare: normalizePrintShare(raw.printShare || {}),
   };
 }
 
@@ -327,10 +368,12 @@ module.exports = {
   normalizeFiscal,
   normalizeUi,
   normalizeMegaPos,
+  normalizePrintShare,
   DEFAULT_SETTINGS,
   DEFAULT_CAJA,
   DEFAULT_UI,
   DEFAULT_MEGA_POS,
+  DEFAULT_PRINT_SHARE,
   migrateToUnifiedSettings,
   SETTINGS_DIR,
   SETTINGS_FILENAME,

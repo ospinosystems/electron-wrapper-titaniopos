@@ -162,8 +162,33 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @param {object} options - Additional options (paperWidth, usbPort, etc.)
    * @returns {Promise<{success: boolean, method?: string, error?: string}>}
    */
-  printerTest: (method, printerName, content, options = {}) => 
+  printerTest: (method, printerName, content, options = {}) =>
     ipcRenderer.invoke('printer-test', method, printerName, content, options),
+
+  // ==================== IMPRESIÓN EN RED (compartir impresoras) ====================
+
+  /**
+   * Config de impresión en red (sección printShare del settings unificado).
+   * @returns {Promise<{success: boolean, config?: object, status?: object, error?: string}>}
+   */
+  printShareConfigGet: () => ipcRenderer.invoke('print-share-config-get'),
+
+  /**
+   * Guarda la config de impresión en red y aplica el estado del servidor
+   * (arranca/detiene/reubica el puerto según el modo).
+   * @param {object} partial - { mode, sharePort, hostIp, hostPort, useRemoteTicket, useRemoteFiscal }
+   */
+  printShareConfigSave: (partial) => ipcRenderer.invoke('print-share-config-save', partial),
+
+  /** Estado del servidor de compartir: { mode, running, port, ips, error }. */
+  printShareStatus: () => ipcRenderer.invoke('print-share-status'),
+
+  /**
+   * Prueba la conexión con una caja anfitriona: /health del servidor de
+   * compartir + sondeo del servidor fiscal remoto.
+   * @returns {Promise<{success: boolean, health?: object, fiscalReachable?: boolean, error?: string}>}
+   */
+  printShareCheckHost: (hostIp, hostPort) => ipcRenderer.invoke('print-share-check-host', hostIp, hostPort),
 
   // ==================== PINPAD ====================
 

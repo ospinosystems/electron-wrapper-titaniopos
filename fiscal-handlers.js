@@ -42,11 +42,45 @@ const loadFiscalConfig = (app) => {
   }
 };
 
+// Impresión en red (print-share modo receive): esta caja usa la máquina fiscal
+// de otra. Las peticiones van al servidor fiscal de la anfitriona y los
+// parámetros de impresión (fiscalMode, barcode, formato, serial) son los de
+// ALLÁ — storeCode y cashRegisterNumber siguen siendo los de esta caja, y las
+// respuestas fiscales se guardan/sincronizan aquí como siempre.
+const REMOTE_FISCAL_PARAM_KEYS = [
+  'fiscalMode', 'printBarcode', 'barcodeRaw', 'itemDescLen',
+  'discountMode', 'descLeaders', 'percibidoChar', 'machineSerial',
+];
+
+const resolveFiscalConfig = async (app, { refreshRemote = false } = {}) => {
+  const config = loadFiscalConfig(app);
+  try {
+    const printShare = require('./print-share');
+    const params = await printShare.getRemoteFiscalParams(app, { refresh: refreshRemote });
+    const remote = printShare.getRemoteFiscalTarget(app);
+    if (!remote) return config;
+    if (params) {
+      for (const key of REMOTE_FISCAL_PARAM_KEYS) {
+        if (params[key] !== undefined) config[key] = params[key];
+      }
+    }
+    config.enabled = true;
+    config.serverUrl = remote.url;
+    config.remoteShared = true;
+    return config;
+  } catch (e) {
+    console.warn('[FISCAL] print-share no disponible:', e.message);
+    return config;
+  }
+};
+
 // Guardar configuración fiscal
 const saveFiscalConfig = (app, config) => {
   try {
     const s = readSettings(app);
-    s.fiscal = normalizeFiscal({ ...s.fiscal, ...config });
+    // Flags informativos de impresión en red: nunca se persisten en el JSON.
+    const { remoteFiscalActive, remoteFiscalUrl, remoteShared, ...clean } = config || {};
+    s.fiscal = normalizeFiscal({ ...s.fiscal, ...clean });
     writeSettings(app, s);
     console.log('[FISCAL] Config saved (unified):', getSettingsPath(app));
     return true;
@@ -840,7 +874,18 @@ const registerFiscalHandlers = (app) => {
   // Obtener configuración fiscal
   ipcMain.handle('fiscal-config-get', async () => {
     try {
+      // Config LOCAL (la del formulario de ajustes). Si esta caja usa la fiscal
+      // de otra (impresión en red), se agregan flags informativos para que el
+      // frontend habilite la emisión sin pisar los valores locales.
       const config = loadFiscalConfig(app);
+      try {
+        const printShare = require('./print-share');
+        const remote = printShare.getRemoteFiscalTarget(app);
+        if (remote) {
+          config.remoteFiscalActive = true;
+          config.remoteFiscalUrl = remote.url;
+        }
+      } catch { /* print-share opcional */ }
       return { success: true, config };
     } catch (error) {
       return { success: false, error: error.message };
@@ -866,7 +911,7 @@ const registerFiscalHandlers = (app) => {
   // Verificar conexión con servidor fiscal
   ipcMain.handle('fiscal-check-connection', async (event, serverUrl) => {
     try {
-      const config = loadFiscalConfig(app);
+      const config = await resolveFiscalConfig(app);
       const url = serverUrl || config.serverUrl || 'http://127.0.0.1:3000';
       console.log('[FISCAL] Checking connection to:', url);
       const result = await checkFiscalConnection(url);
@@ -881,7 +926,9 @@ const registerFiscalHandlers = (app) => {
   // Enviar factura fiscal
   ipcMain.handle('fiscal-send-invoice', async (event, invoiceData) => {
     try {
-      const config = loadFiscalConfig(app);
+      // refreshRemote: al facturar conviene el snapshot fresco de la anfitriona
+      // (fiscalMode/barcode); si no responde, cae al último conocido.
+      const config = await resolveFiscalConfig(app, { refreshRemote: true });
       
       // Verificar si está habilitado
       if (!config.enabled) {
@@ -965,7 +1012,7 @@ const registerFiscalHandlers = (app) => {
   // Consultar estado de trabajo fiscal
   ipcMain.handle('fiscal-check-job-status', async (event, jobId) => {
     try {
-      const config = loadFiscalConfig(app);
+      const config = await resolveFiscalConfig(app);
       
       if (!config.fiscalMode) {
         // En modo no fiscal, devolver estado completado
@@ -1105,7 +1152,7 @@ const registerFiscalHandlers = (app) => {
   // Enviar reporte X
   ipcMain.handle('fiscal-send-report-x', async () => {
     try {
-      const config = loadFiscalConfig(app);
+      const config = await resolveFiscalConfig(app);
       console.log('[FISCAL] Report X requested. enabled:', config.enabled, 'fiscalMode:', config.fiscalMode, 'serverUrl:', config.serverUrl);
       
       if (!config.enabled || !config.fiscalMode) {
@@ -1135,7 +1182,7 @@ const registerFiscalHandlers = (app) => {
   // Enviar reporte Z
   ipcMain.handle('fiscal-send-report-z', async () => {
     try {
-      const config = loadFiscalConfig(app);
+      const config = await resolveFiscalConfig(app);
       console.log('[FISCAL] Report Z requested. enabled:', config.enabled, 'fiscalMode:', config.fiscalMode, 'serverUrl:', config.serverUrl);
       
       if (!config.enabled || !config.fiscalMode) {
@@ -1167,7 +1214,7 @@ const registerFiscalHandlers = (app) => {
   // número fiscal ni afecta la memoria fiscal.
   ipcMain.handle('fiscal-print-non-fiscal', async (event, payload) => {
     try {
-      const config = loadFiscalConfig(app);
+      const config = await resolveFiscalConfig(app);
       if (!config.enabled) {
         return { success: false, error: 'Máquina fiscal no habilitada' };
       }
@@ -1201,7 +1248,10 @@ const registerFiscalHandlers = (app) => {
   ipcMain.handle('fiscal-set-port', async (event, comPort) => {
     try {
       console.log('[FISCAL] Setting COM port:', comPort);
-      
+
+      // Config LOCAL a propósito: este handler configura el COM del servidor
+      // fiscal de ESTA caja y persiste la config — con la resuelta se colaría
+      // la URL/enabled de la caja anfitriona al JSON local.
       const config = loadFiscalConfig(app);
       config.comPort = comPort;
       config.lastConfigUpdate = new Date().toISOString();
@@ -1237,7 +1287,7 @@ const registerFiscalHandlers = (app) => {
   // Probar conexión con impresora fiscal
   ipcMain.handle('fiscal-test-printer', async () => {
     try {
-      const config = loadFiscalConfig(app);
+      const config = await resolveFiscalConfig(app);
       
       console.log('[FISCAL] Test printer requested');
       console.log('[FISCAL] Config:', JSON.stringify({
@@ -1278,7 +1328,7 @@ const registerFiscalHandlers = (app) => {
   // GENERA UN DOCUMENTO FISCAL REAL con número consecutivo.
   ipcMain.handle('fiscal-test-print', async () => {
     try {
-      const config = loadFiscalConfig(app);
+      const config = await resolveFiscalConfig(app);
 
       if (!config.enabled) {
         return { success: false, error: 'Máquina fiscal no habilitada' };
@@ -1307,7 +1357,7 @@ const registerFiscalHandlers = (app) => {
   // GENERA UN DOCUMENTO FISCAL REAL con número consecutivo.
   ipcMain.handle('fiscal-test-barcode', async (event, opts = {}) => {
     try {
-      const config = loadFiscalConfig(app);
+      const config = await resolveFiscalConfig(app);
 
       if (!config.enabled) {
         return { success: false, error: 'Máquina fiscal no habilitada' };
@@ -1349,7 +1399,7 @@ const registerFiscalHandlers = (app) => {
   // Obtener configuración completa del servidor fiscal
   ipcMain.handle('fiscal-get-server-config', async () => {
     try {
-      const config = loadFiscalConfig(app);
+      const config = await resolveFiscalConfig(app);
       
       if (!config.enabled) {
         return { success: false, error: 'Máquina fiscal no habilitada' };
@@ -1369,7 +1419,7 @@ const registerFiscalHandlers = (app) => {
   // memoria llena, en transacción, etc. Sirve para mostrar estado en vivo en la config.
   ipcMain.handle('fiscal-get-status', async () => {
     try {
-      const config = loadFiscalConfig(app);
+      const config = await resolveFiscalConfig(app);
       if (!config.enabled) {
         return { success: false, error: 'Máquina fiscal no habilitada' };
       }
@@ -1384,7 +1434,7 @@ const registerFiscalHandlers = (app) => {
   // fecha/hora. Permite autocompletar el serial leyéndolo de la impresora.
   ipcMain.handle('fiscal-get-machine-data', async () => {
     try {
-      const config = loadFiscalConfig(app);
+      const config = await resolveFiscalConfig(app);
       if (!config.enabled) {
         return { success: false, error: 'Máquina fiscal no habilitada' };
       }
@@ -1398,7 +1448,7 @@ const registerFiscalHandlers = (app) => {
   // Lista las operaciones de prueba disponibles (Fijas del Fiscalizador).
   ipcMain.handle('fiscal-list-operations', async () => {
     try {
-      const config = loadFiscalConfig(app);
+      const config = await resolveFiscalConfig(app);
       if (!config.enabled) {
         return { success: false, error: 'Máquina fiscal no habilitada' };
       }
@@ -1412,7 +1462,7 @@ const registerFiscalHandlers = (app) => {
   // Ejecuta una operación de prueba. OJO: emite un documento fiscal REAL.
   ipcMain.handle('fiscal-run-operation', async (event, name) => {
     try {
-      const config = loadFiscalConfig(app);
+      const config = await resolveFiscalConfig(app);
       if (!config.enabled) {
         return { success: false, error: 'Máquina fiscal no habilitada' };
       }

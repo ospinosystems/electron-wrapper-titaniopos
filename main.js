@@ -144,6 +144,7 @@ const { registerPinpadHandlers } = require('./pinpad-handlers');
 const { registerMegaPosHandlers } = require('./mega-pos-handlers');
 const { startMegaPosServer, stopMegaPosServer, restartMegaPosServer, getVposRuntimeDir, setSeqNum } = require('./mega-pos-manager');
 const { registerCajaConfigHandlers } = require('./caja-config-handlers');
+const { registerPrintShareHandlers, maybeStartPrintShareServer } = require('./print-share');
 const { registerRemoteSupportHandlers, startRemoteSupportIfEnabled } = require('./remote-support-handlers');
 const { registerPrinterDriverHandlers } = require('./printer-driver-handlers');
 const {
@@ -3871,6 +3872,12 @@ app.whenReady().then(() => {
 
   registerCajaConfigHandlers(app);
   console.log('🏪 [CAJA] Caja config (JSON) initialized');
+
+  // Impresión en red entre cajas: si esta caja comparte sus impresoras
+  // (printShare.mode === 'share'), levantar el servidor HTTP en la LAN.
+  registerPrintShareHandlers(app);
+  maybeStartPrintShareServer(app);
+  console.log('🖨️ [PRINT-SHARE] Impresión en red initialized');
 
   // Soporte remoto (RustDesk desatendido). Si quedó habilitado, dejarlo corriendo.
   registerRemoteSupportHandlers(app);
