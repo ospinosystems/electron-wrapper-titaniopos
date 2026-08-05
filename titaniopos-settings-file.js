@@ -26,7 +26,9 @@ const DEFAULT_CAJA = {
 const DEFAULT_THERMAL = {
   printerName: '',
   usbPort: 'USB003',
-  method: 'escpos',
+  // Direct EXE (winspool RAW): el método más confiable y rápido. El handler
+  // igual auto-promueve escpos→direct cuando el helper está disponible.
+  method: 'direct',
   paperWidth: '80mm',
   debugPdf: false,
   lastUpdated: null,
@@ -36,7 +38,9 @@ const DEFAULT_FISCAL = {
   enabled: false,
   fiscalMode: false,
   comPort: 'COM1',
-  serverUrl: 'http://localhost:3000',
+  // Puerto real del fiscal-server empaquetado (fiscal-server/.env). 127.0.0.1
+  // explícito para evitar la resolución IPv6 de 'localhost'.
+  serverUrl: 'http://127.0.0.1:3005',
   storeCode: '',
   cashRegisterNumber: '',
   lastConfigUpdate: '',

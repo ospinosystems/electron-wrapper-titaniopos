@@ -22,9 +22,15 @@ const {
 } = require('./titaniopos-settings-file');
 
 const MAX_PRINT_BODY = 2 * 1024 * 1024;
-const REMOTE_PRINT_TIMEOUT_MS = 15000;
+const REMOTE_PRINT_TIMEOUT_MS = 8000;
+// Cortocircuito tras un fallo de RED con la anfitriona: los tickets siguientes
+// fallan al instante durante esta ventana en vez de colgar la caja 8s cada vez.
+const REMOTE_PRINT_COOLDOWN_MS = 10000;
 const HEALTH_TIMEOUT_MS = 4000;
 const HOST_FISCAL_TTL_MS = 60000;
+// Caché negativa del /health fiscal: con la anfitriona caída no se reintenta
+// en cada poll (cada 1.5s); se usa el último snapshot conocido.
+const HOST_FISCAL_FAIL_COOLDOWN_MS = 30000;
 
 // Claves fiscales que se heredan de la caja anfitriona al imprimir remoto:
 // son propias de SU máquina/formato. storeCode y cashRegisterNumber NUNCA:
@@ -39,6 +45,8 @@ let shareServerPort = null;
 let shareServerError = null;
 // Snapshot en memoria de los params fiscales de la anfitriona (modo receive).
 let hostFiscalMem = { params: null, at: 0 };
+let hostFiscalFailAt = 0;
+let lastRemotePrintFailAt = 0;
 
 const loadPrintShareConfig = (app) => normalizePrintShare(readSettings(app).printShare);
 
@@ -163,9 +171,17 @@ function startShareServer(app, port) {
     }
     const begin = () => {
       const server = http.createServer((req, res) => {
+        // Sin estos handlers, un cliente que corta la conexión a mitad de un
+        // POST emite 'error' sin listener y TUMBA el proceso main.
+        req.on('error', (e) => console.warn('[PRINT-SHARE] request error:', e.message));
+        res.on('error', (e) => console.warn('[PRINT-SHARE] response error:', e.message));
         const respond = (status, obj) => {
-          res.writeHead(status, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(obj));
+          try {
+            res.writeHead(status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(obj));
+          } catch (e) {
+            console.warn('[PRINT-SHARE] respond error:', e.message);
+          }
         };
         if (req.method === 'GET' && req.url === '/health') {
           try {
@@ -274,6 +290,66 @@ function getShareStatus(app) {
   };
 }
 
+// ==================== NOMBRE DEL EQUIPO (Windows) ====================
+
+// Reglas NetBIOS: 1-15 caracteres, letras/números/guiones, empieza por letra,
+// no termina en guion. Validado ANTES de interpolar en PowerShell (sin comillas
+// posibles, no hay inyección).
+const COMPUTER_NAME_RE = /^[A-Za-z][A-Za-z0-9-]{0,14}$/;
+
+/**
+ * Nombre pendiente de reinicio: Rename-Computer escribe ComputerName en el
+ * registro pero ActiveComputerName (= os.hostname) cambia recién al reiniciar
+ * Windows. Devuelve el nombre nuevo si difiere del activo, o null.
+ */
+function getPendingComputerRename() {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') return resolve(null);
+    const { execFile } = require('child_process');
+    execFile(
+      'reg',
+      ['query', 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\ComputerName\\ComputerName', '/v', 'ComputerName'],
+      { windowsHide: true },
+      (err, stdout) => {
+        if (err) return resolve(null);
+        const m = /ComputerName\s+REG_SZ\s+(\S+)/i.exec(stdout || '');
+        const pending = m ? m[1] : null;
+        if (pending && pending.toUpperCase() !== String(os.hostname()).toUpperCase()) {
+          resolve(pending);
+        } else {
+          resolve(null);
+        }
+      }
+    );
+  });
+}
+
+async function shareStatusWithRename(app) {
+  const status = getShareStatus(app);
+  status.pendingHostname = await getPendingComputerRename();
+  return status;
+}
+
+function renameComputer(newName) {
+  return new Promise((resolve) => {
+    const { execFile } = require('child_process');
+    // PowerShell elevado (UAC). El exit code del proceso elevado se propaga:
+    // 0 = renombrado, 1 = Rename-Computer falló, 2 = UAC cancelado.
+    const inner = `try { Rename-Computer -NewName ''${newName}'' -Force -ErrorAction Stop; exit 0 } catch { exit 1 }`;
+    const outer = `try { $p = Start-Process -Verb RunAs -Wait -PassThru -WindowStyle Hidden -FilePath 'powershell.exe' -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command','${inner}'; exit $p.ExitCode } catch { exit 2 }`;
+    execFile(
+      'powershell',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', outer],
+      { windowsHide: true, timeout: 180000 },
+      (error) => {
+        if (!error) return resolve({ success: true });
+        if (error.code === 2) return resolve({ success: false, error: 'Permiso de administrador cancelado.' });
+        resolve({ success: false, error: 'Windows rechazó el cambio de nombre (¿nombre en uso en la red?).' });
+      }
+    );
+  });
+}
+
 // ==================== CLIENTE (modo 'receive') ====================
 
 /** {hostIp, hostPort} si esta caja manda los TICKETS a otra; null si no. */
@@ -286,6 +362,13 @@ function getRemoteTicketTarget(app) {
 }
 
 async function sendRemotePrint(target, content, options = {}) {
+  if (Date.now() - lastRemotePrintFailAt < REMOTE_PRINT_COOLDOWN_MS) {
+    return {
+      success: false,
+      remote: true,
+      error: `La caja anfitriona (${target.hostIp}) no respondió hace un momento. Reintenta en unos segundos.`,
+    };
+  }
   try {
     const { statusCode, data } = await httpJsonRequest({
       hostname: target.hostIp,
@@ -296,11 +379,15 @@ async function sendRemotePrint(target, content, options = {}) {
       timeoutMs: REMOTE_PRINT_TIMEOUT_MS,
     });
     if (statusCode >= 200 && statusCode < 300 && data && data.success) {
+      lastRemotePrintFailAt = 0;
       return { ...data, remote: true };
     }
+    // La anfitriona respondió pero no pudo imprimir (impresora de allá): la red
+    // está bien, no se activa el cortocircuito.
     const detail = (data && (data.error || data.message)) || `HTTP ${statusCode}`;
     return { success: false, remote: true, error: `La caja anfitriona no pudo imprimir: ${detail}` };
   } catch (e) {
+    lastRemotePrintFailAt = Date.now();
     return {
       success: false,
       remote: true,
@@ -344,6 +431,11 @@ async function getRemoteFiscalParams(app, { refresh = false } = {}) {
   if (!refresh && hostFiscalMem.params && now - hostFiscalMem.at < HOST_FISCAL_TTL_MS) {
     return hostFiscalMem.params;
   }
+  // Caché negativa: si la anfitriona acaba de fallar, no colgar cada llamada
+  // fiscal 3s reintentando el /health — usar el último snapshot conocido.
+  if (now - hostFiscalFailAt < HOST_FISCAL_FAIL_COOLDOWN_MS) {
+    return hostFiscalMem.params || cfg.hostFiscal || null;
+  }
   try {
     const { statusCode, data } = await httpJsonRequest({
       hostname: cfg.hostIp,
@@ -355,10 +447,13 @@ async function getRemoteFiscalParams(app, { refresh = false } = {}) {
     if (statusCode === 200 && data && data.fiscal) {
       const params = pickHostFiscalParams(data.fiscal);
       hostFiscalMem = { params, at: now };
+      hostFiscalFailAt = 0;
       persistHostFiscal(app, params);
       return params;
     }
+    hostFiscalFailAt = now;
   } catch (e) {
+    hostFiscalFailAt = now;
     console.warn('[PRINT-SHARE] /health de la anfitriona no responde:', e.message);
   }
   if (hostFiscalMem.params) return hostFiscalMem.params;
@@ -407,7 +502,7 @@ async function checkHost(app, hostIp, hostPort) {
 function registerPrintShareHandlers(app) {
   ipcMain.handle('print-share-config-get', async () => {
     try {
-      return { success: true, config: loadPrintShareConfig(app), status: getShareStatus(app) };
+      return { success: true, config: loadPrintShareConfig(app), status: await shareStatusWithRename(app) };
     } catch (error) {
       return { success: false, error: error.message };
     }
@@ -417,8 +512,10 @@ function registerPrintShareHandlers(app) {
     try {
       const config = savePrintShareConfig(app, partial);
       hostFiscalMem = { params: null, at: 0 };
+      hostFiscalFailAt = 0;
+      lastRemotePrintFailAt = 0;
       const applied = await applyServerState(app);
-      const status = getShareStatus(app);
+      const status = await shareStatusWithRename(app);
       if (config.mode === 'share' && !applied.success) {
         return { success: false, error: `No se pudo abrir el puerto ${config.sharePort}: ${applied.error}`, config, status };
       }
@@ -428,10 +525,43 @@ function registerPrintShareHandlers(app) {
     }
   });
 
-  ipcMain.handle('print-share-status', async () => getShareStatus(app));
+  ipcMain.handle('print-share-status', async () => shareStatusWithRename(app));
 
   ipcMain.handle('print-share-check-host', async (event, hostIp, hostPort) => {
     return checkHost(app, hostIp, hostPort);
+  });
+
+  // Renombrar el equipo Windows (pide UAC). El nombre se aplica al reiniciar.
+  ipcMain.handle('print-share-rename-computer', async (event, newNameRaw) => {
+    try {
+      if (process.platform !== 'win32') {
+        return { success: false, error: 'Solo disponible en Windows.' };
+      }
+      const newName = String(newNameRaw || '').trim().toUpperCase();
+      if (!COMPUTER_NAME_RE.test(newName) || /-$/.test(newName)) {
+        return { success: false, error: 'Nombre inválido: 1-15 letras/números/guiones, empieza por letra y no termina en guion.' };
+      }
+      if (newName === String(os.hostname()).toUpperCase()) {
+        return { success: false, error: 'El equipo ya se llama así.' };
+      }
+      const result = await renameComputer(newName);
+      if (!result.success) return result;
+      console.log(`✅ [PRINT-SHARE] Equipo renombrado a ${newName} (pendiente de reinicio)`);
+      return { success: true, newName, pendingReboot: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Reiniciar Windows (para aplicar el nombre nuevo). 10s de aviso.
+  ipcMain.handle('print-share-reboot', async () => {
+    try {
+      const { execFile } = require('child_process');
+      execFile('shutdown', ['/r', '/t', '10', '/c', 'TitanioPOS: aplicando el nuevo nombre del equipo'], { windowsHide: true });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
   });
 
   console.log('✅ [PRINT-SHARE] Handlers registered');

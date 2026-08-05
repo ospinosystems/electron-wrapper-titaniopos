@@ -190,6 +190,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
    */
   printShareCheckHost: (hostIp, hostPort) => ipcRenderer.invoke('print-share-check-host', hostIp, hostPort),
 
+  /**
+   * Renombra el equipo Windows (pide permiso de administrador). El nombre
+   * nuevo se aplica al reiniciar Windows.
+   * @returns {Promise<{success: boolean, newName?: string, pendingReboot?: boolean, error?: string}>}
+   */
+  printShareRenameComputer: (newName) => ipcRenderer.invoke('print-share-rename-computer', newName),
+
+  /** Reinicia Windows en 10 segundos (aplica el nombre nuevo del equipo). */
+  printShareReboot: () => ipcRenderer.invoke('print-share-reboot'),
+
   // ==================== PINPAD ====================
 
   /**
