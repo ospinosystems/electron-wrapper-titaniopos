@@ -330,6 +330,61 @@ async function shareStatusWithRename(app) {
   return status;
 }
 
+/**
+ * Abre el firewall de Windows para la impresión en red (elevado, un solo UAC).
+ * Por qué: el puerto de tickets lo atiende Electron (normalmente ya permitido),
+ * pero el servidor fiscal es OTRO programa (python embebido) y Windows lo
+ * bloquea desde la LAN aunque localhost funcione; si el usuario canceló el
+ * aviso de Windows quedó una regla de BLOQUEO por programa que gana sobre las
+ * reglas de puerto — por eso también se borran las reglas del python y se crea
+ * un allow por programa.
+ */
+function allowFirewall(app, sharePort, fiscalPort) {
+  return new Promise((resolve) => {
+    const fs = require('fs');
+    const path = require('path');
+    const { execFile } = require('child_process');
+    let pyPath = null;
+    try {
+      const { getEmbeddedPython } = require('./fiscal-server-manager');
+      pyPath = getEmbeddedPython();
+    } catch { /* opcional */ }
+
+    const lines = [
+      '@echo off',
+      'netsh advfirewall firewall delete rule name="TitanioPOS impresion en red (tickets)" >nul 2>&1',
+      `netsh advfirewall firewall add rule name="TitanioPOS impresion en red (tickets)" dir=in action=allow protocol=TCP localport=${sharePort}`,
+      'netsh advfirewall firewall delete rule name="TitanioPOS fiscal en red (puerto)" >nul 2>&1',
+      `netsh advfirewall firewall add rule name="TitanioPOS fiscal en red (puerto)" dir=in action=allow protocol=TCP localport=${fiscalPort}`,
+    ];
+    if (pyPath && fs.existsSync(pyPath)) {
+      lines.push(`netsh advfirewall firewall delete rule name=all program="${pyPath}" >nul 2>&1`);
+      lines.push(`netsh advfirewall firewall add rule name="TitanioPOS fiscal server (python)" dir=in action=allow program="${pyPath}"`);
+    }
+    lines.push('exit /b 0');
+
+    const bat = path.join(app.getPath('temp'), 'titaniopos-firewall.bat');
+    try {
+      fs.writeFileSync(bat, lines.join('\r\n'), 'utf-8');
+    } catch (e) {
+      resolve({ success: false, error: e.message });
+      return;
+    }
+
+    const outer = `try { $p = Start-Process -Verb RunAs -Wait -PassThru -WindowStyle Hidden -FilePath 'cmd.exe' -ArgumentList '/c','"${bat.replace(/'/g, "''")}"'; exit $p.ExitCode } catch { exit 2 }`;
+    execFile(
+      'powershell',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', outer],
+      { windowsHide: true, timeout: 180000 },
+      (error) => {
+        if (!error) return resolve({ success: true, pythonRule: Boolean(pyPath) });
+        if (error.code === 2) return resolve({ success: false, error: 'Permiso de administrador cancelado.' });
+        resolve({ success: false, error: 'No se pudieron crear las reglas del firewall.' });
+      }
+    );
+  });
+}
+
 function renameComputer(newName) {
   return new Promise((resolve) => {
     const { execFile } = require('child_process');
@@ -548,6 +603,25 @@ function registerPrintShareHandlers(app) {
       if (!result.success) return result;
       console.log(`✅ [PRINT-SHARE] Equipo renombrado a ${newName} (pendiente de reinicio)`);
       return { success: true, newName, pendingReboot: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Abrir el firewall de Windows para tickets (share) + fiscal (flask).
+  ipcMain.handle('print-share-firewall-allow', async () => {
+    try {
+      if (process.platform !== 'win32') {
+        return { success: false, error: 'Solo disponible en Windows.' };
+      }
+      const cfg = loadPrintShareConfig(app);
+      const fiscalPort = parseFiscalPort((readSettings(app).fiscal || {}).serverUrl);
+      const result = await allowFirewall(app, cfg.sharePort, fiscalPort);
+      if (result.success) {
+        console.log(`✅ [PRINT-SHARE] Firewall permitido (tickets :${cfg.sharePort}, fiscal :${fiscalPort})`);
+        return { ...result, sharePort: cfg.sharePort, fiscalPort };
+      }
+      return result;
     } catch (error) {
       return { success: false, error: error.message };
     }

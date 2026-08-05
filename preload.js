@@ -200,6 +200,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Reinicia Windows en 10 segundos (aplica el nombre nuevo del equipo). */
   printShareReboot: () => ipcRenderer.invoke('print-share-reboot'),
 
+  /**
+   * Crea las reglas del firewall de Windows para que las demás cajas lleguen
+   * al servidor de tickets y al servidor fiscal de esta caja (pide UAC).
+   * @returns {Promise<{success: boolean, sharePort?: number, fiscalPort?: number, error?: string}>}
+   */
+  printShareFirewallAllow: () => ipcRenderer.invoke('print-share-firewall-allow'),
+
   // ==================== PINPAD ====================
 
   /**
