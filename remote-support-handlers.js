@@ -13,8 +13,11 @@
  * Solución (método oficial de despliegue):
  *  - El servidor (host+key) se "bakea" renombrando el exe a
  *    `rustdesk-host=<host>,key=<key>.exe`: RustDesk lo aplica durante el
- *    --silent-install, así queda en la config del SERVICIO. Además, por las
- *    dudas, escribimos RustDesk2.toml directo en la carpeta del servicio.
+ *    --silent-install, así queda en la config del SERVICIO. En una caja YA
+ *    instalada eso no vuelve a pasar, así que el servidor/key se aplican
+ *    parcheando el RustDesk2.toml del servicio (bin/rustdesk-apply-config.ps1):
+ *    `--config` NO sirve para eso ni siquiera elevado, porque escribe el
+ *    %APPDATA% del usuario que lo ejecuta.
  *  - El ID se lee SIEMPRE de la config DEL SERVICIO (el mismo que muestra la
  *    app). NUNCA se cae a `--get-id` de usuario (devolvería otro ID y por eso
  *    "el número de la UI no coincidía con el de la app").
@@ -168,6 +171,36 @@ function getPortableExe(app, opts = {}) {
 }
 
 /**
+ * Ruta de `bin/rustdesk-apply-config.ps1` (empaquetado por extraResources). Es
+ * lo ÚNICO que aplica servidor/key a la config del SERVICIO en una caja ya
+ * instalada; `--config` no sirve para eso (escribe la config del usuario).
+ * Devuelve null en builds viejos que no lo incluyen.
+ */
+function getApplyConfigScript() {
+  const candidates = [];
+  if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, 'bin', 'rustdesk-apply-config.ps1'));
+  candidates.push(path.join(__dirname, 'bin', 'rustdesk-apply-config.ps1'));
+  if (__dirname.includes('app.asar')) {
+    candidates.push(path.join(__dirname.split('app.asar')[0], 'bin', 'rustdesk-apply-config.ps1'));
+  }
+  for (const c of candidates) {
+    try { if (fs.existsSync(c)) return c; } catch (_) { /* ignore */ }
+  }
+  return null;
+}
+
+/**
+ * Línea PS que aplica servidor+key al SERVICIO, o '' si no hay script (build
+ * viejo). La salida queda en `$result.applyConfig` — es el único rastro de si
+ * la key llegó de verdad al servicio, así que se guarda en vez de descartarse.
+ */
+function applyConfigCommand() {
+  const script = getApplyConfigScript();
+  if (!script) return "$result.applyConfig = 'no-script'";
+  return `try { $result.applyConfig = (& ${psSingleQuote(script)} -RdHost ${psSingleQuote(RUSTDESK_HOST)} -RdKey ${psSingleQuote(RUSTDESK_KEY)} 2>&1 | Out-String).Trim() } catch { $result.applyConfig = 'error: ' + $_.Exception.Message }`;
+}
+
+/**
  * Resuelve un rustdesk.exe utilizable. Prioridad: INSTALADO (servicio) →
  * bundleado en bin/ → descargado en userData.
  */
@@ -294,6 +327,11 @@ Start-Process -FilePath $rd -ArgumentList '--password',${psSingleQuote(pw)}
 Start-Sleep -Seconds 3
 $result.passwordSet = $true
 
+# 3b) Garantizar servidor+key en la config del SERVICIO. El --silent-install con
+# el exe bakeado suele bastar, pero si el exe no llevaba el nombre configurado
+# (solo estaba el instalado) la caja quedaba con la key equivocada.
+${applyConfigCommand()}
+
 # 4) Estado del servicio + ID en vivo (--get-id devuelve el ID del servicio).
 $result.step = 'read-id'
 $svc = Get-RdSvc
@@ -331,18 +369,11 @@ $result.step = 'config'
 Start-Process -FilePath $rd -ArgumentList '--config',${psSingleQuote(RUSTDESK_CONFIG)}
 Start-Sleep -Seconds 2
 
-# Reiniciar el servicio para que re-registre en el hbbs con la key nueva.
-$result.step = 'restart'
-$svc = Get-RdSvc
-if ($svc) {
-  Restart-Service -Name $svc.Name -Force -ErrorAction SilentlyContinue
-  $deadline = (Get-Date).AddSeconds(20)
-  while ((Get-Date) -lt $deadline) {
-    $svc = Get-RdSvc
-    if ($svc -and $svc.Status -eq 'Running') { break }
-    Start-Sleep -Milliseconds 800
-  }
-}
+# Lo anterior solo toca la config del USUARIO. Esto parchea la del SERVICIO
+# (LocalService) y lo reinicia — es lo único que cambia la key con la que la
+# caja se registra en el hbbs.
+$result.step = 'apply-service-config'
+${applyConfigCommand()}
 
 $result.step = 'read-id'
 $svc = Get-RdSvc

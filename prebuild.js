@@ -125,36 +125,55 @@ function compile() {
  * más barato que descubrirlo en una caja en producción.
  */
 function checkRustdeskConfigInSync() {
-  const jsFile = path.join(__dirname, 'remote-support-handlers.js');
-  const psFile = path.join(BIN_DIR, 'setup-rustdesk.ps1');
-  if (!fs.existsSync(jsFile) || !fs.existsSync(psFile)) return;
-
-  const js = fs.readFileSync(jsFile, 'utf8');
-  const ps = fs.readFileSync(psFile, 'utf8');
+  const files = {
+    'remote-support-handlers.js': path.join(__dirname, 'remote-support-handlers.js'),
+    'bin/setup-rustdesk.ps1': path.join(BIN_DIR, 'setup-rustdesk.ps1'),
+    'bin/rustdesk-apply-config.ps1': path.join(BIN_DIR, 'rustdesk-apply-config.ps1'),
+  };
+  for (const p of Object.values(files)) {
+    if (!fs.existsSync(p)) return;
+  }
+  const read = (k) => fs.readFileSync(files[k], 'utf8');
   const grab = (src, re) => { const m = src.match(re); return m ? m[1] : null; };
 
-  const pairs = [
-    ['host', grab(js, /RUSTDESK_HOST\s*=\s*'([^']+)'/), grab(ps, /\$RdHost\s*=\s*'([^']+)'/)],
-    ['key', grab(js, /RUSTDESK_KEY\s*=\s*'([^']+)'/), grab(ps, /\$RdKey\s*=\s*'([^']+)'/)],
-    ['password', grab(js, /DEFAULT_PASSWORD\s*=\s*'([^']+)'/), grab(ps, /\$RdPassword\s*=\s*'([^']+)'/)],
+  const js = read('remote-support-handlers.js');
+  const setup = read('bin/setup-rustdesk.ps1');
+  const apply = read('bin/rustdesk-apply-config.ps1');
+
+  // Cada fila: qué valor es, y de dónde se lee en cada archivo que lo repite.
+  const checks = [
+    ['host', {
+      'remote-support-handlers.js': grab(js, /RUSTDESK_HOST\s*=\s*'([^']+)'/),
+      'bin/setup-rustdesk.ps1': grab(setup, /\$RdHost\s*=\s*'([^']+)'/),
+      'bin/rustdesk-apply-config.ps1': grab(apply, /\$RdHost\s*=\s*'([^']+)'/),
+    }],
+    ['key', {
+      'remote-support-handlers.js': grab(js, /RUSTDESK_KEY\s*=\s*'([^']+)'/),
+      'bin/setup-rustdesk.ps1': grab(setup, /\$RdKey\s*=\s*'([^']+)'/),
+      'bin/rustdesk-apply-config.ps1': grab(apply, /\$RdKey\s*=\s*'([^']+)'/),
+    }],
+    ['password', {
+      'remote-support-handlers.js': grab(js, /DEFAULT_PASSWORD\s*=\s*'([^']+)'/),
+      'bin/setup-rustdesk.ps1': grab(setup, /\$RdPassword\s*=\s*'([^']+)'/),
+    }],
   ];
 
-  for (const [what, fromJs, fromPs] of pairs) {
-    if (!fromJs || !fromPs) {
-      console.error(`[PREBUILD] ERROR: no se pudo leer el ${what} de RustDesk en ambos archivos.`);
+  for (const [what, sources] of checks) {
+    const entries = Object.entries(sources);
+    const missing = entries.filter(([, v]) => !v).map(([k]) => k);
+    if (missing.length) {
+      console.error(`[PREBUILD] ERROR: no se pudo leer el ${what} de RustDesk en: ${missing.join(', ')}`);
       process.exit(1);
     }
-    if (fromJs !== fromPs) {
-      console.error(
-        `[PREBUILD] ERROR: el ${what} de RustDesk no coincide entre archivos.\n` +
-        `  remote-support-handlers.js: ${fromJs}\n` +
-        `  bin/setup-rustdesk.ps1:     ${fromPs}\n` +
-        '  Deben ser idénticos o las cajas fallarán con "Key mismatch".'
-      );
+    const distinct = new Set(entries.map(([, v]) => v));
+    if (distinct.size > 1) {
+      console.error(`[PREBUILD] ERROR: el ${what} de RustDesk no coincide entre archivos.`);
+      for (const [file, value] of entries) console.error(`  ${file}: ${value}`);
+      console.error('  Deben ser idénticos o las cajas fallarán con "Key mismatch".');
       process.exit(1);
     }
   }
-  console.log('[PREBUILD] ✅ RustDesk host/key/clave consistentes entre app e instalador');
+  console.log('[PREBUILD] ✅ RustDesk host/key/clave consistentes entre app, instalador y config del servicio');
 }
 
 checkRustdeskConfigInSync();

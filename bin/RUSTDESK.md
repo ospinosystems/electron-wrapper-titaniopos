@@ -34,13 +34,30 @@ puertos abiertos. `npm run prebuild` aborta el build si no coinciden.
 Para rotar: cambiar el valor en AMBOS archivos y publicar una versión nueva de
 la app. Las cajas se corrigen solas por dos vías, sin reinstalar RustDesk:
 
-- **Instalador/actualización NSIS** → `setup-rustdesk.ps1` re-aplica `--config` y
-  reinicia el servicio si detecta que la key previa era otra (ya corre elevado,
-  sin UAC).
-- **Al arrancar la app** → `ensureServerKeyUpToDate` compara la key actual contra
-  la del `RustDesk2.toml` del servicio y, si difiere, re-apunta y reinicia el
-  servicio (un único UAC, una sola vez por rotación; queda anotado en
-  `serverKey` de `remote-support.json`).
+- **Instalador/actualización NSIS** → `setup-rustdesk.ps1` (ya corre elevado, sin
+  UAC).
+- **Al arrancar la app** → `ensureServerKeyUpToDate`, una sola vez por rotación
+  (queda anotado en `serverKey` de `remote-support.json`).
 
-El reinicio del servicio no es opcional: sin él, el cliente sigue registrado en
-el hbbs con la key vieja.
+Ambos caminos terminan en **`rustdesk-apply-config.ps1`**, que es lo único que
+funciona sobre una caja ya instalada. Dos cosas que cuestan caro olvidar:
+
+1. **`rustdesk --config` NO cambia la key del servicio.** El servicio corre como
+   `LocalService` y lee `C:\Windows\ServiceProfiles\LocalService\...\RustDesk2.toml`;
+   `--config` escribe el `%APPDATA%\RustDesk` del usuario que lo ejecuta, y elevar
+   no ayuda porque el admin tampoco es LocalService. En una instalación nueva la
+   key entra por el nombre bakeado del exe durante `--silent-install`, pero eso
+   no ocurre en una caja que ya lo tiene instalado — por eso hay que parchear el
+   TOML del servicio directamente.
+2. **Hay que reiniciar el servicio.** Sin reinicio sigue registrado en el hbbs
+   con la key anterior y el error persiste.
+
+`rustdesk-apply-config.ps1` sirve además como herramienta manual para arreglar
+una caja sin esperar un release (requiere admin):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File rustdesk-apply-config.ps1
+```
+
+Preserva `enc_id` a propósito: si se pierde, la caja estrena ID remoto y hay que
+volver a registrarlo.
