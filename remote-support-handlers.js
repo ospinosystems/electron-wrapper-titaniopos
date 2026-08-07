@@ -64,6 +64,13 @@ const RUSTDESK_KEY = 'B3i+MLo1jsm0VTNX0Rhtph2EHYGXwmZcI+caFGkMvGU=';
 // a la config que usa el servicio. El relay (hbbr) lo resuelve el propio hbbs.
 const RUSTDESK_CONFIG = `host=${RUSTDESK_HOST},key=${RUSTDESK_KEY}`;
 
+// Mecanismo con el que se aplicó la key, guardado junto a ella en
+// remote-support.json. Existe porque v1.0.87 marcaba la caja como "al día"
+// después de un `--config` que NUNCA tocaba la config del SERVICIO: sin
+// distinguir el método, esa marca falsa hace que la corrección se salte a sí
+// misma para siempre. Al cambiar de mecanismo hay que cambiar este valor.
+const SERVER_KEY_METHOD = 'service-toml';
+
 // Nombre de exe que "bakea" el servidor: RustDesk lee host/key de su propio
 // nombre de archivo y los aplica al instalar (también al servicio). Método
 // oficial de mass-deployment.
@@ -388,7 +395,11 @@ for ($i = 0; $i -lt 8 -and -not $result.id; $i++) {
   if (-not $result.id) { Start-Sleep -Seconds 1 }
 }
 
-$result.ok = $result.installed
+# Éxito = la key llegó al SERVICIO. Marcar ok solo porque el servicio existe fue
+# lo que dejó cajas rotas anotadas como "al día": el reintento no volvía a correr.
+$result.ok = $result.installed -and
+  ($result.applyConfig -match 'PATCHED|already-current') -and
+  -not ($result.applyConfig -match 'FAIL')
 `;
 }
 
@@ -646,7 +657,7 @@ function registerRemoteSupportHandlers(app) {
     }
 
     const result = run.result;
-    writeConfig(app, { enabled: true, password: pw, disabledByUser: false, serverKey: RUSTDESK_KEY });
+    writeConfig(app, { enabled: true, password: pw, disabledByUser: false, serverKey: RUSTDESK_KEY, serverKeyMethod: SERVER_KEY_METHOD });
     return {
       success: true,
       id: result.id || '',
@@ -675,7 +686,7 @@ function registerRemoteSupportHandlers(app) {
     }
 
     const result = run.result;
-    writeConfig(app, { enabled: true, password: pw, disabledByUser: false, serverKey: RUSTDESK_KEY });
+    writeConfig(app, { enabled: true, password: pw, disabledByUser: false, serverKey: RUSTDESK_KEY, serverKeyMethod: SERVER_KEY_METHOD });
     return {
       success: true,
       id: result.id || '',
@@ -761,10 +772,10 @@ function registerRemoteSupportHandlers(app) {
  */
 async function ensureServerKeyUpToDate(app) {
   const cfg = readConfig(app);
-  if (cfg.serverKey === RUSTDESK_KEY) return;
+  if (cfg.serverKey === RUSTDESK_KEY && cfg.serverKeyMethod === SERVER_KEY_METHOD) return;
 
   if (readServiceKey() === RUSTDESK_KEY) {
-    writeConfig(app, { ...cfg, serverKey: RUSTDESK_KEY });
+    writeConfig(app, { ...cfg, serverKey: RUSTDESK_KEY, serverKeyMethod: SERVER_KEY_METHOD });
     console.log('[REMOTE] Key del self-host ya aplicada en el servicio — sin cambios.');
     return;
   }
@@ -773,7 +784,7 @@ async function ensureServerKeyUpToDate(app) {
   clearSetupResult(app);
   const run = await runElevatedSetup(app, buildReconfigureBlock(), 'reconfig');
   if (run.ok) {
-    writeConfig(app, { ...readConfig(app), serverKey: RUSTDESK_KEY });
+    writeConfig(app, { ...readConfig(app), serverKey: RUSTDESK_KEY, serverKeyMethod: SERVER_KEY_METHOD });
     console.log('✅ [REMOTE] Servicio re-apuntado a la key actual.');
   } else {
     // Sin marcar `serverKey`: se reintenta en el próximo arranque.
@@ -828,6 +839,7 @@ function startRemoteSupportIfEnabled(app) {
         password: DEFAULT_PASSWORD,
         disabledByUser: false,
         serverKey: run.ok ? RUSTDESK_KEY : undefined,
+        serverKeyMethod: run.ok ? SERVER_KEY_METHOD : undefined,
       });
       if (run.ok) {
         console.log('✅ [REMOTE] RustDesk auto-instalado. ID:', (run.result && run.result.id) || '(pendiente)');
