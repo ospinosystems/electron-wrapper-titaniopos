@@ -22,5 +22,25 @@ Para actualizar el binario: descargar el release oficial
 (https://github.com/rustdesk/rustdesk/releases, "rustdesk-x.y.z-x86_64.exe"),
 renombrarlo a `rustdesk.exe` y reemplazarlo aquí.
 
-Mantener consistentes host/key/clave entre `setup-rustdesk.ps1` y
-`remote-support-handlers.js`.
+## Rotar la key del hbbs
+
+La key del servidor vive DUPLICADA en `setup-rustdesk.ps1` (`$RdKey`, camino del
+instalador NSIS) y `remote-support-handlers.js` (`RUSTDESK_KEY`, camino de la
+app), porque PowerShell no puede importar del JS. **Deben cambiar juntas**: si
+divergen, o si el servidor rota su key y el cliente no, RustDesk corta con
+`Connection error / Key mismatch` aunque el servicio esté corriendo y los
+puertos abiertos. `npm run prebuild` aborta el build si no coinciden.
+
+Para rotar: cambiar el valor en AMBOS archivos y publicar una versión nueva de
+la app. Las cajas se corrigen solas por dos vías, sin reinstalar RustDesk:
+
+- **Instalador/actualización NSIS** → `setup-rustdesk.ps1` re-aplica `--config` y
+  reinicia el servicio si detecta que la key previa era otra (ya corre elevado,
+  sin UAC).
+- **Al arrancar la app** → `ensureServerKeyUpToDate` compara la key actual contra
+  la del `RustDesk2.toml` del servicio y, si difiere, re-apunta y reinicia el
+  servicio (un único UAC, una sola vez por rotación; queda anotado en
+  `serverKey` de `remote-support.json`).
+
+El reinicio del servicio no es opcional: sin él, el cliente sigue registrado en
+el hbbs con la key vieja.

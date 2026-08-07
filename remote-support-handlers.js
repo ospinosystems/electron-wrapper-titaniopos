@@ -26,7 +26,12 @@
  *  - El uninstall borra servicio + Program Files + AMBAS carpetas de config.
  *  - "Reparar" = uninstall limpio + install en UN solo paso elevado (un UAC).
  *
- * Config persistida en userData/remote-support.json: { enabled, password }.
+ * Config persistida en userData/remote-support.json:
+ *   { enabled, password, disabledByUser, serverKey }.
+ * `serverKey` = key del hbbs con la que se configuró esta caja. Si el servidor
+ * rota su key, al arrancar se detecta el desfase y se re-apunta el servicio sin
+ * reinstalar (ver `ensureServerKeyUpToDate`) — si no, RustDesk corta con
+ * "Key mismatch" pese a estar todo instalado y corriendo.
  */
 
 const { ipcMain, app: electronApp } = require('electron');
@@ -49,7 +54,7 @@ const DISABLE_PASSWORD = process.env.TITANIOPOS_REMOTE_DISABLE_PASSWORD || '1229
 // solo clientes con esta llave pueden registrarse. El relay (hbbr) lo resuelve
 // el propio hbbs.
 const RUSTDESK_HOST = 'rustdesk.titanio-pos.com';
-const RUSTDESK_KEY = 'UCWAMrY7Jiv2g22egpRNVv4QlaglnNkYY5L59CoCW4Y=';
+const RUSTDESK_KEY = 'B3i+MLo1jsm0VTNX0Rhtph2EHYGXwmZcI+caFGkMvGU=';
 
 // Formato que acepta `rustdesk --config`: "host=<id-server>,key=<pubkey>". Este
 // es el método PROBADO (v1.0.59) para apuntar al self-host: aplica el servidor
@@ -79,6 +84,23 @@ function getInstalledPath() {
     try { if (fs.existsSync(p)) return p; } catch (_) { /* ignore */ }
   }
   return null;
+}
+
+/**
+ * Key del self-host que tiene REALMENTE aplicada la config del SERVICIO, leída
+ * de su RustDesk2.toml. Devuelve '' si no se puede leer (carpeta protegida sin
+ * admin o servicio no instalado) — el caller debe tratar '' como "no sé", no
+ * como "está mal".
+ */
+function readServiceKey() {
+  for (const dir of SERVICE_CONFIG_DIRS) {
+    try {
+      const toml = fs.readFileSync(path.join(dir, 'RustDesk2.toml'), 'utf8');
+      const m = toml.match(/^\s*key\s*=\s*['"]([^'"]*)['"]/m);
+      if (m && m[1]) return m[1];
+    } catch (_) { /* siguiente carpeta */ }
+  }
+  return '';
 }
 
 /** Escapa un string como literal PowerShell entre comillas SIMPLES. */
@@ -156,6 +178,22 @@ function getRustdeskPath(app) {
 }
 
 /**
+ * Borra copias de userData con el nombre bakeado de un host/key ANTERIOR: al
+ * rotar la key cambia `CONFIGURED_EXE_NAME` y la copia vieja queda huérfana
+ * ocupando ~24 MB en cajas con disco chico.
+ */
+function cleanStaleConfiguredExes(app) {
+  try {
+    const dir = (app || electronApp).getPath('userData');
+    for (const name of fs.readdirSync(dir)) {
+      if (name === CONFIGURED_EXE_NAME) continue;
+      if (!/^rustdesk-host=.*\.exe$/i.test(name)) continue;
+      try { fs.unlinkSync(path.join(dir, name)); } catch (_) { /* en uso */ }
+    }
+  } catch (_) { /* ignore */ }
+}
+
+/**
  * Devuelve un exe EJECUTABLE con el NOMBRE que bakea host/key (copiándolo si
  * hace falta). La fuente de la copia debe ser un binario PORTABLE: copiar el
  * rustdesk.exe INSTALADO (launcher de 366KB sin sus DLL) producía un exe que
@@ -165,6 +203,7 @@ function getRustdeskPath(app) {
  */
 function ensureConfiguredExe(app, baseExe) {
   const dest = downloadedBinPath(app);
+  cleanStaleConfiguredExes(app);
   try {
     if (path.basename(baseExe) === CONFIGURED_EXE_NAME) return baseExe;
     // Fuente portable (sin contar la copia destino, que podría estar dañada).
@@ -270,6 +309,54 @@ for ($i = 0; $i -lt 8 -and -not $result.id; $i++) {
 }
 
 # Exito = servicio instalado. El ID es secundario: la app lo resuelve con --get-id.
+$result.ok = $result.installed
+`;
+}
+
+/**
+ * Bloque PS que RE-APUNTA una instalación existente al servidor/key actuales,
+ * sin desinstalar nada. Es el camino para una ROTACIÓN DE KEY del hbbs: si la
+ * key del cliente no coincide con la del servidor, RustDesk falla con
+ * "Key mismatch" al conectar. Re-aplica `--config` y REINICIA el servicio (sin
+ * reinicio sigue registrado en el hbbs con la key vieja).
+ */
+function buildReconfigureBlock() {
+  const installedExe = INSTALLED_PATHS[0];
+  return `$installed = '${installedExe}'
+$rd = if (Test-Path $installed) { $installed } else { '${INSTALLED_PATHS[1]}' }
+
+function Get-RdSvc { foreach ($n in 'RustDesk','rustdesk') { $s = Get-Service -Name $n -ErrorAction SilentlyContinue; if ($s) { return $s } } return $null }
+
+$result.step = 'config'
+Start-Process -FilePath $rd -ArgumentList '--config',${psSingleQuote(RUSTDESK_CONFIG)}
+Start-Sleep -Seconds 2
+
+# Reiniciar el servicio para que re-registre en el hbbs con la key nueva.
+$result.step = 'restart'
+$svc = Get-RdSvc
+if ($svc) {
+  Restart-Service -Name $svc.Name -Force -ErrorAction SilentlyContinue
+  $deadline = (Get-Date).AddSeconds(20)
+  while ((Get-Date) -lt $deadline) {
+    $svc = Get-RdSvc
+    if ($svc -and $svc.Status -eq 'Running') { break }
+    Start-Sleep -Milliseconds 800
+  }
+}
+
+$result.step = 'read-id'
+$svc = Get-RdSvc
+$result.installed = [bool]$svc
+$result.running = [bool]($svc -and $svc.Status -eq 'Running')
+for ($i = 0; $i -lt 8 -and -not $result.id; $i++) {
+  try {
+    $out = (& $rd --get-id 2>$null) -join ''
+    $m = [regex]::Match($out, '\\d{6,}')
+    if ($m.Success) { $result.id = $m.Value }
+  } catch {}
+  if (-not $result.id) { Start-Sleep -Seconds 1 }
+}
+
 $result.ok = $result.installed
 `;
 }
@@ -528,7 +615,7 @@ function registerRemoteSupportHandlers(app) {
     }
 
     const result = run.result;
-    writeConfig(app, { enabled: true, password: pw, disabledByUser: false });
+    writeConfig(app, { enabled: true, password: pw, disabledByUser: false, serverKey: RUSTDESK_KEY });
     return {
       success: true,
       id: result.id || '',
@@ -557,7 +644,7 @@ function registerRemoteSupportHandlers(app) {
     }
 
     const result = run.result;
-    writeConfig(app, { enabled: true, password: pw, disabledByUser: false });
+    writeConfig(app, { enabled: true, password: pw, disabledByUser: false, serverKey: RUSTDESK_KEY });
     return {
       success: true,
       id: result.id || '',
@@ -597,11 +684,11 @@ function registerRemoteSupportHandlers(app) {
     if (!targetId) return { success: false, error: 'ID inválido.' };
     try {
       const exe = ensureConfiguredExe(app, base);
-      // Sin nombre bakeado (instalado en su sitio): garantizar server+key por
-      // CLI antes de conectar, para que no dependa de la config que tenga.
-      if (path.basename(exe) !== CONFIGURED_EXE_NAME) {
-        await runRustdesk(exe, ['--config', RUSTDESK_CONFIG], 8000);
-      }
+      // Garantizar server+key por CLI SIEMPRE (no solo cuando el exe carece del
+      // nombre bakeado): tras rotar la key del hbbs, la config de usuario de
+      // esta máquina puede conservar la vieja y RustDesk corta con
+      // "Key mismatch". `--config` es idempotente y retorna al instante.
+      await runRustdesk(exe, ['--config', RUSTDESK_CONFIG], 8000);
       const child = spawn(exe, ['--connect', targetId], { detached: true, stdio: 'ignore' });
       child.on('error', (e) => console.error('[REMOTE] spawn connect falló:', e.message));
       child.unref();
@@ -617,9 +704,7 @@ function registerRemoteSupportHandlers(app) {
     if (!base) return { success: false, error: 'RustDesk no está disponible en esta máquina.' };
     try {
       const exe = ensureConfiguredExe(app, base);
-      if (path.basename(exe) !== CONFIGURED_EXE_NAME) {
-        await runRustdesk(exe, ['--config', RUSTDESK_CONFIG], 8000);
-      }
+      await runRustdesk(exe, ['--config', RUSTDESK_CONFIG], 8000);
       const child = spawn(exe, [], { detached: true, stdio: 'ignore' });
       child.on('error', (e) => console.error('[REMOTE] spawn open falló:', e.message));
       child.unref();
@@ -630,6 +715,39 @@ function registerRemoteSupportHandlers(app) {
   });
 
   console.log('✅ [REMOTE] Handlers de soporte remoto registrados');
+}
+
+/**
+ * Rotación de key del hbbs: una caja ya instalada conserva la key con la que se
+ * instaló, así que al rotar la del servidor deja de conectar ("Key mismatch")
+ * aunque el servicio siga corriendo. Esto la re-apunta a la key actual, UNA sola
+ * vez por rotación (queda registrada en `serverKey` de remote-support.json).
+ *
+ * Antes de molestar con un UAC verifica la key REAL del servicio: si ya coincide
+ * (p.ej. la aplicó el instalador NSIS, que corre elevado), solo actualiza el
+ * registro. Si el TOML no se puede leer (carpeta del servicio sin permisos), se
+ * reconfigura igual — es idempotente y preferible a quedarse sin soporte remoto.
+ */
+async function ensureServerKeyUpToDate(app) {
+  const cfg = readConfig(app);
+  if (cfg.serverKey === RUSTDESK_KEY) return;
+
+  if (readServiceKey() === RUSTDESK_KEY) {
+    writeConfig(app, { ...cfg, serverKey: RUSTDESK_KEY });
+    console.log('[REMOTE] Key del self-host ya aplicada en el servicio — sin cambios.');
+    return;
+  }
+
+  console.log('[REMOTE] Key del self-host cambió — re-apuntando el servicio…');
+  clearSetupResult(app);
+  const run = await runElevatedSetup(app, buildReconfigureBlock(), 'reconfig');
+  if (run.ok) {
+    writeConfig(app, { ...readConfig(app), serverKey: RUSTDESK_KEY });
+    console.log('✅ [REMOTE] Servicio re-apuntado a la key actual.');
+  } else {
+    // Sin marcar `serverKey`: se reintenta en el próximo arranque.
+    console.warn('⚠️ [REMOTE] No se pudo re-apuntar la key:', run.error || describeSetupFailure(run.result));
+  }
 }
 
 /**
@@ -659,6 +777,7 @@ function startRemoteSupportIfEnabled(app) {
         if (cfg.enabled !== true || cfg.disabledByUser === true) {
           writeConfig(app, { ...cfg, enabled: true, disabledByUser: false, password: cfg.password || DEFAULT_PASSWORD });
         }
+        await ensureServerKeyUpToDate(app);
         return;
       }
 
@@ -677,6 +796,7 @@ function startRemoteSupportIfEnabled(app) {
         enabled: !!run.ok,
         password: DEFAULT_PASSWORD,
         disabledByUser: false,
+        serverKey: run.ok ? RUSTDESK_KEY : undefined,
       });
       if (run.ok) {
         console.log('✅ [REMOTE] RustDesk auto-instalado. ID:', (run.result && run.result.id) || '(pendiente)');

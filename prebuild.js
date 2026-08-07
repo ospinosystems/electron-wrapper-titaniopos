@@ -116,4 +116,46 @@ function compile() {
   });
 }
 
+/**
+ * El host/key del RustDesk self-host viven duplicados en `remote-support-handlers.js`
+ * (camino de la app) y `bin/setup-rustdesk.ps1` (camino del instalador NSIS), porque
+ * PowerShell no puede importar del JS. Cuando divergen, las cajas instaladas por el
+ * NSIS quedan apuntando a una key distinta que las configuradas por la app y RustDesk
+ * corta con "Key mismatch" — pasó al rotar la key del hbbs. Abortar el build es mucho
+ * más barato que descubrirlo en una caja en producción.
+ */
+function checkRustdeskConfigInSync() {
+  const jsFile = path.join(__dirname, 'remote-support-handlers.js');
+  const psFile = path.join(BIN_DIR, 'setup-rustdesk.ps1');
+  if (!fs.existsSync(jsFile) || !fs.existsSync(psFile)) return;
+
+  const js = fs.readFileSync(jsFile, 'utf8');
+  const ps = fs.readFileSync(psFile, 'utf8');
+  const grab = (src, re) => { const m = src.match(re); return m ? m[1] : null; };
+
+  const pairs = [
+    ['host', grab(js, /RUSTDESK_HOST\s*=\s*'([^']+)'/), grab(ps, /\$RdHost\s*=\s*'([^']+)'/)],
+    ['key', grab(js, /RUSTDESK_KEY\s*=\s*'([^']+)'/), grab(ps, /\$RdKey\s*=\s*'([^']+)'/)],
+    ['password', grab(js, /DEFAULT_PASSWORD\s*=\s*'([^']+)'/), grab(ps, /\$RdPassword\s*=\s*'([^']+)'/)],
+  ];
+
+  for (const [what, fromJs, fromPs] of pairs) {
+    if (!fromJs || !fromPs) {
+      console.error(`[PREBUILD] ERROR: no se pudo leer el ${what} de RustDesk en ambos archivos.`);
+      process.exit(1);
+    }
+    if (fromJs !== fromPs) {
+      console.error(
+        `[PREBUILD] ERROR: el ${what} de RustDesk no coincide entre archivos.\n` +
+        `  remote-support-handlers.js: ${fromJs}\n` +
+        `  bin/setup-rustdesk.ps1:     ${fromPs}\n` +
+        '  Deben ser idénticos o las cajas fallarán con "Key mismatch".'
+      );
+      process.exit(1);
+    }
+  }
+  console.log('[PREBUILD] ✅ RustDesk host/key/clave consistentes entre app e instalador');
+}
+
+checkRustdeskConfigInSync();
 compile();
