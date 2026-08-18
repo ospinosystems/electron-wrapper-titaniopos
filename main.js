@@ -53,6 +53,7 @@ const {
   hasLocalBundle,
   resolveServerDir,
 } = require('./frontend-server-manager');
+const bootWatchdog = require('./boot-watchdog');
 
 function readBuildAppId() {
   try {
@@ -547,10 +548,13 @@ function shouldUseLocalFrontend() {
 // Sentinela para "Reintentar" desde las pantallas internas: navegar a esta URL
 // hace que Electron vuelva a ejecutar loadAppUI (no recarga la página de estado).
 const RETRY_SENTINEL = 'tpos://retry';
+// Botón de la pantalla de reparación (ver boot-watchdog.js). Igual que el
+// sentinela de reintento: navegar acá dispara la acción en el main, sin IPC.
+const REPAIR_SENTINEL = 'tpos://repair';
 
 // Pantalla de estado unificada (dark, sin emoji, acorde a la UI). Sirve para:
 // boot (spinner), error de arranque local, y sin conexión (modo remoto).
-function buildStatusPage({ title, message, spinner = false, retry = false, autoOnline = false }) {
+function buildStatusPage({ title, message, spinner = false, retry = false, autoOnline = false, action = null, icon = null }) {
   // Colores tomados del tema dark de la app (src/app/globals.css): fondo casi
   // negro, primario NARANJA, texto casi blanco. Electron soporta oklch().
   const html = `<!doctype html><html lang="es"><head><meta charset="utf-8">
@@ -585,15 +589,21 @@ function buildStatusPage({ title, message, spinner = false, retry = false, autoO
     <div class="box">
       <div class="brand">Titanio<b>POS</b></div>
       ${spinner ? '<div class="s"></div>' : ''}
+      ${icon ? `<div style="margin:0 auto 22px;width:56px;height:56px;color:var(--fg)">${icon}</div>` : ''}
       <h1>${title}</h1>
       ${message ? `<p>${message}</p>` : ''}
       ${retry ? '<button id="retry" onclick="go()">Reintentar</button>' : ''}
+      ${action ? `<button id="act" onclick="act()">${action.label}</button>` : ''}
       <div class="st" id="st"></div>
     </div>
     <script>
       function go(){ var b=document.getElementById('retry'); if(b)b.disabled=true;
         var s=document.getElementById('st'); if(s)s.textContent='Reintentando…';
         location.href=${JSON.stringify(RETRY_SENTINEL)}; }
+      ${action ? `
+      function act(){ var b=document.getElementById('act'); if(b)b.disabled=true;
+        var s=document.getElementById('st'); if(s)s.textContent=${JSON.stringify(action.busy || 'Reparando…')};
+        location.href=${JSON.stringify(REPAIR_SENTINEL)}; }` : ''}
       ${autoOnline ? `
       window.addEventListener('online', go);
       setInterval(function(){ if(navigator.onLine) go(); }, 5000);` : ''}
@@ -700,6 +710,33 @@ function buildLocalErrorPage(detail) {
   });
 }
 
+/**
+ * Pantalla de "la caja no arrancó". La dibuja el watchdog cuando la UI cargó el
+ * HTML pero el JavaScript nunca se ejecutó — el modo de falla del 13/08/2026,
+ * que hasta ahora dejaba una ventana en blanco sin explicación.
+ * El botón es lo ÚNICO que repara: nada corre solo, así se ve qué se hizo.
+ */
+// Fantasma: icono `ghostty` de Simple Icons (el SiGhostty de react-icons),
+// inline porque esta pantalla es HTML puro en el main: acá no hay React.
+const GHOST_ICON = '<svg viewBox="0 0 24 24" width="56" height="56" fill="currentColor" aria-hidden="true">' +
+  '<path d="M12 0C6.7 0 2.4 4.3 2.4 9.6v11.146c0 1.772 1.45 3.267 3.222 3.254a3.18 3.18 0 0 0 1.955-.686 1.96 1.96 0 0 1 2.444 0 3.18 3.18 0 0 0 1.976.686c.75 0 1.436-.257 1.98-.686.715-.563 1.71-.587 2.419-.018.59.476 1.355.743 2.182.699 1.705-.094 3.022-1.537 3.022-3.244V9.601C21.6 4.3 17.302 0 12 0M6.069 6.562a1 1 0 0 1 .46.131l3.578 2.065v.002a.974.974 0 0 1 0 1.687L6.53 12.512a.975.975 0 0 1-.976-1.687L7.67 9.602 5.553 8.38a.975.975 0 0 1 .515-1.818m7.438 2.063h4.7a.975.975 0 1 1 0 1.95h-4.7a.975.975 0 0 1 0-1.95"/></svg>';
+
+/** Pantalla que dibuja el watchdog cuando la UI no arrancó. Para el cajero:
+ *  un fantasma, "Ha ocurrido un error" y un botón. Nada más. El detalle
+ *  técnico (`why`, nivel) va al log, no a la pantalla. */
+function buildRepairPage({ why, level, info }) {
+  if (why) console.warn(`[WATCHDOG] pantalla de reparación (nivel ${level || 'agotado'}): ${why}`);
+  return buildStatusPage({
+    icon: GHOST_ICON,
+    title: 'Ha ocurrido un error con la app',
+    message: level
+      ? 'Intenta repararla con el botón de abajo.'
+      : 'No se pudo reparar. Avisa a soporte.',
+    action: level ? { label: info.label, busy: 'Reparando…' } : null,
+    retry: !level,
+  });
+}
+
 // Carga la UI. Local: arranca el server standalone (con reintentos) y apunta al
 // proxy local; si no levanta, muestra error con Reintentar (NO cae a una URL muerta).
 // Remoto: carga APP_URL; si falla la red, el handler did-fail-load muestra "sin conexión".
@@ -716,7 +753,12 @@ async function loadAppUI(win) {
     for (let i = 1; i <= attempts; i++) {
       try {
         const { url } = await startFrontendServer();
-        if (!win.isDestroyed()) win.loadURL(url);
+        if (!win.isDestroyed()) {
+          win.loadURL(url);
+          // A partir de acá la UI tiene que dar señales de vida; si no las da,
+          // sale la pantalla de reparación (ver boot-watchdog.js).
+          bootWatchdog.arm(win, url);
+        }
         return;
       } catch (e) {
         const msg = e && e.message ? e.message : String(e);
@@ -725,13 +767,17 @@ async function loadAppUI(win) {
         if (i < attempts) {
           await new Promise((r) => setTimeout(r, delayMs));
         } else if (!win.isDestroyed()) {
+          bootWatchdog.disarm('pantalla de error local');
           win.loadURL(buildLocalErrorPage(msg));
         }
       }
     }
     return;
   }
-  if (!win.isDestroyed()) win.loadURL(APP_URL);
+  if (!win.isDestroyed()) {
+    win.loadURL(APP_URL);
+    bootWatchdog.arm(win, APP_URL);
+  }
 }
 
 function createWindow() {
@@ -788,6 +834,10 @@ function createWindow() {
       event.preventDefault();
       loadAppUI(mainWindow);
     }
+    if (url && url.startsWith(REPAIR_SENTINEL)) {
+      event.preventDefault();
+      bootWatchdog.repairNow(mainWindow);
+    }
   });
 
   // Si la carga remota falla por red, mostrar "sin conexión" en vez de la pantalla
@@ -799,7 +849,15 @@ function createWindow() {
     // En modo local los fallos los maneja loadAppUI (pantalla de error con reintento).
     if (shouldUseLocalFrontend()) return;
     console.warn(`[APP] did-fail-load (${errorCode} ${errorDescription}) en ${validatedURL} → sin conexión`);
+    // Sin red no hay nada que reparar: la pantalla de "sin conexión" no es un
+    // arranque fallido y no debe disparar la escalada.
+    bootWatchdog.disarm('sin conexión');
     if (!mainWindow.isDestroyed()) mainWindow.loadURL(buildOfflinePage());
+  });
+
+  // El watchdog detecta el arranque fallido; dibujar la pantalla es cosa de acá.
+  bootWatchdog.setPresenter((state) => {
+    if (!mainWindow.isDestroyed()) mainWindow.loadURL(buildRepairPage(state));
   });
 
   loadAppUI(mainWindow);
@@ -944,6 +1002,9 @@ function createWindow() {
     if (message === 'TITANIO_SILENT_PRINT') {
       silentPrint();
     }
+    // Señal de vida de la UI + detección de JS ilegible (bytes en cero, chunk
+    // servido como HTML, code cache podrido).
+    try { bootWatchdog.onConsoleMessage(mainWindow, message); } catch (_) {}
     // Forward diagnostic logs to main-process stdout so the user sees them
     // in the `npm start` terminal without needing DevTools open.
     if (typeof message === 'string' && message.startsWith('[PERF-DIAG]')) {
@@ -952,6 +1013,7 @@ function createWindow() {
   });
 
   mainWindow.on('closed', () => {
+    bootWatchdog.disarm('ventana cerrada');
     mainWindow = null;
     // La ventanita de actualización NO debe impedir 'window-all-closed': si
     // queda viva, la app sigue corriendo sin ventana y el timer de 5 min la
