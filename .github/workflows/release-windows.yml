@@ -1,3 +1,39 @@
+# ⚠️ DESACTIVADO desde 2026-08-20: el release pasó a correr en AWS CodeBuild
+# (proyecto `titanio-pos-electron-release`, definido en `lib/electron-ci.ts` de
+# titanio-pos-infra), con webhook nativo de GitHub y SIN GitHub Actions ni
+# CodePipeline de por medio — el mismo patrón que ya usan titaniopos-backend y
+# titaniopos-frontend.
+#
+# Cambia el disparador: antes era `push` de un tag `v*`, ahora es **push a
+# main**. La lógica de los steps de abajo se migró 1:1 a `buildspec.yml`, en la
+# raíz de este repo:
+#   - "Node.js" + "Install dependencies"       → phase `install`
+#   - "Align package.json version with git tag" → phase `pre_build`, pero la
+#     versión ya NO sale del tag: es `1.0.<nº de commits>` (p.ej. 1.0.198). No
+#     se commitea el bump ni se pushea el tag desde el CI — un push de vuelta a
+#     main volvería a disparar el webhook (bucle). El tag `v<version>` lo crea
+#     GitHub solo al publicar el release.
+#   - "Create .env from Variables and Secrets"  → phase `pre_build`
+#   - "Build and publish release" (npm run release) → phase `build`
+#
+# Las Variables/Secrets del repo (TITANIOPOS_URL, TITANIOPOS_JWT_SECRET,
+# TITANIOPOS_OPEN_DEVTOOLS_ON_START, TITANIOPOS_DEVTOOLS_PASSWORD) ya no las lee
+# GitHub: viven en el secreto `titanio-pos/electron-ci` de AWS Secrets Manager y
+# en las env vars del proyecto CodeBuild. GH_TOKEN también sale de ahí (el
+# `secrets.GITHUB_TOKEN` automático de Actions no existe fuera de Actions).
+#
+# Este workflow se deja intacto (no se borra) como:
+#   1. Referencia de la lógica original, por si hace falta compararla con el
+#      buildspec.
+#   2. Respaldo manual: sigue disponible vía workflow_dispatch (pestaña Actions
+#      → Run workflow) si CodeBuild no está disponible. Ojo: por esa vía la
+#      versión sale de package.json tal cual está commiteada, no del contador.
+#
+# Para reactivar el trigger automático (y volver a tener DOS releases
+# disparándose, Actions + CodeBuild, pisándose los assets del mismo release):
+# descomentar el bloque `push` de abajo Y desactivar/borrar el proyecto
+# CodeBuild en titanio-pos-infra.
+
 # Compila el .exe en Windows y lo sube a GitHub Releases.
 # No necesitas GH_TOKEN en tu máquina.
 #
@@ -18,9 +54,11 @@ name: Release Windows
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "v*"
+  # Trigger automático DESACTIVADO (ver cabecera). Reactivar sólo si se
+  # apaga antes el proyecto CodeBuild, o saldrán dos releases por push.
+  # push:
+  #   tags:
+  #     - "v*"
 
 jobs:
   release:

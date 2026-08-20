@@ -1,3 +1,19 @@
+# ⚠️ DESACTIVADO desde 2026-08-20: el empaquetado del servidor fiscal standalone
+# pasó a correr dentro del mismo build de CodeBuild que publica el instalador
+# (phase `post_build` de `buildspec.yml`; proyecto `titanio-pos-electron-release`
+# en `lib/electron-ci.ts` de titanio-pos-infra).
+#
+# El motivo de moverlo y no sólo desactivarlo: este workflow colgaba del push de
+# un tag `v*`, y el CI nuevo ya no pushea tags desde git — el tag lo crea GitHub
+# al publicar el release, lo que no dispara un evento `push`. Dejarlo como
+# estaba habría hecho que el ZIP fiscal dejara de adjuntarse en silencio.
+#
+# El buildspec corre el mismo `node standalone-fiscal/package-standalone.js` y
+# sube el ZIP como asset del release vía la API de GitHub (borrando el asset
+# previo del mismo nombre, para que un reintento del mismo commit funcione).
+#
+# Se deja intacto como referencia y como respaldo manual vía workflow_dispatch.
+
 # Empaqueta el servidor fiscal standalone (Python embebido + fiscal.py) en un
 # ZIP y lo adjunta al release correspondiente al tag.
 #
@@ -8,9 +24,11 @@ name: Release Fiscal Server Standalone
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "v*"
+  # Trigger automático DESACTIVADO (ver cabecera). Reactivar sólo si se
+  # apaga antes el proyecto CodeBuild, o saldrán dos releases por push.
+  # push:
+  #   tags:
+  #     - "v*"
 
 jobs:
   package:

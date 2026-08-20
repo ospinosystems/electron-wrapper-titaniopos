@@ -157,6 +157,20 @@ hace falta para cambios profundos del shell en una caja sin el updater.
 
 ## CI/CD (GitHub Actions)
 
+> **⚠️ Superseded (2026-08-20).** Automatic releases no longer run on GitHub
+> Actions: they run on **AWS CodeBuild** (project `titanio-pos-electron-release`,
+> defined in `lib/electron-ci.ts` of the `titanio-pos-infra` repo), triggered by
+> a native GitHub webhook on **every push to `main`** — the same pattern already
+> used by `titaniopos-backend` and `titaniopos-frontend`. The build steps live in
+> **`buildspec.yml`** at the root of this repo, and the version is
+> `1.0.<commit count>` instead of coming from a git tag.
+>
+> The variables and secrets described below are now read from the AWS Secrets
+> Manager secret `titanio-pos/electron-ci` and from the CodeBuild project's
+> environment variables — not from GitHub. The section is kept because both
+> workflows remain in the repo as documented references and manual fallbacks
+> (`workflow_dispatch`); their automatic triggers are commented out.
+
 The workflow **`.github/workflows/release-windows.yml`** builds on **Windows** and publishes when:
 
 - You push a version tag matching `v*` (e.g. `v1.2.3`), or  

@@ -1,0 +1,155 @@
+version: 0.2
+
+# Reemplaza a .github/workflows/release-windows.yml (y al paso de empaquetado de
+# release-fiscal-standalone.yml). Corre en un proyecto CodeBuild de WINDOWS
+# (`titanio-pos-electron-release`, definido en lib/electron-ci.ts de
+# titanio-pos-infra), disparado por webhook nativo de GitHub en cada push a main
+# — mismo patrón que el CI del backend y el del frontend.
+#
+# Windows y no Linux porque el build es Windows puro: electron-builder --win
+# (NSIS), 7za.exe, el helper .NET de impresión RAW, el JRE de vpos-rest y el
+# Python embebido.
+#
+# VERSIÓN: 1.0.<nº de commits> (p.ej. 1.0.198), calculada en el build. No se
+# commitea el bump a package.json ni se pushea el tag desde acá a propósito:
+#   - un push de vuelta a main volvería a disparar el webhook (bucle infinito);
+#   - el contador de commits ya es monotónico, así que cada push a main produce
+#     una versión estrictamente mayor sin coordinar nada.
+# El tag `v<version>` lo crea GitHub solo, al publicar el release (el publisher
+# de electron-builder lo pide con target = HEAD de main).
+#
+# Variables que inyecta el proyecto CodeBuild (ver lib/electron-ci.ts):
+#   Texto plano : TITANIOPOS_URL, TITANIOPOS_OPEN_DEVTOOLS_ON_START
+#   Secrets Mgr : GH_TOKEN, TITANIOPOS_JWT_SECRET, TITANIOPOS_DEVTOOLS_PASSWORD
+#                 (secreto `titanio-pos/electron-ci`)
+
+env:
+  variables:
+    GH_REPO: "ospinosystems/electron-wrapper-titaniopos"
+    # Node no viene garantizado en la imagen base de Windows: si falta (o es
+    # viejo), se baja el zip oficial a NODE_DIR y se antepone al PATH.
+    NODE_VERSION: "v20.18.1"
+    NODE_DIR: "C:\\ci-node"
+    # El runner no tiene el repo del frontend al lado: la vista horneada se baja
+    # del feed de updates (el mismo zip que ya consumen las cajas).
+    BUNDLE_FROM_FEED: "1"
+
+phases:
+  install:
+    commands:
+      - |
+        $ErrorActionPreference = 'Stop'
+        $target = "$env:NODE_DIR\node-$env:NODE_VERSION-win-x64"
+        $ok = $false
+        if (Get-Command node -ErrorAction SilentlyContinue) {
+          $major = [int](((node -v) -replace '^v(\d+)\..*$', '$1'))
+          if ($major -ge 20) { $ok = $true; Write-Host "Node ya presente en la imagen: $(node -v)" }
+        }
+        if (-not $ok) {
+          Write-Host "Instalando Node $env:NODE_VERSION en $target ..."
+          $zip = "$env:TEMP\node.zip"
+          Invoke-WebRequest -UseBasicParsing -Uri "https://nodejs.org/dist/$env:NODE_VERSION/node-$env:NODE_VERSION-win-x64.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $env:NODE_DIR -Force
+          $env:Path = "$target;$env:Path"
+          # Persistido a nivel máquina para que las fases siguientes lo vean aunque
+          # el agente de CodeBuild abra una sesión nueva.
+          [Environment]::SetEnvironmentVariable('Path', "$target;" + [Environment]::GetEnvironmentVariable('Path', 'Machine'), 'Machine')
+        }
+        node -v
+        npm -v
+      - |
+        $ErrorActionPreference = 'Stop'
+        $target = "$env:NODE_DIR\node-$env:NODE_VERSION-win-x64"
+        if (Test-Path $target) { $env:Path = "$target;$env:Path" }
+        npm ci
+
+  pre_build:
+    commands:
+      # ── Versión del release: 1.0.<nº de commits> ─────────────────────────────
+      - |
+        $ErrorActionPreference = 'Stop'
+        $target = "$env:NODE_DIR\node-$env:NODE_VERSION-win-x64"
+        if (Test-Path $target) { $env:Path = "$target;$env:Path" }
+
+        $count = (git rev-list --count HEAD | Out-String).Trim()
+        if (-not $count -or $count -eq '0') { throw "No se pudo contar los commits: el clone no trae historia completa" }
+        # MAJOR.MINOR salen de package.json; el PATCH lo pone el contador.
+        $base = (node -p "require('./package.json').version.split('.').slice(0,2).join('.')" | Out-String).Trim()
+        $version = "$base.$count"
+        Write-Host "Version del release: $version (commit $(git rev-parse --short HEAD))"
+
+        # package.json puede venir con BOM (el repo se edita en Windows): se
+        # limpia antes de parsear o JSON.parse revienta.
+        node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('package.json','utf8').replace(/^\uFEFF/,''));j.version=process.argv[1];fs.writeFileSync('package.json',JSON.stringify(j,null,2)+'\n');" $version
+
+        Set-Content -Path "$env:TEMP\ci-version.txt" -Encoding ascii -Value $version
+
+      # ── .env horneado en el instalador (equivale al step homónimo del YML) ──
+      - |
+        $ErrorActionPreference = 'Stop'
+        $url = $env:TITANIOPOS_URL
+        if ([string]::IsNullOrWhiteSpace($url)) { $url = 'http://localhost:3001' }
+        $jwt = if ($null -eq $env:TITANIOPOS_JWT_SECRET) { '' } else { $env:TITANIOPOS_JWT_SECRET }
+        $openDt = $env:TITANIOPOS_OPEN_DEVTOOLS_ON_START
+        if ([string]::IsNullOrWhiteSpace($openDt)) { $openDt = 'false' }
+        $dtPwd = if ($null -eq $env:TITANIOPOS_DEVTOOLS_PASSWORD) { '' } else { $env:TITANIOPOS_DEVTOOLS_PASSWORD }
+        $content = @(
+          "TITANIOPOS_URL=$url"
+          "TITANIOPOS_JWT_SECRET=$jwt"
+          "TITANIOPOS_OPEN_DEVTOOLS_ON_START=$openDt"
+          "TITANIOPOS_DEVTOOLS_PASSWORD=$dtPwd"
+        ) -join "`n"
+        $content += "`n"
+        Set-Content -Path .env -Encoding utf8 -Value $content
+        Write-Host "TITANIOPOS_URL horneada: $url"
+
+  build:
+    commands:
+      # prebuild (helper .NET + chequeo RustDesk) + runtime.7z + vista horneada
+      # + electron-builder --win --publish always. Publica en GitHub Releases:
+      # es el feed que lee electron-updater en las cajas.
+      - |
+        $ErrorActionPreference = 'Stop'
+        $target = "$env:NODE_DIR\node-$env:NODE_VERSION-win-x64"
+        if (Test-Path $target) { $env:Path = "$target;$env:Path" }
+        npm run release
+        if ($LASTEXITCODE -ne 0) { throw "electron-builder fallo con codigo $LASTEXITCODE" }
+
+  post_build:
+    commands:
+      # ── ZIP del servidor fiscal standalone -> asset del mismo release ───────
+      # Antes lo hacía release-fiscal-standalone.yml, colgado del push del tag.
+      # Como ya no se pushea el tag desde git, ese workflow no se dispararía
+      # nunca: el empaquetado se trae acá para no perder el adjunto.
+      - |
+        $ErrorActionPreference = 'Stop'
+        if ($env:CODEBUILD_BUILD_SUCCEEDING -ne '1') {
+          Write-Host 'Build fallida: se omite el ZIP fiscal standalone.'
+          exit 0
+        }
+        $target = "$env:NODE_DIR\node-$env:NODE_VERSION-win-x64"
+        if (Test-Path $target) { $env:Path = "$target;$env:Path" }
+
+        $version = (Get-Content "$env:TEMP\ci-version.txt" -Raw).Trim()
+        node standalone-fiscal/package-standalone.js
+        $zip = Get-ChildItem dist-standalone\*.zip | Select-Object -First 1
+        if (-not $zip) { throw 'No se genero el ZIP del servidor fiscal standalone' }
+
+        $hdr = @{
+          Authorization = "Bearer $env:GH_TOKEN"
+          Accept        = 'application/vnd.github+json'
+          'User-Agent'  = 'codebuild-titaniopos'
+        }
+        $rel = Invoke-RestMethod -Headers $hdr -Uri "https://api.github.com/repos/$env:GH_REPO/releases/tags/v$version"
+
+        # Reintento del mismo commit: el asset viejo se borra antes de resubir
+        # (la API rechaza dos assets con el mismo nombre en un release).
+        $prev = $rel.assets | Where-Object { $_.name -eq $zip.Name }
+        if ($prev) {
+          Write-Host "Borrando asset previo $($zip.Name) ..."
+          Invoke-RestMethod -Method Delete -Headers $hdr -Uri $prev.url | Out-Null
+        }
+
+        $uploadUrl = ($rel.upload_url -replace '\{.*\}', '') + "?name=$($zip.Name)"
+        Invoke-RestMethod -Method Post -Headers $hdr -Uri $uploadUrl -ContentType 'application/zip' -InFile $zip.FullName | Out-Null
+        Write-Host "Adjuntado $($zip.Name) al release v$version"
