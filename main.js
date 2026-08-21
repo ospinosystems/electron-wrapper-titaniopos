@@ -1100,10 +1100,20 @@ ipcMain.handle('view:check-now', async () => {
 // ── UX de la actualización de la vista (checks automáticos y manuales) ───────
 // Ventanita flotante arrastrable (view-update-window.js): progreso de descarga
 // y, al quedar lista, temporizador de reinicio SIEMPRE visible + "Reiniciar
-// ahora". Auto-reinicio a los 5 minutos (el timer autoritativo corre acá, la
-// ventana solo lo muestra). Los eventos también se reenvían al renderer
-// ('view-update') por si la vista quiere pintar su propia UI.
+// ahora". Auto-reinicio a los 5 minutos + un jitter aleatorio (el timer
+// autoritativo corre acá, la ventana solo lo muestra). Los eventos también se
+// reenvían al renderer ('view-update') por si la vista quiere pintar su propia UI.
+//
+// El jitter es lo que evita que una tienda se reinicie entera a la vez. Los
+// polls de las cajas están desfasados, pero el retraso al reinicio era una
+// constante, así que ese desfase se conservaba tal cual: dos cajas que
+// preguntan con 20 s de diferencia se reiniciaban con 20 s de diferencia. Con
+// el jitter cada caja cae en un punto propio de una ventana de 10 min. Es el
+// reemplazo del escalonado por turnos del backend (apagado por defecto), que
+// costaba rollouts de ~40 min por tienda y ni siquiera podía apuntar a una caja
+// concreta: el Electron pide latest.json sin identificarse.
 const VIEW_RESTART_DELAY_MS = 5 * 60 * 1000;
+const VIEW_RESTART_JITTER_MS = 10 * 60 * 1000;
 let viewRestartTimer = null;
 let lastProgressPushAt = 0;
 
@@ -1155,8 +1165,10 @@ function handleViewUpdateEvent(ev, data) {
     // El timer corre aunque nadie toque la ventana (caja desatendida se
     // actualiza sola); el botón solo lo adelanta.
     if (viewRestartTimer) clearTimeout(viewRestartTimer);
-    viewRestartTimer = setTimeout(() => relaunchForViewUpdate('timer de 5 min'), VIEW_RESTART_DELAY_MS);
-    widget.showStaged(data.buildNumber, Date.now() + VIEW_RESTART_DELAY_MS,
+    const delay = VIEW_RESTART_DELAY_MS + Math.floor(Math.random() * VIEW_RESTART_JITTER_MS);
+    const mins = Math.round(delay / 60000);
+    viewRestartTimer = setTimeout(() => relaunchForViewUpdate(`timer de ${mins} min`), delay);
+    widget.showStaged(data.buildNumber, Date.now() + delay,
       () => relaunchForViewUpdate('botón Reiniciar ahora'));
   }
 }
