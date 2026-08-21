@@ -1365,6 +1365,14 @@ let updaterOriginalTitle = null;
 let updaterDownloading = false;
 let updaterDialogOpen = false;
 let updaterDismissedVersion = null;
+/**
+ * Update OBLIGATORIO (post-cierre): sin diálogos. El flujo normal exige dos
+ * clics del cajero ("Descargar" y "Reiniciar ahora") y un "Ahora no" silencia
+ * esa versión para todo el proceso; con cajas que quedan abiertas días, eso
+ * congela la flota en la versión con la que se instaló. Al cerrar la jornada
+ * no hay venta en curso, así que ahí sí se puede bajar e instalar solo.
+ */
+let updaterForced = false;
 
 // Estado actual del updater — se actualiza en cada evento y se sirve al renderer
 // vía IPC para que el banner pueda reconstruirse después de un reload del frontend.
@@ -1467,6 +1475,25 @@ function setupAutoUpdater() {
     // diálogo a la vez, y si dijeron "Ahora no" para ESTA versión no se vuelve a
     // ofrecer sola (el check manual del menú sí la re-ofrece).
     if (updaterDialogOpen) return;
+    if (updaterForced) {
+      // Sin preguntar: el cajero ya cerró. El banner de progreso igual se ve.
+      updaterDownloading = true;
+      setUpdaterProgressUI('indeterminate');
+      notifyUpdaterStart();
+      updateUpdaterState({ phase: 'downloading', version: info.version, percent: 0, bytesPerSecond: 0, transferred: 0, total: 0, error: undefined });
+      sendUpdaterEvent('start', { version: info.version });
+      try {
+        await autoUpdater.downloadUpdate();
+      } catch (err) {
+        console.error('[UPDATER] Update obligatorio: descarga falló:', err);
+        updaterForced = false;
+        clearUpdaterProgressUI();
+        const message = formatUpdaterErrorForUser(err);
+        updateUpdaterState({ phase: 'error', error: message });
+        sendUpdaterEvent('error', { message });
+      }
+      return;
+    }
     if (!updateCheckRequestedByUser && updaterDismissedVersion === info.version) return;
     const win = getUpdaterWindow();
     updaterDialogOpen = true;
@@ -1588,6 +1615,13 @@ function setupAutoUpdater() {
       percent: 100,
     });
     sendUpdaterEvent('done', { version: info?.version });
+    if (updaterForced) {
+      // autoInstallOnAppQuit ya cubre el caso de que alguien cierre antes.
+      console.log('[UPDATER] Update obligatorio: instalando sin preguntar.');
+      updaterForced = false;
+      autoUpdater.quitAndInstall(false, true);
+      return;
+    }
     const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
     const { response } = await dialog.showMessageBox(win, {
       type: 'info',
@@ -1632,6 +1666,31 @@ function setupAutoUpdater() {
   // Permite al banner reconstruirse después de un F5/reload del renderer.
   // El main mantiene la sesión completa de descarga aunque el renderer reset.
   ipcMain.handle('updater:get-state', () => updaterState);
+
+  /**
+   * Update obligatorio, sin diálogos: lo dispara la vista al cerrar la jornada.
+   * Si hay algo nuevo lo baja y reinicia solo; si no, no molesta a nadie.
+   */
+  ipcMain.handle('updater:force-now', async () => {
+    if (!app.isPackaged) return { ok: false, reason: 'no empaquetada' };
+    if (updaterDownloading || updaterState.phase === 'done') {
+      return { ok: true, already: true, phase: updaterState.phase };
+    }
+    updaterForced = true;
+    // Un "Ahora no" previo no debe bloquear el update obligatorio.
+    updaterDismissedVersion = null;
+    try {
+      const res = await autoUpdater.checkForUpdates();
+      const version = res?.updateInfo?.version ?? null;
+      const available = Boolean(version) && version !== app.getVersion();
+      if (!available) updaterForced = false;
+      return { ok: true, available, version };
+    } catch (err) {
+      updaterForced = false;
+      console.warn('[UPDATER] Update obligatorio: check falló:', err.message);
+      return { ok: false, reason: String(err?.message || err) };
+    }
+  });
 
   // Permite al usuario buscar actualizaciones desde Ajustes. Reusa el mismo
   // flujo que el menú (diálogos nativos + banner de progreso).
@@ -3778,7 +3837,8 @@ app.whenReady().then(() => {
       const { execFile } = require('child_process');
       const psCmd = `Start-Process -Verb RunAs -Wait -WindowStyle Hidden -WorkingDirectory '${runtimeDir.replace(/'/g, "''")}' -FilePath 'cmd.exe' -ArgumentList '/c','\"${bat.replace(/'/g, "''")}\"'`;
       const ran = await new Promise((resolve) => {
-        execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCmd], { windowsHide: true }, (error) => {
+        execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCmd], { timeout: 300000, windowsHide: true }, (error) => {
+          if (error && error.killed) return resolve({ success: false, error: 'La instalación no respondió a tiempo (¿el .bat quedó esperando una tecla, o el permiso de administrador sin responder?).' });
           if (error) return resolve({ success: false, error: 'No se pudo instalar (¿se canceló el permiso de administrador?).' });
           resolve({ success: true });
         });
@@ -3802,14 +3862,32 @@ app.whenReady().then(() => {
     try {
       stopMegaPosServer();
       const { execFile } = require('child_process');
-      const psCmd = [
-        'taskkill /F /IM javaw.exe 2>$null;',
-        'taskkill /F /IM java.exe 2>$null;',
-        "Remove-Item -Force -ErrorAction SilentlyContinue \"$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\VposREST.vbs\"",
-      ].join(' ');
-      const full = `Start-Process -Verb RunAs -Wait -WindowStyle Hidden -FilePath 'powershell.exe' -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command','${psCmd.replace(/'/g, "''")}'`;
+      // El comando va a un .ps1 temporal (mismo patrón que el soporte remoto):
+      // pasarlo inline por -ArgumentList '-Command','...' rompía el quoting —
+      // la ruta con comillas dobles y espacios ($env:APPDATA\...\Start Menu\...)
+      // dejaba a la powershell ELEVADA con un comando incompleto, esperando
+      // input en una ventana oculta. Con -Wait, el handle no resolvía nunca y
+      // el botón "Desinstalar VPOS" se quedaba cargando para siempre.
+      const script = [
+        "$ErrorActionPreference='SilentlyContinue'",
+        'taskkill /F /IM javaw.exe',
+        'taskkill /F /IM java.exe',
+        'Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:APPDATA \'Microsoft\\Windows\\Start Menu\\Programs\\Startup\\VposREST.vbs\')',
+        'exit 0',
+      ].join('\n');
+      const ps1 = path.join(app.getPath('temp'), `vpos-uninstall-${script.length}.ps1`);
+      try {
+        fs.writeFileSync(ps1, script, 'utf8');
+      } catch (e) {
+        return { success: false, error: 'No se pudo preparar la desinstalación: ' + e.message };
+      }
+      const outer = `Start-Process -Verb RunAs -Wait -WindowStyle Hidden powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','${ps1.replace(/'/g, "''")}'`;
+      // timeout: aunque el quoting ya no cuelga, un UAC sin responder dejaría
+      // el -Wait colgado. Preferimos fallar con mensaje a congelar la UI.
       const ran = await new Promise((resolve) => {
-        execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', full], { windowsHide: true }, (error) => {
+        execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', outer], { timeout: 120000, windowsHide: true }, (error) => {
+          try { fs.unlinkSync(ps1); } catch (_) { /* ignore */ }
+          if (error && error.killed) return resolve({ success: false, error: 'La desinstalación no respondió a tiempo (¿quedó el permiso de administrador sin responder?).' });
           if (error) return resolve({ success: false, error: 'No se pudo desinstalar (¿se canceló el permiso de administrador?).' });
           resolve({ success: true });
         });

@@ -67,8 +67,60 @@ const readDistroVersion = (dir) => {
  * Copia la distribución a la carpeta escribible si falta, si la versión de la
  * app cambió (upgrade) o si cambió la versión del propio VPOS empaquetado
  * (p.ej. 3.15.10 -> 3.16.0). Copia única de ~270MB en la primera ejecución.
+ *
+ * La copia corre en un proceso HIJO (Electron en modo Node), no en el main:
+ * `fs.rmSync` + `fs.cpSync` de ~270MB bloqueaban el hilo principal minutos en
+ * el arranque (se llama desde `whenReady`), con la ventana ya abierta y sin
+ * responder. Ese congelamiento era lo que empujaba a cerrar la caja a lo bruto
+ * —y si el catálogo estaba bajando, el arranque siguiente lo re-descargaba
+ * entero. Si el hijo no se puede lanzar, se cae al camino síncrono anterior
+ * antes que dejar el VPOS sin runtime.
  */
-const ensureRuntimeCopy = (app) => {
+// Los parámetros van por env, no por argv: con `-e` el primer argumento
+// posicional se consume como nombre del script y `argv` queda corrido.
+const runtimeCopyScript = `
+const fs = require('fs');
+const path = require('path');
+const { VPOS_COPY_SOURCE: source, VPOS_COPY_RUNTIME: runtime, VPOS_COPY_VERSION: version } = process.env;
+if (fs.existsSync(runtime)) fs.rmSync(runtime, { recursive: true, force: true });
+fs.mkdirSync(runtime, { recursive: true });
+fs.cpSync(source, runtime, { recursive: true });
+try { fs.writeFileSync(path.join(runtime, '.installed-version'), version, 'utf8'); } catch (_) {}
+`;
+
+const copyRuntimeSync = (source, runtime, version, marker) => {
+  if (fs.existsSync(runtime)) {
+    log(`[MEGA_POS] Eliminando copia runtime anterior en ${runtime}...`);
+    fs.rmSync(runtime, { recursive: true, force: true });
+  }
+  fs.mkdirSync(runtime, { recursive: true });
+  fs.cpSync(source, runtime, { recursive: true });
+  try { fs.writeFileSync(marker, version, 'utf8'); } catch (_) {}
+};
+
+const copyRuntimeInChild = (source, runtime, version) =>
+  new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', runtimeCopyScript], {
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+        VPOS_COPY_SOURCE: source,
+        VPOS_COPY_RUNTIME: runtime,
+        VPOS_COPY_VERSION: version,
+      },
+      stdio: ['ignore', 'ignore', 'pipe'],
+      windowsHide: true,
+    });
+    let stderr = '';
+    child.stderr.on('data', (d) => { stderr += d.toString(); });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) return resolve();
+      reject(new Error(`copia runtime falló (código ${code}) ${stderr.trim()}`));
+    });
+  });
+
+const ensureRuntimeCopy = async (app) => {
   const source = getVposSourceDir();
   const runtime = getVposRuntimeDir(app);
   const appVersion = (app && app.getVersion && app.getVersion()) || '0';
@@ -92,14 +144,13 @@ const ensureRuntimeCopy = (app) => {
     // runtime viejo mezcla distros (p.ej. jre/lib/ext de Java 8 sobrevivía
     // al upgrade a Java 21 y la JVM abortaba con "extensions mechanism no
     // longer supported").
-    if (fs.existsSync(runtime)) {
-      log(`[MEGA_POS] Eliminando copia runtime anterior en ${runtime}...`);
-      fs.rmSync(runtime, { recursive: true, force: true });
+    log(`[MEGA_POS] Copiando distribución VPOS a ${runtime} (una vez, en segundo plano)...`);
+    try {
+      await copyRuntimeInChild(source, runtime, version);
+    } catch (e) {
+      logErr('[MEGA_POS] Copia en proceso hijo falló, se usa la copia directa:', e.message);
+      copyRuntimeSync(source, runtime, version, marker);
     }
-    log(`[MEGA_POS] Copiando distribución VPOS a ${runtime} (una vez)...`);
-    fs.mkdirSync(runtime, { recursive: true });
-    fs.cpSync(source, runtime, { recursive: true });
-    try { fs.writeFileSync(marker, version, 'utf8'); } catch (_) {}
     log('[MEGA_POS] Copia completa.');
   }
   return runtime;
@@ -374,7 +425,7 @@ const startMegaPosServer = async (app) => {
 
   let runtimeDir;
   try {
-    runtimeDir = ensureRuntimeCopy(app);
+    runtimeDir = await ensureRuntimeCopy(app);
     const settings = readSettings(app);
     const cfg = normalizeMegaPos(settings.megaPos);
     // El id de [vtid] es el número de caja en la tienda: sale solo del número

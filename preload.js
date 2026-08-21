@@ -455,6 +455,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Busca actualizaciones de la app (diálogos nativos + banner). */
   updaterCheck: () => ipcRenderer.invoke('updater:check'),
 
+  /**
+   * Update OBLIGATORIO del Electron, sin diálogos: baja e instala solo si hay
+   * algo nuevo. Lo llama la vista al cerrar la jornada, que es cuando no hay
+   * venta en curso. Sin esto la flota se queda en la versión con la que se
+   * instaló: el flujo normal necesita dos clics del cajero.
+   */
+  updaterForceNow: () => ipcRenderer.invoke('updater:force-now'),
+
   // ==================== HOT-SWAP DE LA VISTA (builds del frontend) ====================
   /** Lista las builds de la vista instaladas: { ok, active, next, builds:[n], keep }. */
   viewListBuilds: () => ipcRenderer.invoke('view:list-builds'),
