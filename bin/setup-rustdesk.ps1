@@ -48,8 +48,10 @@ if (-not (Get-RdSvc) -and (Test-Path $Installed)) {
 # 2) Apuntar al self-host + fijar clave (idempotente; tambien en reinstalaciones).
 Start-Process -FilePath $rd -ArgumentList '--config', "host=$RdHost,key=$RdKey"
 Start-Sleep -Seconds 2
-Start-Process -FilePath $rd -ArgumentList '--password', $RdPassword
-Start-Sleep -Seconds 3
+# La clave se fija en el paso 2b (apply-config), desde el exe INSTALADO y con el
+# servicio Running: `--password` solo lo acepta el servicio si el invocador es su
+# mismo exe (auth por ruta). Aqui se deja un intento temprano por compatibilidad,
+# pero el fiable es el de apply-config.
 
 # 2b) `--config` solo escribe la config del USUARIO. La del SERVICIO (que es la
 # que decide con que key se registra la caja en el hbbs) se parchea aparte; sin
@@ -57,7 +59,7 @@ Start-Sleep -Seconds 3
 # por mas que se actualice la app.
 $applyCfg = Join-Path $PSScriptRoot 'rustdesk-apply-config.ps1'
 if (Test-Path $applyCfg) {
-  & $applyCfg -RdHost $RdHost -RdKey $RdKey
+  & $applyCfg -RdHost $RdHost -RdKey $RdKey -RdPassword $RdPassword
 } else {
   Write-Output 'WARN no-apply-config-script'
 }

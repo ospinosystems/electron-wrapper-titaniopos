@@ -17,7 +17,8 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File rustdesk-apply-config.ps1
 param(
   [string]$RdHost = 'rustdesk.titanio-pos.com',
-  [string]$RdKey = 'cpyYPJtZXVO4W3P28t3K1M5RiQxdpBZ+n9p81FmWVIU='
+  [string]$RdKey = 'cpyYPJtZXVO4W3P28t3K1M5RiQxdpBZ+n9p81FmWVIU=',
+  [string]$RdPassword = 'Jaja2712$$'
 )
 
 $ErrorActionPreference = 'Continue'
@@ -144,6 +145,34 @@ if (Test-Path $userCfg) {
     Set-Content -Path $userCfg -Value $uc -Encoding UTF8 -ErrorAction SilentlyContinue
     Write-Output 'PATCHED user-config'
   }
+}
+
+# 3) Fijar la clave desatendida. `--password` habla por IPC con el servicio y
+# lo persiste en la config del SERVICIO (la que valida las conexiones), pero el
+# servicio SOLO acepta ese IPC si quien lo invoca es EXACTAMENTE su mismo exe
+# (auth por ruta del ejecutable). Correrlo desde una copia/portable -> el
+# servicio lo rechaza ("executable mismatch") y la clave nunca se fija: por eso
+# antes cada caja pedia clave al conectar. Hay que usar el exe instalado en
+# Program Files y esperar a que el servicio este Running.
+$Installed = 'C:\Program Files\RustDesk\rustdesk.exe'
+if ((Test-Path $Installed) -and $RdPassword) {
+  $svc = Get-RdSvc
+  if (-not $svc -or $svc.Status -ne 'Running') {
+    $svcName = if ($svc) { $svc.Name } else { 'RustDesk' }
+    Start-Service -Name $svcName -ErrorAction SilentlyContinue
+  }
+  $deadline = (Get-Date).AddSeconds(30)
+  while ((Get-Date) -lt $deadline) {
+    $svc = Get-RdSvc
+    if ($svc -and $svc.Status -eq 'Running') { break }
+    Start-Sleep -Milliseconds 800
+  }
+  # Un par de intentos: el servicio puede tardar en abrir el canal IPC.
+  for ($i = 0; $i -lt 3; $i++) {
+    Start-Process -FilePath $Installed -ArgumentList '--password', $RdPassword -Wait -WindowStyle Hidden -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+  }
+  Write-Output 'PASSWORD set-attempted'
 }
 
 Write-Output 'DONE'
