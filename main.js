@@ -1650,19 +1650,13 @@ function setupAutoUpdater() {
     }
   });
 
-  autoUpdater.checkForUpdates().catch((err) => {
-    console.warn('[UPDATER] No se pudo comprobar actualizaciones al iniciar:', err.message);
-  });
-
-  // Re-chequeo cada 2 horas: POS abiertos toda la jornada no se enteraban de
-  // releases publicados durante el día. Salteamos si ya hay una descarga en curso.
-  if (updaterPeriodicTimer) clearInterval(updaterPeriodicTimer);
-  updaterPeriodicTimer = setInterval(() => {
-    if (updaterDownloading || updaterState.phase === 'done') return;
-    autoUpdater.checkForUpdates().catch((err) => {
-      console.warn('[UPDATER] Re-chequeo periódico falló:', err.message);
-    });
-  }, UPDATER_PERIODIC_CHECK_MS);
+  // Sin chequeo automatico al arrancar ni re-chequeo periodico: el diálogo "Hay
+  // una nueva versión" en cada apertura y cada 2h confundía a los cajeros. La
+  // actualización llega por dos vías controladas: el update OBLIGATORIO al
+  // cerrar la jornada (updater:force-now, sin diálogos) y el chequeo MANUAL
+  // desde Ajustes / Help → Buscar actualizaciones. Si en el futuro se quiere
+  // reactivar el periódico, restaurar el setInterval con UPDATER_PERIODIC_CHECK_MS.
+  if (updaterPeriodicTimer) { clearInterval(updaterPeriodicTimer); updaterPeriodicTimer = null; }
 
   // Permite al renderer disparar el reinicio + instalación desde el banner UI.
   ipcMain.handle('updater:quit-and-install', () => {
