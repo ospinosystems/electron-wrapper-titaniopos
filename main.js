@@ -1092,9 +1092,13 @@ ipcMain.handle('view:switch-build', (_e, buildNumber, opts = {}) => {
 ipcMain.handle('view:check-now', async () => {
   // Pasa por el manager: mismo guard anti-solapamiento y mismo notificador que
   // el check periódico (ventanita de progreso + temporizador de reinicio).
+  // El flag marca que ESTA actualización la pidió alguien (Ctrl+F5, login de
+  // admin, Ajustes): el evento 'staged' llega durante esta misma llamada.
+  viewCheckWasManual = true;
   try {
     return await require('./frontend-server-manager').checkViewUpdateNow('manual (Ajustes)');
   } catch (e) { return { ok: false, error: e && e.message }; }
+  finally { viewCheckWasManual = false; }
 });
 
 // ── UX de la actualización de la vista (checks automáticos y manuales) ───────
@@ -1114,6 +1118,15 @@ ipcMain.handle('view:check-now', async () => {
 // concreta: el Electron pide latest.json sin identificarse.
 const VIEW_RESTART_DELAY_MS = 5 * 60 * 1000;
 const VIEW_RESTART_JITTER_MS = 10 * 60 * 1000;
+/**
+ * Actualización PEDIDA a mano (Ctrl+F5, login de admin, Ajustes): sin jitter y
+ * con una espera corta. El jitter existe para desperdigar un despliegue masivo
+ * automático; aplicarlo a un pedido explícito solo lograba que quien la pidió
+ * viera "faltan 15 minutos", que es lo contrario de lo que buscaba. Igual queda
+ * la cuenta atrás y el botón "Reiniciar ahora" por si estaba en algo.
+ */
+const VIEW_RESTART_MANUAL_MS = 60 * 1000;
+let viewCheckWasManual = false;
 let viewRestartTimer = null;
 let lastProgressPushAt = 0;
 
@@ -1165,7 +1178,9 @@ function handleViewUpdateEvent(ev, data) {
     // El timer corre aunque nadie toque la ventana (caja desatendida se
     // actualiza sola); el botón solo lo adelanta.
     if (viewRestartTimer) clearTimeout(viewRestartTimer);
-    const delay = VIEW_RESTART_DELAY_MS + Math.floor(Math.random() * VIEW_RESTART_JITTER_MS);
+    const delay = viewCheckWasManual
+      ? VIEW_RESTART_MANUAL_MS
+      : VIEW_RESTART_DELAY_MS + Math.floor(Math.random() * VIEW_RESTART_JITTER_MS);
     const mins = Math.round(delay / 60000);
     viewRestartTimer = setTimeout(() => relaunchForViewUpdate(`timer de ${mins} min`), delay);
     widget.showStaged(data.buildNumber, Date.now() + delay,
