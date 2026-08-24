@@ -147,6 +147,55 @@ if (Test-Path $userCfg) {
   }
 }
 
+# 2b-bis) Forzar CONTRASENA PERMANENTE en la config del SERVICIO. Si la caja
+# quedo en "one-time password", cada conexion pide un codigo que SOLO se ve en
+# la GUI -> sin la app abierta no se puede entrar. Con permanent-password la
+# clave desatendida (paso 3) vale siempre. Se aplica aunque la key ya estuviera
+# al dia (el bloque de arriba hace 'continue' en ese caso).
+foreach ($dir in $ServiceConfigDirs) {
+  if (-not (Test-Path $dir)) { continue }
+  $toml = Join-Path $dir 'RustDesk2.toml'
+  $content = ''
+  if (Test-Path $toml) { $content = Get-Content $toml -Raw -ErrorAction SilentlyContinue }
+  if ($null -eq $content) { $content = '' }
+  if ($content -match "(?m)^\s*verification-method\s*=\s*['`"]use-permanent-password['`"]") { continue }
+  $new = Set-TomlOption -Content $content -Name 'verification-method' -Value 'use-permanent-password'
+  $hadEncId = $content -match '(?m)^\s*enc_id\s*='
+  $keepsEncId = $new -match '(?m)^\s*enc_id\s*='
+  if ($hadEncId -and -not $keepsEncId) { continue }
+  Set-Content -Path $toml -Value $new -Encoding UTF8 -ErrorAction SilentlyContinue
+  Write-Output "PATCHED verification-method $dir"
+  $changed = $true
+}
+
+# 2c) Endurecer el SERVICIO para soporte DESATENDIDO (sin la app abierta).
+# Sintoma real: "si no tienes RustDesk abierto no conecta". Causa: el que
+# registra en el hbbs y acepta la conexion es el SERVICIO, no la GUI. Si el
+# servicio no queda Automatic + Running (o muere y nadie lo levanta), solo hay
+# ID cuando alguien abre la app/tray a mano. Forzamos arranque automatico,
+# recuperacion ante caidas y que este Running ya mismo.
+$svc = Get-RdSvc
+if ($svc) {
+  $svcName = $svc.Name
+  # Arranque automatico y que sobreviva reinicios/caidas.
+  & sc.exe config "$svcName" start= auto | Out-Null
+  # Auto-restart: 5s, 10s, 30s; ventana de conteo de fallos 1 dia.
+  & sc.exe failure "$svcName" reset= 86400 actions= restart/5000/restart/10000/restart/30000 | Out-Null
+  $svc = Get-RdSvc
+  if ($svc -and $svc.Status -ne 'Running') {
+    Start-Service -Name $svcName -ErrorAction SilentlyContinue
+    $deadline = (Get-Date).AddSeconds(20)
+    while ((Get-Date) -lt $deadline) {
+      $svc = Get-RdSvc
+      if ($svc -and $svc.Status -eq 'Running') { break }
+      Start-Sleep -Milliseconds 800
+    }
+  }
+  Write-Output "SERVICE hardened start=auto status=$((Get-RdSvc).Status)"
+} else {
+  Write-Output 'WARN no-service-to-harden'
+}
+
 # 3) Fijar la clave desatendida. `--password` habla por IPC con el servicio y
 # lo persiste en la config del SERVICIO (la que valida las conexiones), pero el
 # servicio SOLO acepta ese IPC si quien lo invoca es EXACTAMENTE su mismo exe
