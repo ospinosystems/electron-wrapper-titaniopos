@@ -9,7 +9,7 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $RdHost = 'rustdesk.titanio-pos.com'
-$RdKey = 'B3i+MLo1jsm0VTNX0Rhtph2EHYGXwmZcI+caFGkMvGU='
+$RdKey = 'cpyYPJtZXVO4W3P28t3K1M5RiQxdpBZ+n9p81FmWVIU='
 # Clave de acceso desatendido (comillas simples: literal, no expandir $$).
 $RdPassword = 'Jaja2712$$'
 $Installed = 'C:\Program Files\RustDesk\rustdesk.exe'

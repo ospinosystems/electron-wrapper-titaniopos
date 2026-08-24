@@ -57,7 +57,7 @@ const DISABLE_PASSWORD = process.env.TITANIOPOS_REMOTE_DISABLE_PASSWORD || '1229
 // solo clientes con esta llave pueden registrarse. El relay (hbbr) lo resuelve
 // el propio hbbs.
 const RUSTDESK_HOST = 'rustdesk.titanio-pos.com';
-const RUSTDESK_KEY = 'B3i+MLo1jsm0VTNX0Rhtph2EHYGXwmZcI+caFGkMvGU=';
+const RUSTDESK_KEY = 'cpyYPJtZXVO4W3P28t3K1M5RiQxdpBZ+n9p81FmWVIU=';
 
 // Formato que acepta `rustdesk --config`: "host=<id-server>,key=<pubkey>". Este
 // es el método PROBADO (v1.0.59) para apuntar al self-host: aplica el servidor

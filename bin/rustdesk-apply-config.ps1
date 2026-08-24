@@ -17,7 +17,7 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File rustdesk-apply-config.ps1
 param(
   [string]$RdHost = 'rustdesk.titanio-pos.com',
-  [string]$RdKey = 'B3i+MLo1jsm0VTNX0Rhtph2EHYGXwmZcI+caFGkMvGU='
+  [string]$RdKey = 'cpyYPJtZXVO4W3P28t3K1M5RiQxdpBZ+n9p81FmWVIU='
 )
 
 $ErrorActionPreference = 'Continue'
