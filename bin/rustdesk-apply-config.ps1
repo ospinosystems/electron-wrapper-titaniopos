@@ -100,8 +100,24 @@ if (-not $touched) {
 }
 
 # Reiniciar para que re-registre en el hbbs con la key nueva. Sin esto sigue
-# anunciandose con la anterior y el error persiste.
-if ($changed) {
+# anunciandose con la anterior y el error persiste. No basta con `$changed`:
+# el TOML puede haberlo escrito otro paso (p.ej. `--config` del setup) sin que
+# el proceso del servicio se reiniciara, y RustDesk solo lee la config al
+# arrancar. Si el servicio arranco ANTES de la ultima escritura del TOML, sigue
+# con la key vieja en memoria -> reiniciar igual.
+$stale = $false
+if (-not $changed) {
+  $svcProc = Get-CimInstance Win32_Service -Filter "Name='RustDesk'" -ErrorAction SilentlyContinue
+  if ($svcProc -and $svcProc.ProcessId -gt 0) {
+    $proc = Get-Process -Id $svcProc.ProcessId -ErrorAction SilentlyContinue
+    $tomlWrite = ($ServiceConfigDirs | ForEach-Object { Get-Item (Join-Path $_ 'RustDesk2.toml') -ErrorAction SilentlyContinue } | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
+    if ($proc -and $tomlWrite -and $proc.StartTime -lt $tomlWrite) {
+      Write-Output "STALE service started $($proc.StartTime) before config write $tomlWrite"
+      $stale = $true
+    }
+  }
+}
+if ($changed -or $stale) {
   $svc = Get-RdSvc
   if ($svc) {
     Restart-Service -Name $svc.Name -Force -ErrorAction SilentlyContinue
