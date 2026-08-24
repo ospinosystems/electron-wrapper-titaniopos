@@ -23,6 +23,18 @@ version: 0.2
 #   Secrets Mgr : GH_TOKEN, TITANIOPOS_JWT_SECRET, TITANIOPOS_DEVTOOLS_PASSWORD
 #                 (secreto `titanio-pos/electron-ci`)
 
+# ── OJO con `$ErrorActionPreference = 'Stop'` ────────────────────────────────
+# Cada bloque va envuelto en `& { ... }` a propósito. El agente de CodeBuild en
+# Windows vuelca las variables de PowerShell a env.xml al terminar un bloque y
+# las restaura al empezar el siguiente con `Set-Variable`. Si 'Stop' queda en el
+# ámbito GLOBAL, se restaura antes que $ExecutionContext (alfabéticamente
+# Err < Exe) y el error "Cannot overwrite variable ExecutionContext because it
+# is read-only" —inofensivo de por sí— se vuelve terminante y mata el bloque
+# ANTES de ejecutar una sola línea nuestra. Síntoma: el primer bloque pasa y
+# todos los siguientes fallan en su preámbulo con `exit status 1`.
+# El `& { }` mantiene la preferencia en un ámbito hijo: aplica dentro del bloque
+# y no se persiste. No quitar el wrapper sin volver a leer esto.
+
 env:
   variables:
     GH_REPO: "ospinosystems/electron-wrapper-titaniopos"
@@ -38,6 +50,7 @@ phases:
   install:
     commands:
       - |
+        & {
         $ErrorActionPreference = 'Stop'
         $target = "$env:NODE_DIR\node-$env:NODE_VERSION-win-x64"
         $ok = $false
@@ -57,16 +70,20 @@ phases:
         }
         node -v
         npm -v
+        }
       - |
+        & {
         $ErrorActionPreference = 'Stop'
         $target = "$env:NODE_DIR\node-$env:NODE_VERSION-win-x64"
         if (Test-Path $target) { $env:Path = "$target;$env:Path" }
         npm ci
+        }
 
   pre_build:
     commands:
       # ── Versión del release: 1.0.<nº de commits> ─────────────────────────────
       - |
+        & {
         $ErrorActionPreference = 'Stop'
         $target = "$env:NODE_DIR\node-$env:NODE_VERSION-win-x64"
         if (Test-Path $target) { $env:Path = "$target;$env:Path" }
@@ -83,9 +100,11 @@ phases:
         node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('package.json','utf8').replace(/^\uFEFF/,''));j.version=process.argv[1];fs.writeFileSync('package.json',JSON.stringify(j,null,2)+'\n');" $version
 
         Set-Content -Path "$env:TEMP\ci-version.txt" -Encoding ascii -Value $version
+        }
 
       # ── .env horneado en el instalador (equivale al step homónimo del YML) ──
       - |
+        & {
         $ErrorActionPreference = 'Stop'
         $url = $env:TITANIOPOS_URL
         if ([string]::IsNullOrWhiteSpace($url)) { $url = 'http://localhost:3001' }
@@ -102,6 +121,7 @@ phases:
         $content += "`n"
         Set-Content -Path .env -Encoding utf8 -Value $content
         Write-Host "TITANIOPOS_URL horneada: $url"
+        }
 
   build:
     commands:
@@ -109,11 +129,13 @@ phases:
       # + electron-builder --win --publish always. Publica en GitHub Releases:
       # es el feed que lee electron-updater en las cajas.
       - |
+        & {
         $ErrorActionPreference = 'Stop'
         $target = "$env:NODE_DIR\node-$env:NODE_VERSION-win-x64"
         if (Test-Path $target) { $env:Path = "$target;$env:Path" }
         npm run release
         if ($LASTEXITCODE -ne 0) { throw "electron-builder fallo con codigo $LASTEXITCODE" }
+        }
 
   post_build:
     commands:
@@ -122,6 +144,7 @@ phases:
       # Como ya no se pushea el tag desde git, ese workflow no se dispararía
       # nunca: el empaquetado se trae acá para no perder el adjunto.
       - |
+        & {
         $ErrorActionPreference = 'Stop'
         if ($env:CODEBUILD_BUILD_SUCCEEDING -ne '1') {
           Write-Host 'Build fallida: se omite el ZIP fiscal standalone.'
@@ -153,3 +176,4 @@ phases:
         $uploadUrl = ($rel.upload_url -replace '\{.*\}', '') + "?name=$($zip.Name)"
         Invoke-RestMethod -Method Post -Headers $hdr -Uri $uploadUrl -ContentType 'application/zip' -InFile $zip.FullName | Out-Null
         Write-Host "Adjuntado $($zip.Name) al release v$version"
+        }
