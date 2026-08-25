@@ -1035,24 +1035,59 @@ ipcMain.handle('app-versions', () => ({
 // recrean, así que al iniciar lo restauramos si falta.
 //   - force=false (arranque): solo crea si NO existe (no pisa nada).
 //   - force=true  (botón):    siempre lo reescribe.
+function writeAppShortcut(shortcutPath, { force = false } = {}) {
+  const exePath = process.execPath;
+  const exists = fs.existsSync(shortcutPath);
+
+  // Auto-reparacion del target. force=false NO se conforma con que el .lnk
+  // exista: si apunta a un exe que ya no esta (o a otra ruta, p.ej. una
+  // instalacion vieja tras un update), Windows muestra "se cambio o se movio
+  // el elemento TitanioPOS.exe" y el icono no abre. En ese caso lo reescribimos
+  // al exe actual. Solo lo dejamos intacto si ya apunta al exe correcto y existe.
+  if (!force && exists) {
+    let healthy = false;
+    try {
+      const cur = shell.readShortcutLink(shortcutPath);
+      const sameTarget = cur && cur.target &&
+        path.normalize(cur.target).toLowerCase() === path.normalize(exePath).toLowerCase();
+      healthy = sameTarget && fs.existsSync(cur.target);
+    } catch (_) {
+      healthy = false; // .lnk ilegible/corrupto -> reescribir
+    }
+    if (healthy) return { success: true, path: shortcutPath, existed: true };
+    console.warn('[SHORTCUT] Acceso directo invalido — reescribiendo:', shortcutPath);
+  }
+
+  const ok = shell.writeShortcutLink(shortcutPath, exists ? 'replace' : 'create', {
+    target: exePath,
+    icon: exePath,
+    iconIndex: 0,
+    description: 'TitanioPOS',
+    appUserModelId: 'com.titaniopos.desktop',
+  });
+  return { success: ok, path: shortcutPath, repaired: exists };
+}
+
 function ensureDesktopShortcut({ force = false } = {}) {
   if (!app.isPackaged) return { success: false, error: 'Solo disponible en la app instalada.' };
   try {
-    const desktop = app.getPath('desktop');
-    const shortcutPath = path.join(desktop, 'TitanioPOS.lnk');
-    const exists = fs.existsSync(shortcutPath);
-    if (!force && exists) return { success: true, path: shortcutPath, existed: true };
-    const exePath = process.execPath;
-    const ok = shell.writeShortcutLink(shortcutPath, exists ? 'replace' : 'create', {
-      target: exePath,
-      icon: exePath,
-      iconIndex: 0,
-      description: 'TitanioPOS',
-      appUserModelId: 'com.titaniopos.desktop',
-    });
-    return { success: ok, path: shortcutPath };
+    return writeAppShortcut(path.join(app.getPath('desktop'), 'TitanioPOS.lnk'), { force });
   } catch (error) {
-    console.error('[SHORTCUT] No se pudo crear el acceso directo:', error.message);
+    console.error('[SHORTCUT] No se pudo crear el acceso directo del escritorio:', error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+// El acceso directo del menu Inicio es la via de rescate: si el del escritorio
+// quedo roto, con este el cajero igual abre la app (y al abrir, el del escritorio
+// se auto-repara). Por eso tambien lo validamos/reparamos en cada arranque.
+function ensureStartMenuShortcut() {
+  if (!app.isPackaged) return { success: false };
+  try {
+    const startMenu = path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'TitanioPOS.lnk');
+    return writeAppShortcut(startMenu, { force: false });
+  } catch (error) {
+    console.error('[SHORTCUT] No se pudo asegurar el acceso del menu Inicio:', error.message);
     return { success: false, error: error.message };
   }
 }
@@ -3775,6 +3810,7 @@ app.whenReady().then(() => {
     // Self-heal: los updates NSIS borran el acceso directo del escritorio.
     // Si falta, lo recreamos en cada arranque.
     try { ensureDesktopShortcut(); } catch (_) { /* no crítico */ }
+    try { ensureStartMenuShortcut(); } catch (_) { /* no crítico */ }
   } else {
     console.log('[UPDATER] Omitido en desarrollo (solo app empaquetada)');
   }
