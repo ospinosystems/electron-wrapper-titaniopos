@@ -210,14 +210,33 @@ function switchToBuild(n, log = () => {}) {
 // socket, no total. Sin `res.on('error')` una respuesta truncada colgaba la
 // promesa para siempre → el guard `viewCheckRunning` quedaba tomado y la caja
 // no volvía a chequear updates hasta reiniciar la app.
-function fetchText(url, timeoutMs = 8000) {
+/**
+ * Identidad de ESTA caja para que el backend pueda dirigirle una versión aunque
+ * comparta IP con otras cajas de la tienda. storeCode + número de caja ya viven
+ * en titaniopos-settings.json; el backend los mapea al terminal_id vía la tabla
+ * de terminales. Sin datos → objeto vacío y el backend cae al mapeo por IP.
+ */
+function identityHeaders() {
+  try {
+    const { readSettings } = require('./titaniopos-settings-file');
+    const s = readSettings(app) || {};
+    const code = String(s.storeCode || '').trim();
+    const slot = String(s.cashRegisterNumber || '').replace(/\D/g, '');
+    if (!code || !slot) return {};
+    return { 'X-Store-Code': code, 'X-Register-Slot': slot };
+  } catch (_) {
+    return {};
+  }
+}
+
+function fetchText(url, timeoutMs = 8000, headers = {}) {
   return new Promise((resolve, reject) => {
     let settled = false;
     const done = (fn, v) => { if (!settled) { settled = true; fn(v); } };
     try {
       const u = new URL(url);
       const mod = u.protocol === 'https:' ? https : http;
-      const req = mod.get(u, { timeout: timeoutMs }, (res) => {
+      const req = mod.get(u, { timeout: timeoutMs, headers }, (res) => {
         if (res.statusCode && res.statusCode >= 400) { res.resume(); return done(reject, new Error('HTTP ' + res.statusCode)); }
         let data = '';
         res.on('data', (c) => (data += c));
@@ -351,7 +370,7 @@ async function checkAndStageUpdate(updateUrl, log = () => {}, notify = null) {
   const base = String(updateUrl || DEFAULT_UPDATE_URL).replace(/\/$/, '');
 
   let meta;
-  try { meta = JSON.parse(await fetchText(base + '/latest.json')); }
+  try { meta = JSON.parse(await fetchText(base + '/latest.json', 8000, identityHeaders())); }
   catch (e) { log(`[VIEW] sin latest.json (${e && e.message}) → uso la vista actual`); return { staged: false, reason: 'offline/sin latest.json' }; }
 
   const remote = parseInt(meta.buildNumber, 10) || 0;
