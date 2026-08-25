@@ -121,14 +121,12 @@ if (-not $changed) {
 if ($changed -or $stale) {
   $svc = Get-RdSvc
   if ($svc) {
+    # Restart-Service ya es sincrono y acotado por el SCM; sin busy-wait extra
+    # porque este script corre DENTRO del instalador NSIS (nsExec bloquea) y no
+    # debe demorarlo. Si el servicio tarda en re-registrar, no pasa nada: quedo
+    # Automatic y termina de arrancar solo.
     Restart-Service -Name $svc.Name -Force -ErrorAction SilentlyContinue
-    $deadline = (Get-Date).AddSeconds(20)
-    while ((Get-Date) -lt $deadline) {
-      $svc = Get-RdSvc
-      if ($svc -and $svc.Status -eq 'Running') { break }
-      Start-Sleep -Milliseconds 800
-    }
-    Write-Output "RESTARTED service=$($svc.Status)"
+    Write-Output "RESTARTED service=$((Get-RdSvc).Status)"
   } else {
     Write-Output 'WARN no-service-to-restart'
   }
@@ -184,12 +182,6 @@ if ($svc) {
   $svc = Get-RdSvc
   if ($svc -and $svc.Status -ne 'Running') {
     Start-Service -Name $svcName -ErrorAction SilentlyContinue
-    $deadline = (Get-Date).AddSeconds(20)
-    while ((Get-Date) -lt $deadline) {
-      $svc = Get-RdSvc
-      if ($svc -and $svc.Status -eq 'Running') { break }
-      Start-Sleep -Milliseconds 800
-    }
   }
   Write-Output "SERVICE hardened start=auto status=$((Get-RdSvc).Status)"
 } else {
@@ -210,17 +202,14 @@ if ((Test-Path $Installed) -and $RdPassword) {
     $svcName = if ($svc) { $svc.Name } else { 'RustDesk' }
     Start-Service -Name $svcName -ErrorAction SilentlyContinue
   }
-  $deadline = (Get-Date).AddSeconds(30)
-  while ((Get-Date) -lt $deadline) {
-    $svc = Get-RdSvc
-    if ($svc -and $svc.Status -eq 'Running') { break }
-    Start-Sleep -Milliseconds 800
-  }
-  # Un par de intentos: el servicio puede tardar en abrir el canal IPC.
-  for ($i = 0; $i -lt 3; $i++) {
-    Start-Process -FilePath $Installed -ArgumentList '--password', $RdPassword -Wait -WindowStyle Hidden -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
-  }
+  # NON-BLOCKING a proposito: este script corre dentro del instalador NSIS
+  # (nsExec::ExecToLog BLOQUEA hasta que termina). `--password` con -Wait podia
+  # colgar el instalador -> la caja quedaba sin acceso directo. Se dispara sin
+  # -Wait un par de veces con esperas cortas; el modo permanente + la clave ya
+  # quedaron en el TOML por archivo, y el arranque de la app reintenta.
+  Start-Process -FilePath $Installed -ArgumentList '--password', $RdPassword -WindowStyle Hidden -ErrorAction SilentlyContinue
+  Start-Sleep -Seconds 2
+  Start-Process -FilePath $Installed -ArgumentList '--password', $RdPassword -WindowStyle Hidden -ErrorAction SilentlyContinue
   Write-Output 'PASSWORD set-attempted'
 }
 
