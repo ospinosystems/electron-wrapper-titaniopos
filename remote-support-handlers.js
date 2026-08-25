@@ -69,7 +69,7 @@ const RUSTDESK_CONFIG = `host=${RUSTDESK_HOST},key=${RUSTDESK_KEY}`;
 // después de un `--config` que NUNCA tocaba la config del SERVICIO: sin
 // distinguir el método, esa marca falsa hace que la corrección se salte a sí
 // misma para siempre. Al cambiar de mecanismo hay que cambiar este valor.
-const SERVER_KEY_METHOD = 'service-toml';
+const SERVER_KEY_METHOD = 'service-toml-v2';
 
 // Nombre de exe que "bakea" el servidor: RustDesk lee host/key de su propio
 // nombre de archivo y los aplica al instalar (también al servicio). Método
@@ -354,7 +354,12 @@ for ($i = 0; $i -lt 8 -and -not $result.id; $i++) {
 }
 
 # Exito = servicio instalado. El ID es secundario: la app lo resuelve con --get-id.
-$result.ok = $result.installed
+# Éxito = la key llegó de verdad al SERVICIO, no solo que el servicio exista.
+# Marcar ok por 'installed' a secas dejaba cajas con la key vieja anotadas como
+# al día, y ensureServerKeyUpToDate ya no reintentaba (mismo bug que reconfigure).
+$result.ok = $result.installed -and
+  ($result.applyConfig -match 'PATCHED|already-current') -and
+  -not ($result.applyConfig -match 'FAIL')
 `;
 }
 
