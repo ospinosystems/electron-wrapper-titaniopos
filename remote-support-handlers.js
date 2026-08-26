@@ -724,6 +724,18 @@ function registerRemoteSupportHandlers(app) {
 
   // Conecta DESDE esta máquina (soporte) hacia el ID de una caja. Usa el exe
   // con host/key bakeados para que ESTA máquina también apunte al self-host.
+  // Estado en línea de las cajas directo desde el servidor RustDesk (hbbs), sin
+  // tocar el backend del POS. El panel lo usa para pintar quién está conectable.
+  ipcMain.handle('remote-support:online-status', async (_event, ids) => {
+    try {
+      const { onlineStatus } = require('./rustdesk-online-status');
+      return await onlineStatus(Array.isArray(ids) ? ids : []);
+    } catch (e) {
+      console.warn('[REMOTE] online-status falló:', e && e.message);
+      return {};
+    }
+  });
+
   ipcMain.handle('remote-support:connect', async (_event, id) => {
     const base = getRustdeskPath(app);
     if (!base) return { success: false, error: 'RustDesk no está disponible en esta máquina.' };

@@ -503,6 +503,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   remoteSupportOpen: () => ipcRenderer.invoke('remote-support:open'),
   /** Conecta desde esta máquina a un ID remoto (soporte). */
   remoteSupportConnect: (id) => ipcRenderer.invoke('remote-support:connect', id),
+  rustdeskOnlineStatus: (ids) => ipcRenderer.invoke('remote-support:online-status', ids),
 
   // ==================== DRIVERS DE IMPRESORA ====================
   /** Estado: { available: { thermal, label, remove } }. */
