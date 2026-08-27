@@ -208,17 +208,49 @@ function getSettingsPath(app) {
 /**
  * @returns {typeof DEFAULT_SETTINGS}
  */
+// Lee y parsea un JSON; null si no existe, está vacío o corrupto.
+function readJsonOrNull(p) {
+  try {
+    if (!fs.existsSync(p)) return null;
+    const data = fs.readFileSync(p, 'utf-8').trim();
+    return data ? JSON.parse(data) : null;
+  } catch (e) {
+    console.error('[SETTINGS] Error leyendo', p, ':', e.message);
+    return null;
+  }
+}
+
+// Escritura DURABLE: tmp + fsync + rename (nunca queda un archivo a medias) y el
+// último contenido válido se conserva como .prev. Un corte de luz durante
+// writeFileSync dejaba el JSON vacío/truncado → la caja arrancaba con DEFAULTS
+// (fiscal apagada, COM1, sin tiquera) = "se desconfiguró sola".
+function writeJsonDurable(p, obj) {
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  const json = JSON.stringify(obj, null, 2);
+  const tmp = `${p}.tmp`;
+  const fd = fs.openSync(tmp, 'w');
+  try {
+    fs.writeSync(fd, json, 0, 'utf-8');
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  fs.renameSync(tmp, p);
+  // Respaldo = el estado recién escrito (válido por construcción). Si el
+  // principal se pierde/corrompe, readSettings vuelve a este.
+  try { fs.copyFileSync(p, `${p}.prev`); } catch (_) { /* respaldo best-effort */ }
+}
+
 function readSettings(app) {
   const p = getSettingsPath(app);
-  try {
-    if (fs.existsSync(p)) {
-      const data = fs.readFileSync(p, 'utf-8').trim();
-      if (data) {
-        return normalizeSettings(JSON.parse(data));
-      }
-    }
-  } catch (e) {
-    console.error('[SETTINGS] Error leyendo:', e);
+  const main = readJsonOrNull(p);
+  if (main) return normalizeSettings(main);
+  // Principal ausente/vacío/corrupto: recuperar desde el respaldo .prev.
+  const prev = readJsonOrNull(`${p}.prev`);
+  if (prev) {
+    console.warn('[SETTINGS] titaniopos-settings.json inválido; restaurado desde .prev');
+    try { writeJsonDurable(p, normalizeSettings(prev)); } catch (_) { /* se reintenta en el próximo write */ }
+    return normalizeSettings(prev);
   }
   return clone(DEFAULT_SETTINGS);
 }
@@ -229,9 +261,7 @@ function writeSettings(app, next) {
     next = rest;
   }
   const normalized = normalizeSettings(next);
-  const p = getSettingsPath(app);
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(normalized, null, 2), 'utf-8');
+  writeJsonDurable(getSettingsPath(app), normalized);
   return normalized;
 }
 
@@ -245,9 +275,7 @@ function readFiscalResponsesFile(app) {
 }
 
 function writeFiscalResponsesFile(app, responses) {
-  const p = getFiscalResponsesPath(app);
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(Array.isArray(responses) ? responses : [], null, 2), 'utf-8');
+  writeJsonDurable(getFiscalResponsesPath(app), Array.isArray(responses) ? responses : []);
 }
 
 /**

@@ -28,19 +28,72 @@ let serverStartAttempts = 0;
 const MAX_START_ATTEMPTS = 3;
 
 // Obtener rutas
-const getFiscalServerDir = () => {
-  // En producción (empaquetado), resourcesPath apunta a la carpeta real fuera del .asar
-  // Debe tener prioridad porque __dirname dentro de .asar no es accesible por Python
-  if (process.resourcesPath) {
-    const prodPath = path.join(process.resourcesPath, 'fiscal-server');
-    if (fs.existsSync(prodPath)) {
-      return prodPath;
-    }
-  }
+const isPackagedApp = () => {
+  try { return require('electron').app.isPackaged === true; } catch (_) { return false; }
+};
 
-  // En desarrollo, usar la carpeta del proyecto
-  const devPath = path.join(__dirname, 'fiscal-server');
-  return devPath;
+// Directorio escribible por caja (Puerto.dat, Factura.txt, data/, logs). Sobrevive
+// a las actualizaciones porque vive en AppData, no en la carpeta de instalación.
+const getRuntimeDir = () => path.join(process.env.APPDATA || os.homedir(), 'TitanioPOS', 'fiscal');
+
+// Archivos sin los cuales el servidor no arranca.
+const REQUIRED_SERVER_FILES = ['fiscal.py', 'tfhka.py'];
+const hasServerFiles = (dir) => {
+  try { return REQUIRED_SERVER_FILES.every((f) => fs.existsSync(path.join(dir, f))); } catch (_) { return false; }
+};
+
+// Copia recursiva que funciona con origen DENTRO del asar (readdir/readFile están
+// parcheados por Electron; fs.cpSync no). Omite caches y datos de runtime.
+const SKIP_COPY = new Set(['__pycache__', 'data', 'Puerto.dat', 'Factura.txt', 'Retorno.txt', 'Status_Error.txt']);
+const copyDirSync = (src, dst) => {
+  fs.mkdirSync(dst, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    if (SKIP_COPY.has(entry.name) || entry.name.endsWith('.pyc') || entry.name.endsWith('.log')) continue;
+    const from = path.join(src, entry.name);
+    const to = path.join(dst, entry.name);
+    if (entry.isDirectory()) copyDirSync(from, to);
+    else fs.writeFileSync(to, fs.readFileSync(from));
+  }
+};
+
+// Auto-reparación: si resources\fiscal-server desapareció (update a medias, borrado
+// manual, antivirus), se restaura desde la copia que viaja DENTRO del asar. Si
+// resources\ no es escribible, se restaura en AppData y se corre desde ahí.
+// Caso real: CAJA 2 (2026-08-27) quedó sin la carpeta y sin facturación fiscal
+// hasta copiarla a mano.
+const restoreFiscalServer = (target) => {
+  const bundled = path.join(__dirname, 'fiscal-server');
+  if (!hasServerFiles(bundled)) {
+    logErr('[FISCAL SERVER] No hay copia empaquetada de fiscal-server en el asar:', bundled);
+    return false;
+  }
+  try {
+    copyDirSync(bundled, target);
+    const ok = hasServerFiles(target);
+    log(`[FISCAL SERVER] fiscal-server restaurado en ${target}: ${ok ? 'OK' : 'INCOMPLETO'}`);
+    return ok;
+  } catch (e) {
+    logErr('[FISCAL SERVER] No se pudo restaurar fiscal-server en', target, ':', e.message);
+    return false;
+  }
+};
+
+const getFiscalServerDir = () => {
+  // En desarrollo, la carpeta del proyecto.
+  if (!isPackagedApp()) return path.join(__dirname, 'fiscal-server');
+
+  // En producción (empaquetado), resourcesPath apunta a la carpeta real fuera del
+  // .asar. Debe usarse porque Python no puede leer dentro del .asar.
+  const prodPath = path.join(process.resourcesPath, 'fiscal-server');
+  if (hasServerFiles(prodPath)) return prodPath;
+
+  log('[FISCAL SERVER] fiscal-server ausente o incompleto en', prodPath, '-> auto-reparación');
+  if (restoreFiscalServer(prodPath)) return prodPath;
+
+  const altPath = path.join(getRuntimeDir(), 'server');
+  if (hasServerFiles(altPath) || restoreFiscalServer(altPath)) return altPath;
+
+  return prodPath; // el chequeo de arranque reportará el script ausente
 };
 
 const getFiscalScript = () => {
@@ -259,11 +312,7 @@ const startFiscalServer = async (options = {}) => {
 
   // Directorio escribible para Factura.txt, Puerto.dat, data/, etc.
   // En producción BASE_DIR vive en Program Files y NO es escribible.
-  const runtimeDir = path.join(
-    process.env.APPDATA || os.homedir(),
-    'TitanioPOS',
-    'fiscal'
-  );
+  const runtimeDir = getRuntimeDir();
   try { fs.mkdirSync(runtimeDir, { recursive: true }); } catch (_) {}
   env.FISCAL_RUNTIME_DIR = runtimeDir;
   log('[FISCAL SERVER] FISCAL_RUNTIME_DIR:', runtimeDir);
@@ -426,4 +475,7 @@ module.exports = {
   getEmbeddedPython,
   getPythonInfo,
   getFiscalServerDir,
+  getRuntimeDir,
+  restoreFiscalServer,
+  hasServerFiles,
 };

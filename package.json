@@ -44,7 +44,14 @@
       "!_view-host/**",
       "!_chat-backup/**",
       "!python-embed/**",
-      "!fiscal-server/**",
+      "!fiscal-server/__pycache__/**",
+      "!fiscal-server/data/**",
+      "!fiscal-server/*.pyc",
+      "!fiscal-server/*.exe",
+      "!fiscal-server/Puerto.dat",
+      "!fiscal-server/Factura.txt",
+      "!fiscal-server/Retorno.txt",
+      "!fiscal-server/Status_Error.txt",
       "!vpos-rest/**",
       "!drivers/**",
       "!**/*.zip",
@@ -66,7 +73,9 @@
         "filter": [
           "**/*",
           "!__pycache__/**",
-          "!*.pyc"
+          "!*.pyc",
+          "!Puerto.dat",
+          "!data/**"
         ]
       },
       {

@@ -76,12 +76,27 @@ PUERTO = int(os.environ.get('FISCAL_SERVER_PORT', 3000))
 #  Puerto COM (Puerto.dat)  y  factura de auditoria (Factura.txt)
 # --------------------------------------------------------------------------
 def get_puerto_dat_path():
+    """Puerto.dat vive SIEMPRE en RUNTIME_DIR (AppData).
+
+    Antes, si no existia en el runtime se usaba (y se ESCRIBIA) el Puerto.dat de
+    BASE_DIR = carpeta de instalacion, que cada actualizacion de la app pisa con
+    el valor empaquetado -> la caja "se desconfiguraba" (COM equivocado) tras cada
+    update. Si hay un legacy, se migra UNA vez al runtime y no se vuelve a usar.
+    """
     runtime_path = os.path.join(RUNTIME_DIR, 'Puerto.dat')
     if os.path.exists(runtime_path):
         return runtime_path
     legacy_path = os.path.join(BASE_DIR, 'Puerto.dat')
-    if os.path.exists(legacy_path) and RUNTIME_DIR != BASE_DIR:
-        return legacy_path
+    if RUNTIME_DIR != BASE_DIR and os.path.exists(legacy_path):
+        try:
+            with open(legacy_path, 'r') as f:
+                val = f.read().strip()
+            if val:
+                with open(runtime_path, 'w') as f:
+                    f.write(val)
+                print(f"[FISCAL] Puerto.dat migrado de {legacy_path} a {runtime_path} ({val})")
+        except Exception as e:
+            print(f"[FISCAL] No se pudo migrar Puerto.dat legacy: {e}")
     return runtime_path
 
 
@@ -962,7 +977,10 @@ def test_print():
     # Formato HKA80: [TaxCode 1][Price 10][Qty 8][Desc <=20]
     tax, price, qty = " ", "0000000100", "00001000"
     desc = f"PRUEBA {short_id}"[:20]
-    lineas = [f"i05Caja: TEST-{short_id[:8]}", f"{tax}{price}{qty}{desc}", "101"]
+    # '199' = cerrar/finalizar el documento. SIN esto la HKA80 paga pero deja la
+    # factura ABIERTA; la siguiente factura real la cancelaba en el pre-flight y
+    # salia "ANULADA" gastando un consecutivo (visto en logs 22/07..05/08/2026).
+    lineas = [f"i05Caja: TEST-{short_id[:8]}", f"{tax}{price}{qty}{desc}", "101", "199"]
 
     # Flujo robusto: recupera un documento abierto de un intento previo (causa del
     # "1ra incompleta / 2da completa"), envía con ACK+reintento y CONFIRMA el cierre.
