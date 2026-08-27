@@ -14,7 +14,7 @@ const net = require('net');
 const HOST = 'rustdesk.titanio-pos.com';
 const PORT = 21116;
 const KEY = 'cpyYPJtZXVO4W3P28t3K1M5RiQxdpBZ+n9p81FmWVIU=';
-const PER_QUERY_TIMEOUT_MS = 3000;
+const PER_QUERY_TIMEOUT_MS = 5000;
 const CACHE_TTL_MS = 12000;
 
 // ── protobuf mínimo ─────────────────────────────────────────────────────────
@@ -90,6 +90,30 @@ function queryOne(id) {
 let cache = { at: 0, map: {} };
 
 /**
+ * Consultas en paralelo pero ACOTADAS. Con la flota entera (170+ IDs) de golpe,
+ * hbbs no acepta tantas conexiones a la vez y más de la mitad vencían por
+ * timeout: el panel mostraba 14 cajas en línea cuando había 40. Medido el
+ * 2026-08-27: todas a la vez con 3 s → 104 timeouts de 170; de 8 en 8 con 5 s
+ * → 2. Lo que sigue en 'unknown' se reintenta una vez.
+ */
+const CONCURRENCY = 8;
+
+async function queryAll(ids) {
+  const out = new Map();
+  let next = 0;
+  const worker = async () => {
+    while (next < ids.length) {
+      const id = ids[next++];
+      let st = await queryOne(id);
+      if (st === 'unknown') st = await queryOne(id);
+      out.set(id, st);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, ids.length) }, worker));
+  return out;
+}
+
+/**
  * @param {string[]} ids
  * @returns {Promise<Record<string,string>>} id → online|offline|unregistered|unknown
  */
@@ -102,7 +126,7 @@ async function onlineStatus(ids) {
   const need = fresh ? clean.filter((id) => !(id in cache.map)) : clean;
 
   if (need.length) {
-    const results = await Promise.all(need.map((id) => queryOne(id).then((st) => [id, st])));
+    const results = await queryAll(need);
     if (!fresh) cache = { at: now, map: {} };
     for (const [id, st] of results) cache.map[id] = st;
     cache.at = cache.at || now;
