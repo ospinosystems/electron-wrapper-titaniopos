@@ -21,6 +21,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   reloadIgnoringCache: () => ipcRenderer.invoke('reload-ignoring-cache'),
 
   /**
+   * Borra el caché HTTP + el almacenamiento local y recarga. Para cuando la
+   * caja queda con datos de Electric que ya no existen en el servidor.
+   * No toca las cookies, así que la sesión del cajero sobrevive.
+   */
+  clearAllCaches: () => ipcRenderer.invoke('maintenance:clear-all-caches'),
+
+  /**
    * Impresión silenciosa con HTML
    * @param {string} html - Contenido HTML a imprimir
    * @param {object} options - Opciones de impresión

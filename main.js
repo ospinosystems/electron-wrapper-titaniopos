@@ -1296,6 +1296,45 @@ ipcMain.handle('reload-ignoring-cache', () => {
   }
 });
 
+// Limpieza completa del estado local de la caja. Nace de un fantasma en
+// Temblador: el POS seguía ofreciendo un inventory_item que ya no existía en
+// Postgres. "Clear site data" de DevTools no lo quitaba porque sólo borra el
+// almacenamiento del sitio; el snapshot de Electric vive en el caché HTTP
+// (max-age de 7 días), que es una capa aparte. Esto borra las dos.
+ipcMain.handle('maintenance:clear-all-caches', async () => {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { success: false, error: 'La ventana principal no está disponible.' };
+  }
+  const ses = mainWindow.webContents.session;
+  const cleared = [];
+  const failed = [];
+
+  // El caché HTTP: aquí es donde quedan los snapshots de Electric.
+  try { await ses.clearCache(); cleared.push('cache-http'); }
+  catch (err) { failed.push(`cache-http: ${err.message}`); }
+
+  // Almacenamiento del sitio. Sin 'cookies': tumbaría la sesión del cajero y
+  // el objetivo es resincronizar, no obligar a volver a entrar.
+  try {
+    await ses.clearStorageData({
+      storages: ['localstorage', 'indexdb', 'cachestorage', 'serviceworkers', 'websql', 'shadercache'],
+    });
+    cleared.push('storage');
+  } catch (err) { failed.push(`storage: ${err.message}`); }
+
+  // Code cache de Chromium: un bundle viejo servido como HTML lo deja podrido.
+  try { await ses.clearCodeCaches({ urls: [] }); cleared.push('code-cache'); }
+  catch (err) { failed.push(`code-cache: ${err.message}`); }
+
+  // Recarga en el siguiente tick para que el renderer alcance a responder el
+  // invoke y pueda mostrar el resultado antes de irse.
+  setTimeout(() => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reloadIgnoringCache();
+  }, 400);
+
+  return { success: failed.length === 0, cleared, failed };
+});
+
 // Auto-actualización: descarga e instalación solo con confirmación (o al cerrar la app)
 // Debe coincidir con build.publish en package.json (solo para mensajes de error)
 const UPDATER_GITHUB_REPO = 'ospinosystems/electron-wrapper-titaniopos';
