@@ -1296,11 +1296,18 @@ ipcMain.handle('reload-ignoring-cache', () => {
   }
 });
 
-// Limpieza completa del estado local de la caja. Nace de un fantasma en
-// Temblador: el POS seguía ofreciendo un inventory_item que ya no existía en
-// Postgres. "Clear site data" de DevTools no lo quitaba porque sólo borra el
-// almacenamiento del sitio; el snapshot de Electric vive en el caché HTTP
-// (max-age de 7 días), que es una capa aparte. Esto borra las dos.
+// Limpieza del caché de la caja. Nace de un fantasma en Temblador: el POS
+// seguía ofreciendo un inventory_item que ya no existía en Postgres.
+//
+// OJO con el reparto de responsabilidades: el catálogo vive en IndexedDB
+// (Dexie) y NO se borra aquí. Un deleteDatabase con la página abierta y la
+// conexión de Dexie viva queda bloqueado y no borra nada. Lo hace el renderer
+// con clearDatabase(), que primero corta los streams de Electric y cierra la
+// conexión. Aquí sólo van las capas que el renderer no puede tocar.
+//
+// Tampoco se borra 'indexdb' en bloque: se llevaría por delante
+// titaniopos-orders-<tienda>, con las ventas que todavía no se han
+// sincronizado. Ni 'localstorage', que guarda la sesión y la config de la caja.
 ipcMain.handle('maintenance:clear-all-caches', async () => {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return { success: false, error: 'La ventana principal no está disponible.' };
@@ -1313,25 +1320,18 @@ ipcMain.handle('maintenance:clear-all-caches', async () => {
   try { await ses.clearCache(); cleared.push('cache-http'); }
   catch (err) { failed.push(`cache-http: ${err.message}`); }
 
-  // Almacenamiento del sitio. Sin 'cookies': tumbaría la sesión del cajero y
-  // el objetivo es resincronizar, no obligar a volver a entrar.
+  // Caches de workbox y service workers huérfanos.
   try {
-    await ses.clearStorageData({
-      storages: ['localstorage', 'indexdb', 'cachestorage', 'serviceworkers', 'websql', 'shadercache'],
-    });
-    cleared.push('storage');
-  } catch (err) { failed.push(`storage: ${err.message}`); }
+    await ses.clearStorageData({ storages: ['cachestorage', 'serviceworkers', 'shadercache'] });
+    cleared.push('cachestorage');
+  } catch (err) { failed.push(`cachestorage: ${err.message}`); }
 
   // Code cache de Chromium: un bundle viejo servido como HTML lo deja podrido.
   try { await ses.clearCodeCaches({ urls: [] }); cleared.push('code-cache'); }
   catch (err) { failed.push(`code-cache: ${err.message}`); }
 
-  // Recarga en el siguiente tick para que el renderer alcance a responder el
-  // invoke y pueda mostrar el resultado antes de irse.
-  setTimeout(() => {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reloadIgnoringCache();
-  }, 400);
-
+  // Sin recarga automática: la dispara el renderer cuando ya terminó de borrar
+  // su parte. Recargar aquí a ciegas cortaba el clearDatabase() a media faena.
   return { success: failed.length === 0, cleared, failed };
 });
 
