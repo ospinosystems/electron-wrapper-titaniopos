@@ -56,9 +56,32 @@ const loadPrintShareConfig = (app) => normalizePrintShare(readSettings(app).prin
 
 const savePrintShareConfig = (app, partial) => {
   const s = readSettings(app);
+  // Base SIEMPRE en formato flex: así un partial legado se aplica sobre el
+  // comportamiento efectivo actual, no sobre el crudo viejo.
+  const current = normalizePrintShare(s.printShare);
+  const p = { ...(partial && typeof partial === 'object' ? partial : {}) };
+
+  // Partial de una vista vieja (manda mode sin shareEnabled): traducirlo al
+  // modelo flex con la semántica excluyente que esa vista espera.
+  if (typeof p.shareEnabled !== 'boolean' && typeof p.mode === 'string') {
+    if (p.mode === 'share') {
+      p.shareEnabled = true;
+    } else if (p.mode === 'receive') {
+      p.shareEnabled = false;
+      p.useRemoteTicket = p.useRemoteTicket !== false;
+      p.useRemoteFiscal = p.useRemoteFiscal === true;
+      if (typeof p.useRemoteLabel !== 'boolean') p.useRemoteLabel = true;
+    } else {
+      p.shareEnabled = false;
+      p.useRemoteTicket = false;
+      p.useRemoteFiscal = false;
+      p.useRemoteLabel = false;
+    }
+  }
+
   s.printShare = normalizePrintShare({
-    ...s.printShare,
-    ...(partial && typeof partial === 'object' ? partial : {}),
+    ...current,
+    ...p,
     lastUpdated: new Date().toISOString(),
   });
   writeSettings(app, s);
@@ -114,12 +137,20 @@ function buildHealthPayload(app) {
   const thermal = settings.thermalPrinter || {};
   const label = settings.labelPrinter || {};
   const fiscal = settings.fiscal || {};
+  const share = normalizePrintShare(settings.printShare);
   return {
     ok: true,
     app: 'titaniopos-print-share',
     version: app.getVersion(),
     hostname: os.hostname(),
-    mode: normalizePrintShare(settings.printShare).mode,
+    // 'share' mientras el servidor esté expuesto: lo exige el checkHost de los
+    // clientes viejos. El detalle por impresora va en `shared`.
+    mode: share.mode,
+    shared: {
+      ticket: share.shareTicket,
+      fiscal: share.shareFiscal,
+      label: share.shareLabel,
+    },
     ticket: {
       configured: Boolean(thermal.printerName),
       printerName: thermal.printerName || '',
@@ -234,6 +265,17 @@ function startShareServer(app, port) {
                 respond(400, { success: false, error: 'Falta content' });
                 return;
               }
+              // Respeta lo que ESTA caja decidió compartir (modelo flex).
+              const shareCfg = loadPrintShareConfig(app);
+              if (isLabel ? !shareCfg.shareLabel : !shareCfg.shareTicket) {
+                respond(403, {
+                  success: false,
+                  error: isLabel
+                    ? 'La caja anfitriona no comparte su impresora de etiquetas.'
+                    : 'La caja anfitriona no comparte su impresora de tickets.',
+                });
+                return;
+              }
               let result;
               if (isLabel) {
                 // Etiqueta: HTML renderizado por el cliente con las dims de ESTA
@@ -311,7 +353,7 @@ function stopShareServer() {
 
 async function applyServerState(app) {
   const cfg = loadPrintShareConfig(app);
-  if (cfg.mode === 'share') {
+  if (cfg.shareEnabled) {
     if (shareServer && shareServerPort !== cfg.sharePort) await stopShareServer();
     if (!shareServer) return startShareServer(app, cfg.sharePort);
     return { success: true, port: shareServerPort };
@@ -452,10 +494,14 @@ function renameComputer(newName) {
 
 // ==================== CLIENTE (modo 'receive') ====================
 
-/** {hostIp, hostPort} si esta caja manda los TICKETS a otra; null si no. */
+/**
+ * {hostIp, hostPort} si esta caja manda los TICKETS a otra; null si no.
+ * Los flags useRemote* ya vienen absolutos de normalizePrintShare (el modelo
+ * flex no depende de mode: una caja puede compartir y consumir a la vez).
+ */
 function getRemoteTicketTarget(app) {
   const cfg = loadPrintShareConfig(app);
-  if (cfg.mode === 'receive' && cfg.useRemoteTicket && cfg.hostIp) {
+  if (cfg.useRemoteTicket && cfg.hostIp) {
     return { hostIp: cfg.hostIp, hostPort: cfg.hostPort };
   }
   return null;
@@ -499,7 +545,7 @@ async function sendRemotePrint(target, content, options = {}) {
 /** {hostIp, hostPort} si esta caja manda las ETIQUETAS a otra; null si no. */
 function getRemoteLabelTarget(app) {
   const cfg = loadPrintShareConfig(app);
-  if (cfg.mode === 'receive' && cfg.useRemoteLabel && cfg.hostIp) {
+  if (cfg.useRemoteLabel && cfg.hostIp) {
     return { hostIp: cfg.hostIp, hostPort: cfg.hostPort };
   }
   return null;
@@ -542,7 +588,7 @@ async function sendRemoteLabelPrint(target, content) {
 /** URL del servidor fiscal remoto si esta caja usa la fiscal de otra; null si no. */
 function getRemoteFiscalTarget(app) {
   const cfg = loadPrintShareConfig(app);
-  if (!(cfg.mode === 'receive' && cfg.useRemoteFiscal && cfg.hostIp)) return null;
+  if (!(cfg.useRemoteFiscal && cfg.hostIp)) return null;
   const port =
     (hostFiscalMem.params && hostFiscalMem.params.port) ||
     (cfg.hostFiscal && cfg.hostFiscal.port) ||
@@ -560,6 +606,19 @@ function persistHostFiscal(app, params) {
   } catch (e) {
     console.warn('[PRINT-SHARE] No se pudo persistir hostFiscal:', e.message);
   }
+}
+
+/**
+ * Etiquetas según el /health completo: si la anfitriona dejó de COMPARTIR su
+ * etiquetera (shared.label false, modelo flex), para el cliente cuenta como no
+ * disponible aunque esté configurada allá.
+ */
+function healthLabelOf(data) {
+  if (!data) return null;
+  if (data.shared && data.shared.label === false) {
+    return { ...(data.label || {}), configured: false };
+  }
+  return data.label;
 }
 
 /** Guarda el snapshot de etiquetas de la anfitriona (memoria + settings). */
@@ -585,7 +644,7 @@ function captureHostLabel(app, rawLabel, at) {
  */
 async function getRemoteLabelParams(app, { refresh = false } = {}) {
   const cfg = loadPrintShareConfig(app);
-  if (!(cfg.mode === 'receive' && cfg.useRemoteLabel && cfg.hostIp)) return null;
+  if (!(cfg.useRemoteLabel && cfg.hostIp)) return null;
   const now = Date.now();
   if (!refresh && hostLabelMem.params && now - hostLabelMem.at < HOST_FISCAL_TTL_MS) {
     return hostLabelMem.params;
@@ -603,7 +662,7 @@ async function getRemoteLabelParams(app, { refresh = false } = {}) {
       timeoutMs: HEALTH_TIMEOUT_MS,
     });
     if (statusCode === 200 && data) {
-      captureHostLabel(app, data.label, now);
+      captureHostLabel(app, healthLabelOf(data), now);
       // Ya que el /health vino completo, refrescar también el snapshot fiscal.
       if (data.fiscal) {
         const params = pickHostFiscalParams(data.fiscal);
@@ -628,7 +687,7 @@ async function getRemoteLabelParams(app, { refresh = false } = {}) {
  */
 async function getRemoteFiscalParams(app, { refresh = false } = {}) {
   const cfg = loadPrintShareConfig(app);
-  if (!(cfg.mode === 'receive' && cfg.useRemoteFiscal && cfg.hostIp)) return null;
+  if (!(cfg.useRemoteFiscal && cfg.hostIp)) return null;
   const now = Date.now();
   if (!refresh && hostFiscalMem.params && now - hostFiscalMem.at < HOST_FISCAL_TTL_MS) {
     return hostFiscalMem.params;
@@ -651,7 +710,7 @@ async function getRemoteFiscalParams(app, { refresh = false } = {}) {
       hostFiscalMem = { params, at: now };
       hostFiscalFailAt = 0;
       persistHostFiscal(app, params);
-      captureHostLabel(app, data.label, now);
+      captureHostLabel(app, healthLabelOf(data), now);
       return params;
     }
     hostFiscalFailAt = now;
@@ -694,7 +753,7 @@ async function checkHost(app, hostIp, hostPort) {
     if (!cfg.hostIp || cfg.hostIp === ip) {
       hostFiscalMem = { params, at: Date.now() };
       persistHostFiscal(app, params);
-      captureHostLabel(app, data.label, Date.now());
+      captureHostLabel(app, healthLabelOf(data), Date.now());
     }
     return { success: true, health: data, fiscalReachable };
   } catch (e) {

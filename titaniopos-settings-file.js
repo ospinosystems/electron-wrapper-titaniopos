@@ -96,31 +96,36 @@ const DEFAULT_MEGA_POS = {
   lastConfigUpdate: '',
 };
 
-// Impresión en red entre cajas.
-//   mode 'share'   — esta caja expone sus impresoras (ticket + fiscal) en la LAN
-//                    vía un mini servidor HTTP (POST /print, GET /health).
-//   mode 'receive' — esta caja manda los tickets a la caja anfitriona (hostIp) y,
-//                    si useRemoteFiscal, también las peticiones fiscales van al
-//                    servidor fiscal de la anfitriona.
-//   hostFiscal     — último snapshot de los parámetros fiscales de la anfitriona
-//                    (fiscalMode, barcode, formato, serial, puerto flask); se usa
-//                    para imprimir con el formato de ALLÁ aunque no responda el
-//                    /health en el momento de la venta.
+// Impresión en red entre cajas — modelo FLEX (por impresora, no excluyente).
+//
+// Una caja puede compartir y recibir A LA VEZ, y elegir por impresora: p. ej.
+// compartir su etiquetera mientras factura por la máquina fiscal de otra caja.
+//   shareEnabled + shareTicket/shareFiscal/shareLabel — qué expone esta caja
+//     en la LAN vía el mini servidor HTTP (POST /print, /print-label, GET /health).
+//   useRemoteTicket/useRemoteFiscal/useRemoteLabel + hostIp — qué manda esta
+//     caja a la anfitriona. Son ABSOLUTOS (sin puerta de mode).
+//   mode — resumen LEGADO derivado ('share' si comparte; si no, 'receive' si
+//     consume algo remoto). Lo leen builds viejas de la caja y el checkHost de
+//     los clientes; no es fuente de verdad en el formato flex.
+//   hostFiscal/hostLabel — último snapshot de los parámetros de la anfitriona
+//     (formato fiscal / dimensiones de etiqueta) para operar aunque el /health
+//     no responda en el momento.
+//
+// Migración: una config guardada por versiones anteriores (sin shareEnabled)
+// se traduce en normalizePrintShare preservando EXACTAMENTE su comportamiento.
 const DEFAULT_PRINT_SHARE = {
   mode: 'off',
+  shareEnabled: false,
+  shareTicket: true,
+  shareFiscal: true,
+  shareLabel: true,
   sharePort: 3020,
   hostIp: '',
   hostPort: 3020,
-  useRemoteTicket: true,
+  useRemoteTicket: false,
   useRemoteFiscal: false,
-  // Etiquetas a la anfitriona. Default ON porque solo entra en juego cuando la
-  // caja NO tiene impresora de etiquetas local (el front imprime local si la
-  // tiene): compartir "simplemente funciona" igual que con la térmica.
-  useRemoteLabel: true,
+  useRemoteLabel: false,
   hostFiscal: null,
-  // Último snapshot de la impresora de etiquetas de la anfitriona (dimensiones
-  // y layout): el cliente renderiza el sticker con el formato de ALLÁ aunque el
-  // /health no responda en el momento.
   hostLabel: null,
   lastUpdated: null,
 };
@@ -204,19 +209,56 @@ function normalizeMegaPos(raw) {
 }
 
 function normalizePrintShare(raw) {
-  const base = { ...DEFAULT_PRINT_SHARE, ...(raw || {}) };
+  const base = raw && typeof raw === 'object' ? raw : {};
   const toPort = (v, def) => {
     const n = parseInt(v, 10);
     return Number.isFinite(n) && n > 0 && n <= 65535 ? n : def;
   };
+  const hostIp = String(base.hostIp || '').trim();
+  const legacyMode = base.mode === 'share' || base.mode === 'receive' ? base.mode : 'off';
+  // shareEnabled presente = formato flex (lo escribe la UI/save nuevos).
+  const isFlex = typeof base.shareEnabled === 'boolean';
+
+  let shareEnabled, shareTicket, shareFiscal, shareLabel;
+  let useRemoteTicket, useRemoteFiscal, useRemoteLabel;
+  if (isFlex) {
+    shareEnabled = base.shareEnabled === true;
+    shareTicket = base.shareTicket !== false;
+    shareFiscal = base.shareFiscal !== false;
+    shareLabel = base.shareLabel !== false;
+    useRemoteTicket = base.useRemoteTicket === true;
+    useRemoteFiscal = base.useRemoteFiscal === true;
+    useRemoteLabel = base.useRemoteLabel === true;
+  } else {
+    // Config de versiones anteriores (modo excluyente): traducirla SIN cambiar
+    // el comportamiento que esa caja ya tenía. En 'share' no se consumía nada
+    // remoto aunque quedara un hostIp guardado; en 'receive' regían los
+    // toggles con sus defaults históricos (ticket/etiquetas ON, fiscal OFF).
+    shareEnabled = legacyMode === 'share';
+    shareTicket = true;
+    shareFiscal = true;
+    shareLabel = true;
+    useRemoteTicket = legacyMode === 'receive' && base.useRemoteTicket !== false;
+    useRemoteFiscal = legacyMode === 'receive' && base.useRemoteFiscal === true;
+    useRemoteLabel = legacyMode === 'receive' && base.useRemoteLabel !== false;
+  }
+
+  const consumesRemote = (useRemoteTicket || useRemoteFiscal || useRemoteLabel) && hostIp !== '';
+
   return {
-    mode: base.mode === 'share' || base.mode === 'receive' ? base.mode : 'off',
+    // Resumen legado para builds viejas: 'share' gana (era el comportamiento
+    // excluyente); una caja que solo consume queda como 'receive'.
+    mode: shareEnabled ? 'share' : consumesRemote ? 'receive' : 'off',
+    shareEnabled,
+    shareTicket,
+    shareFiscal,
+    shareLabel,
     sharePort: toPort(base.sharePort, DEFAULT_PRINT_SHARE.sharePort),
-    hostIp: String(base.hostIp || '').trim(),
+    hostIp,
     hostPort: toPort(base.hostPort, DEFAULT_PRINT_SHARE.hostPort),
-    useRemoteTicket: base.useRemoteTicket !== false,
-    useRemoteFiscal: base.useRemoteFiscal === true,
-    useRemoteLabel: base.useRemoteLabel !== false,
+    useRemoteTicket,
+    useRemoteFiscal,
+    useRemoteLabel,
     hostFiscal: base.hostFiscal && typeof base.hostFiscal === 'object' ? base.hostFiscal : null,
     hostLabel: base.hostLabel && typeof base.hostLabel === 'object' ? base.hostLabel : null,
     lastUpdated: base.lastUpdated ?? null,
