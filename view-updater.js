@@ -220,8 +220,15 @@ function identityHeaders() {
   try {
     const { readSettings } = require('./titaniopos-settings-file');
     const s = readSettings(app) || {};
-    const code = String(s.storeCode || '').trim();
-    const slot = String(s.cashRegisterNumber || '').replace(/\D/g, '');
+    // La identidad vive en caja.*; la sección fiscal también la trae (config de
+    // facturación) y sirve de respaldo; la raíz es el formato viejo. Leer solo
+    // la raíz fue el bug: la normalización de la 1.0.214 dejó de escribir ahí
+    // (y borraba storeCode del disco), así que la flota entera pasó a pedir
+    // latest.json sin identidad y los envíos dirigidos dependían solo de la IP.
+    const caja = s.caja || {};
+    const fiscal = s.fiscal || {};
+    const code = String(caja.storeCode || fiscal.storeCode || s.storeCode || '').trim();
+    const slot = String(caja.cashRegisterNumber || fiscal.cashRegisterNumber || s.cashRegisterNumber || '').replace(/\D/g, '');
     if (!code || !slot) return {};
     return { 'X-Store-Code': code, 'X-Register-Slot': slot };
   } catch (_) {

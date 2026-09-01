@@ -19,6 +19,10 @@ const FISCAL_RESPONSES_FILE = 'fiscal-responses.json';
 
 const DEFAULT_CAJA = {
   cashRegisterNumber: null,
+  // Código de la tienda: lo usa view-updater para identificar la caja en el
+  // latest.json (X-Store-Code). Con él, los envíos dirigidos no dependen de la
+  // IP; sin él, una tienda detrás de Cloudflare/WARP no recibe nada dirigido.
+  storeCode: null,
   pinpadIp: null,
   operationMode: 'POS',
 };
@@ -150,6 +154,11 @@ function normalizeCaja(raw) {
   const base = { ...DEFAULT_CAJA, ...raw };
   const out = {
     cashRegisterNumber: base.cashRegisterNumber ?? null,
+    // OJO: conservar SIEMPRE. La normalización de la 1.0.214 no lo incluía y,
+    // como readSettings reescribe el archivo normalizado, cada arranque BORRABA
+    // el storeCode del disco → identityHeaders() quedó vacío en toda la flota y
+    // los envíos dirigidos pasaron a depender solo de la IP.
+    storeCode: base.storeCode ?? null,
     pinpadIp: base.pinpadIp ?? null,
     operationMode: base.operationMode === 'SELF_SERVICE' ? 'SELF_SERVICE' : 'POS',
   };
@@ -267,9 +276,14 @@ function normalizePrintShare(raw) {
 
 function normalizeSettings(raw) {
   if (!raw || typeof raw !== 'object') return clone(DEFAULT_SETTINGS);
+  // Formato viejo (pre-unificación): storeCode/cashRegisterNumber vivían en la
+  // raíz del JSON. Se migran a la sección caja sin pisar lo que ya tenga.
+  const caja = { ...(raw.caja || {}) };
+  if (caja.storeCode == null && raw.storeCode != null) caja.storeCode = raw.storeCode;
+  if (caja.cashRegisterNumber == null && raw.cashRegisterNumber != null) caja.cashRegisterNumber = raw.cashRegisterNumber;
   return {
     schemaVersion: raw.schemaVersion ?? 1,
-    caja: normalizeCaja(raw.caja || {}),
+    caja: normalizeCaja(caja),
     thermalPrinter: normalizeThermal(raw.thermalPrinter || raw.printer || {}),
     labelPrinter: normalizeLabelPrinter(raw.labelPrinter || {}),
     fiscal: normalizeFiscal(raw.fiscal || {}),
