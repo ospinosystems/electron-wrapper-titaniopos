@@ -1209,6 +1209,58 @@ const registerFiscalHandlers = (app) => {
     }
   });
 
+  /**
+   * Reimpresión de reportes Z desde la memoria fiscal, por rango de fechas
+   * (I2A + DDMMYY inicio + DDMMYY fin) o de números de Z (I3A + 6+6 dígitos).
+   * Viaja por la MISMA cola del fiscal-server que las facturas y los X/Z
+   * (type reportefiscal envía el comando textual), así que respeta el turno
+   * de impresión y el ruteo de la fiscal en red (resolveFiscalConfig).
+   */
+  ipcMain.handle('fiscal-send-report-z-range', async (event, by, start, end) => {
+    try {
+      const config = await resolveFiscalConfig(app);
+      console.log('[FISCAL] Report Z range requested.', by, start, end, 'serverUrl:', config.serverUrl);
+
+      if (!config.enabled || !config.fiscalMode) {
+        return { success: true, message: 'Reimpresión de Z simulada (modo no fiscal)', simulated: true };
+      }
+
+      let cmd;
+      if (by === 'date') {
+        const s = String(start || '');
+        const e = String(end || '');
+        if (!/^\d{6}$/.test(s) || !/^\d{6}$/.test(e)) {
+          return { success: false, error: 'Fechas inválidas: deben ser DDMMYY (6 dígitos).' };
+        }
+        cmd = `I2A${s}${e}`;
+      } else {
+        const s = parseInt(start, 10);
+        const e = parseInt(end, 10);
+        if (!Number.isInteger(s) || !Number.isInteger(e) || s < 1 || e < s) {
+          return { success: false, error: 'Rango de números de Z inválido.' };
+        }
+        cmd = `I3A${String(s).padStart(6, '0')}${String(e).padStart(6, '0')}`;
+      }
+
+      const result = await makeFiscalRequest(`${config.serverUrl}/fiscal`, 'POST', {
+        parametros: cmd,
+        type: 'reportefiscal',
+      });
+      console.log('[FISCAL] Report Z range statusCode:', result.statusCode, 'data:', JSON.stringify(result.data));
+
+      if (result.statusCode === 409) {
+        return { success: true, message: 'Esa reimpresión ya se pidió hace un momento (duplicada)', duplicated: true };
+      }
+      if (result.statusCode === 200 && result.data?.status === 'ok') {
+        return { success: true, message: 'Reimpresión de Z enviada a la máquina fiscal', job_id: result.data.job_id };
+      }
+      return { success: false, error: result.data?.message || 'Error al pedir la reimpresión de Z' };
+    } catch (error) {
+      console.error('[FISCAL] Report Z range error:', error.message);
+      return { success: false, error: error.message };
+    }
+  });
+
   // Documento NO FISCAL (presupuesto / comprobante interno). Recibe un array de
   // líneas de texto ya formateadas; el server las envuelve en 80/81/82. NO asigna
   // número fiscal ni afecta la memoria fiscal.

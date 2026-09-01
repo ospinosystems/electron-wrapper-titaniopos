@@ -388,7 +388,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @returns {Promise<{success: boolean, error?: string}>}
    */
   fiscalSendReportZ: () => ipcRenderer.invoke('fiscal-send-report-z'),
-  
+
+  /**
+   * Reimprime reportes Z de la memoria fiscal por rango.
+   * @param {'date'|'number'} by - 'date' usa DDMMYY (I2A), 'number' usa el nº de Z (I3A)
+   * @param {string|number} start
+   * @param {string|number} end
+   * @returns {Promise<{success: boolean, message?: string, job_id?: string, error?: string}>}
+   */
+  fiscalSendReportZRange: (by, start, end) => ipcRenderer.invoke('fiscal-send-report-z-range', by, start, end),
+
   /**
    * Configure COM port for fiscal machine
    * @param {string} comPort - COM port (e.g., 'COM1')
