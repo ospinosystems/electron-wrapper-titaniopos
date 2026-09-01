@@ -60,6 +60,22 @@ const DEFAULT_UI = {
   reduceAnimations: false,
 };
 
+// Impresora de etiquetas (RC-8610). La config canónica vive en el FRONT
+// (useUserConfigStore.labelPrinterConfig, localStorage) porque la eligió así la
+// primera versión; este espejo en el settings existe para que el proceso main
+// pueda imprimir etiquetas SIN pasar por el renderer — lo necesita el servidor
+// de impresión en red (/print-label) cuando otra caja manda una etiqueta. El
+// front lo sincroniza al guardar la config y al imprimir en local.
+const DEFAULT_LABEL_PRINTER = {
+  printerName: '',
+  usbPort: 'USB003',
+  method: 'native',
+  widthMm: 57,
+  heightMm: 44,
+  layout: 'classic',
+  lastUpdated: null,
+};
+
 // Smart POS (Megasoft VPOS RESTService). Estos valores se escriben en
 // vpos-rest/conf/vposconf.ini antes de arrancar el servicio:
 //   [server] host/port  -> Merchant Server de Megasoft (adquiriente)
@@ -97,7 +113,15 @@ const DEFAULT_PRINT_SHARE = {
   hostPort: 3020,
   useRemoteTicket: true,
   useRemoteFiscal: false,
+  // Etiquetas a la anfitriona. Default ON porque solo entra en juego cuando la
+  // caja NO tiene impresora de etiquetas local (el front imprime local si la
+  // tiene): compartir "simplemente funciona" igual que con la térmica.
+  useRemoteLabel: true,
   hostFiscal: null,
+  // Último snapshot de la impresora de etiquetas de la anfitriona (dimensiones
+  // y layout): el cliente renderiza el sticker con el formato de ALLÁ aunque el
+  // /health no responda en el momento.
+  hostLabel: null,
   lastUpdated: null,
 };
 
@@ -105,6 +129,7 @@ const DEFAULT_SETTINGS = {
   schemaVersion: 1,
   caja: { ...DEFAULT_CAJA },
   thermalPrinter: { ...DEFAULT_THERMAL },
+  labelPrinter: { ...DEFAULT_LABEL_PRINTER },
   fiscal: { ...DEFAULT_FISCAL },
   ui: { ...DEFAULT_UI },
   megaPos: { ...DEFAULT_MEGA_POS },
@@ -135,6 +160,23 @@ function normalizeCaja(raw) {
 
 function normalizeThermal(raw) {
   return { ...DEFAULT_THERMAL, ...raw };
+}
+
+function normalizeLabelPrinter(raw) {
+  const base = { ...DEFAULT_LABEL_PRINTER, ...(raw || {}) };
+  const toMm = (v, def) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : def;
+  };
+  return {
+    printerName: String(base.printerName ?? ''),
+    usbPort: String(base.usbPort || DEFAULT_LABEL_PRINTER.usbPort),
+    method: String(base.method || DEFAULT_LABEL_PRINTER.method),
+    widthMm: toMm(base.widthMm, DEFAULT_LABEL_PRINTER.widthMm),
+    heightMm: toMm(base.heightMm, DEFAULT_LABEL_PRINTER.heightMm),
+    layout: String(base.layout || DEFAULT_LABEL_PRINTER.layout),
+    lastUpdated: base.lastUpdated ?? null,
+  };
 }
 
 function normalizeFiscal(raw) {
@@ -174,7 +216,9 @@ function normalizePrintShare(raw) {
     hostPort: toPort(base.hostPort, DEFAULT_PRINT_SHARE.hostPort),
     useRemoteTicket: base.useRemoteTicket !== false,
     useRemoteFiscal: base.useRemoteFiscal === true,
+    useRemoteLabel: base.useRemoteLabel !== false,
     hostFiscal: base.hostFiscal && typeof base.hostFiscal === 'object' ? base.hostFiscal : null,
+    hostLabel: base.hostLabel && typeof base.hostLabel === 'object' ? base.hostLabel : null,
     lastUpdated: base.lastUpdated ?? null,
   };
 }
@@ -185,6 +229,7 @@ function normalizeSettings(raw) {
     schemaVersion: raw.schemaVersion ?? 1,
     caja: normalizeCaja(raw.caja || {}),
     thermalPrinter: normalizeThermal(raw.thermalPrinter || raw.printer || {}),
+    labelPrinter: normalizeLabelPrinter(raw.labelPrinter || {}),
     fiscal: normalizeFiscal(raw.fiscal || {}),
     ui: normalizeUi(raw.ui || {}),
     megaPos: normalizeMegaPos(raw.megaPos || raw.smartPos || {}),
@@ -397,6 +442,7 @@ module.exports = {
   splitFiscalResponsesFromUnifiedIfPresent,
   normalizeCaja,
   normalizeThermal,
+  normalizeLabelPrinter,
   normalizeFiscal,
   normalizeUi,
   normalizeMegaPos,

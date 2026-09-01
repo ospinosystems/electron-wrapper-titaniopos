@@ -2,8 +2,9 @@
  * TitanioPOS - Impresión en red entre cajas (sección printShare del settings).
  *
  * Modo 'share' (caja anfitriona): mini servidor HTTP en 0.0.0.0:sharePort.
- *   GET  /health -> identidad + config de ticket + parámetros fiscales del host
- *   POST /print  -> { content, options } imprime en la térmica local
+ *   GET  /health      -> identidad + config de ticket/etiquetas + parámetros fiscales
+ *   POST /print       -> { content, options } imprime en la térmica local
+ *   POST /print-label -> { content } imprime el HTML en la etiquetera local
  *
  * Modo 'receive' (caja cliente): printer-handlers reenvía los tickets aquí
  * (sendRemotePrint) y fiscal-handlers pide la URL/params remotos
@@ -47,6 +48,9 @@ let shareServerError = null;
 let hostFiscalMem = { params: null, at: 0 };
 let hostFiscalFailAt = 0;
 let lastRemotePrintFailAt = 0;
+// Snapshot de la impresora de etiquetas de la anfitriona (dims + layout).
+let hostLabelMem = { params: null, at: 0 };
+let lastRemoteLabelFailAt = 0;
 
 const loadPrintShareConfig = (app) => normalizePrintShare(readSettings(app).printShare);
 
@@ -95,9 +99,20 @@ function pickHostFiscalParams(fiscal) {
   return out;
 }
 
+function pickHostLabelParams(label) {
+  if (!label || typeof label !== 'object') return null;
+  return {
+    configured: label.configured === true,
+    widthMm: label.widthMm,
+    heightMm: label.heightMm,
+    layout: label.layout,
+  };
+}
+
 function buildHealthPayload(app) {
   const settings = readSettings(app);
   const thermal = settings.thermalPrinter || {};
+  const label = settings.labelPrinter || {};
   const fiscal = settings.fiscal || {};
   return {
     ok: true,
@@ -109,6 +124,15 @@ function buildHealthPayload(app) {
       configured: Boolean(thermal.printerName),
       printerName: thermal.printerName || '',
       paperWidth: thermal.paperWidth || '80mm',
+    },
+    // La caja cliente renderiza el sticker con las dimensiones/estilo de ESTA
+    // impresora antes de mandarlo a /print-label.
+    label: {
+      configured: Boolean(label.printerName),
+      printerName: label.printerName || '',
+      widthMm: label.widthMm,
+      heightMm: label.heightMm,
+      layout: label.layout,
     },
     fiscal: {
       enabled: fiscal.enabled === true,
@@ -191,7 +215,8 @@ function startShareServer(app, port) {
           }
           return;
         }
-        if (req.method === 'POST' && req.url === '/print') {
+        if (req.method === 'POST' && (req.url === '/print' || req.url === '/print-label')) {
+          const isLabel = req.url === '/print-label';
           let raw = '';
           let overflow = false;
           req.on('data', (chunk) => {
@@ -209,10 +234,30 @@ function startShareServer(app, port) {
                 respond(400, { success: false, error: 'Falta content' });
                 return;
               }
-              // Lazy require: printer-handlers también requiere este módulo.
-              const { printWithConfiguredPrinter } = require('./printer-handlers');
-              const result = await printWithConfiguredPrinter(app, body.content);
-              console.log('🖨️ [PRINT-SHARE] Job remoto de', req.socket.remoteAddress, '->', result.success ? 'OK' : result.error);
+              let result;
+              if (isLabel) {
+                // Etiqueta: HTML renderizado por el cliente con las dims de ESTA
+                // impresora (las publica /health). Va por el método nativo con
+                // tamaño de página exacto = sticker, igual que la impresión local.
+                const labelCfg = readSettings(app).labelPrinter || {};
+                if (!labelCfg.printerName) {
+                  respond(500, { success: false, error: 'La caja anfitriona no tiene impresora de etiquetas configurada.' });
+                  return;
+                }
+                const printerMethods = require('./printer-methods');
+                result = await printerMethods.printWithNativeAPI(
+                  app,
+                  labelCfg.printerName,
+                  body.content,
+                  `${labelCfg.widthMm}mm`,
+                  { widthMm: labelCfg.widthMm, heightMm: labelCfg.heightMm }
+                );
+              } else {
+                // Lazy require: printer-handlers también requiere este módulo.
+                const { printWithConfiguredPrinter } = require('./printer-handlers');
+                result = await printWithConfiguredPrinter(app, body.content);
+              }
+              console.log(`🖨️ [PRINT-SHARE] Job remoto${isLabel ? ' (etiqueta)' : ''} de`, req.socket.remoteAddress, '->', result.success ? 'OK' : result.error);
               respond(result.success ? 200 : 500, result);
             } catch (e) {
               respond(500, { success: false, error: e.message });
@@ -451,6 +496,49 @@ async function sendRemotePrint(target, content, options = {}) {
   }
 }
 
+/** {hostIp, hostPort} si esta caja manda las ETIQUETAS a otra; null si no. */
+function getRemoteLabelTarget(app) {
+  const cfg = loadPrintShareConfig(app);
+  if (cfg.mode === 'receive' && cfg.useRemoteLabel && cfg.hostIp) {
+    return { hostIp: cfg.hostIp, hostPort: cfg.hostPort };
+  }
+  return null;
+}
+
+async function sendRemoteLabelPrint(target, content) {
+  if (Date.now() - lastRemoteLabelFailAt < REMOTE_PRINT_COOLDOWN_MS) {
+    return {
+      success: false,
+      remote: true,
+      error: `La caja anfitriona (${target.hostIp}) no respondió hace un momento. Reintenta en unos segundos.`,
+    };
+  }
+  try {
+    const { statusCode, data } = await httpJsonRequest({
+      hostname: target.hostIp,
+      port: target.hostPort,
+      path: '/print-label',
+      method: 'POST',
+      body: { content },
+      timeoutMs: REMOTE_PRINT_TIMEOUT_MS,
+    });
+    if (statusCode >= 200 && statusCode < 300 && data && data.success) {
+      lastRemoteLabelFailAt = 0;
+      return { ...data, remote: true };
+    }
+    // Respondió pero no imprimió (impresora/config de allá): la red está bien.
+    const detail = (data && (data.error || data.message)) || `HTTP ${statusCode}`;
+    return { success: false, remote: true, error: `La caja anfitriona no pudo imprimir la etiqueta: ${detail}` };
+  } catch (e) {
+    lastRemoteLabelFailAt = Date.now();
+    return {
+      success: false,
+      remote: true,
+      error: `No se pudo imprimir en la caja anfitriona (${target.hostIp}:${target.hostPort}): ${e.message}`,
+    };
+  }
+}
+
 /** URL del servidor fiscal remoto si esta caja usa la fiscal de otra; null si no. */
 function getRemoteFiscalTarget(app) {
   const cfg = loadPrintShareConfig(app);
@@ -472,6 +560,65 @@ function persistHostFiscal(app, params) {
   } catch (e) {
     console.warn('[PRINT-SHARE] No se pudo persistir hostFiscal:', e.message);
   }
+}
+
+/** Guarda el snapshot de etiquetas de la anfitriona (memoria + settings). */
+function captureHostLabel(app, rawLabel, at) {
+  const params = pickHostLabelParams(rawLabel);
+  if (!params) return;
+  hostLabelMem = { params, at };
+  try {
+    const s = readSettings(app);
+    const current = s.printShare && s.printShare.hostLabel;
+    if (JSON.stringify(current) === JSON.stringify(params)) return;
+    s.printShare = normalizePrintShare({ ...s.printShare, hostLabel: params });
+    writeSettings(app, s);
+  } catch (e) {
+    console.warn('[PRINT-SHARE] No se pudo persistir hostLabel:', e.message);
+  }
+}
+
+/**
+ * Parámetros de la impresora de etiquetas de la anfitriona (dims, layout).
+ * Mismo contrato que getRemoteFiscalParams: caché de 60s por /health, caída al
+ * último snapshot conocido, null si no aplica el modo remoto.
+ */
+async function getRemoteLabelParams(app, { refresh = false } = {}) {
+  const cfg = loadPrintShareConfig(app);
+  if (!(cfg.mode === 'receive' && cfg.useRemoteLabel && cfg.hostIp)) return null;
+  const now = Date.now();
+  if (!refresh && hostLabelMem.params && now - hostLabelMem.at < HOST_FISCAL_TTL_MS) {
+    return hostLabelMem.params;
+  }
+  // Caché negativa compartida con la fiscal: es el mismo /health.
+  if (now - hostFiscalFailAt < HOST_FISCAL_FAIL_COOLDOWN_MS) {
+    return hostLabelMem.params || cfg.hostLabel || null;
+  }
+  try {
+    const { statusCode, data } = await httpJsonRequest({
+      hostname: cfg.hostIp,
+      port: cfg.hostPort,
+      path: '/health',
+      method: 'GET',
+      timeoutMs: HEALTH_TIMEOUT_MS,
+    });
+    if (statusCode === 200 && data) {
+      captureHostLabel(app, data.label, now);
+      // Ya que el /health vino completo, refrescar también el snapshot fiscal.
+      if (data.fiscal) {
+        const params = pickHostFiscalParams(data.fiscal);
+        hostFiscalMem = { params, at: now };
+        persistHostFiscal(app, params);
+      }
+      hostFiscalFailAt = 0;
+      return hostLabelMem.params;
+    }
+    hostFiscalFailAt = now;
+  } catch (e) {
+    hostFiscalFailAt = now;
+    console.warn('[PRINT-SHARE] /health de la anfitriona no responde:', e.message);
+  }
+  return hostLabelMem.params || cfg.hostLabel || null;
 }
 
 /**
@@ -504,6 +651,7 @@ async function getRemoteFiscalParams(app, { refresh = false } = {}) {
       hostFiscalMem = { params, at: now };
       hostFiscalFailAt = 0;
       persistHostFiscal(app, params);
+      captureHostLabel(app, data.label, now);
       return params;
     }
     hostFiscalFailAt = now;
@@ -539,12 +687,14 @@ async function checkHost(app, hostIp, hostPort) {
         fiscalReachable = probe.statusCode === 200;
       } catch { fiscalReachable = false; }
     }
-    // Guardar el snapshot fiscal si esta caja apunta (o va a apuntar) a este host.
+    // Guardar el snapshot fiscal + etiquetas si esta caja apunta (o va a
+    // apuntar) a este host.
     const params = pickHostFiscalParams(data.fiscal);
     const cfg = loadPrintShareConfig(app);
     if (!cfg.hostIp || cfg.hostIp === ip) {
       hostFiscalMem = { params, at: Date.now() };
       persistHostFiscal(app, params);
+      captureHostLabel(app, data.label, Date.now());
     }
     return { success: true, health: data, fiscalReachable };
   } catch (e) {
@@ -567,8 +717,10 @@ function registerPrintShareHandlers(app) {
     try {
       const config = savePrintShareConfig(app, partial);
       hostFiscalMem = { params: null, at: 0 };
+      hostLabelMem = { params: null, at: 0 };
       hostFiscalFailAt = 0;
       lastRemotePrintFailAt = 0;
+      lastRemoteLabelFailAt = 0;
       const applied = await applyServerState(app);
       const status = await shareStatusWithRename(app);
       if (config.mode === 'share' && !applied.success) {
@@ -581,6 +733,16 @@ function registerPrintShareHandlers(app) {
   });
 
   ipcMain.handle('print-share-status', async () => shareStatusWithRename(app));
+
+  // Dimensiones/estilo de la impresora de etiquetas de la anfitriona: el front
+  // del cliente renderiza el sticker con el formato de ALLÁ antes de enviarlo.
+  ipcMain.handle('print-share-label-params', async () => {
+    try {
+      return { success: true, params: await getRemoteLabelParams(app) };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
 
   ipcMain.handle('print-share-check-host', async (event, hostIp, hostPort) => {
     return checkHost(app, hostIp, hostPort);
@@ -658,6 +820,9 @@ module.exports = {
   loadPrintShareConfig,
   getRemoteTicketTarget,
   sendRemotePrint,
+  getRemoteLabelTarget,
+  sendRemoteLabelPrint,
+  getRemoteLabelParams,
   getRemoteFiscalTarget,
   getRemoteFiscalParams,
   getShareStatus,

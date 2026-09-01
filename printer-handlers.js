@@ -9,6 +9,7 @@ const { ipcMain } = require('electron');
 const printerConfig = require('./printer-config');
 const printerMethods = require('./printer-methods');
 const { printWithDirect, ensureHelper } = require('./printer-direct');
+const { readSettings, writeSettings, normalizeLabelPrinter } = require('./titaniopos-settings-file');
 
 /**
  * Imprime en la térmica LOCAL con la config guardada (impresora/método).
@@ -168,6 +169,62 @@ function registerPrinterHandlers(app, mainWindow) {
     }
   });
   
+  /**
+   * Imprime una ETIQUETA (HTML) ruteando como printer-print: si esta caja usa
+   * la impresora de etiquetas de otra (modo receive + useRemoteLabel), el
+   * sticker viaja por HTTP a la anfitriona; si no, se imprime con la impresora
+   * de etiquetas guardada en el settings (espejo de la config del front).
+   */
+  ipcMain.handle('printer-print-label', async (event, content) => {
+    try {
+      const printShare = require('./print-share');
+      const remote = printShare.getRemoteLabelTarget(app);
+      if (remote) {
+        console.log(`🏷️ [PRINT] Etiqueta a caja anfitriona ${remote.hostIp}:${remote.hostPort}`);
+        return await printShare.sendRemoteLabelPrint(remote, content);
+      }
+
+      const labelCfg = readSettings(app).labelPrinter || {};
+      if (!labelCfg.printerName) {
+        return { success: false, error: 'Impresora de etiquetas no configurada.' };
+      }
+      return await printerMethods.printWithNativeAPI(
+        app,
+        labelCfg.printerName,
+        content,
+        `${labelCfg.widthMm}mm`,
+        { widthMm: labelCfg.widthMm, heightMm: labelCfg.heightMm }
+      );
+    } catch (error) {
+      console.error('❌ [PRINT] Etiqueta:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  /**
+   * Espejo de la config de etiquetas del front hacia el settings unificado.
+   * El main la necesita para poder imprimir etiquetas sin pasar por el
+   * renderer (servidor de impresión en red). null NO borra: el espejo solo
+   * acumula la última config real.
+   */
+  ipcMain.handle('label-printer-config-set', async (event, config) => {
+    try {
+      if (!config || typeof config !== 'object' || !config.printerName) {
+        return { success: false, error: 'Config de etiquetas vacía.' };
+      }
+      const s = readSettings(app);
+      const next = normalizeLabelPrinter({ ...s.labelPrinter, ...config, lastUpdated: new Date().toISOString() });
+      if (JSON.stringify(s.labelPrinter) !== JSON.stringify(next)) {
+        s.labelPrinter = next;
+        writeSettings(app, s);
+        console.log('🏷️ [PRINTER] Config de etiquetas espejada:', next.printerName);
+      }
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
   /**
    * Test print with specific method
    * Used for testing during configuration

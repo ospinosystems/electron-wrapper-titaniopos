@@ -172,6 +172,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   printerTest: (method, printerName, content, options = {}) =>
     ipcRenderer.invoke('printer-test', method, printerName, content, options),
 
+  /**
+   * Imprime una ETIQUETA (HTML) con ruteo automático: local con la impresora
+   * de etiquetas del settings, o a la caja anfitriona si esta caja usa la de
+   * otra (impresión en red).
+   * @param {string} content - HTML del sticker
+   * @returns {Promise<{success: boolean, remote?: boolean, error?: string}>}
+   */
+  printerPrintLabel: (content) => ipcRenderer.invoke('printer-print-label', content),
+
+  /**
+   * Espeja la config de la impresora de etiquetas del front al settings
+   * unificado (el main la necesita para imprimir etiquetas remotas).
+   * @param {object} config - { printerName, widthMm, heightMm, layout, ... }
+   */
+  labelPrinterConfigSet: (config) => ipcRenderer.invoke('label-printer-config-set', config),
+
   // ==================== IMPRESIÓN EN RED (compartir impresoras) ====================
 
   /**
@@ -196,6 +212,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @returns {Promise<{success: boolean, health?: object, fiscalReachable?: boolean, error?: string}>}
    */
   printShareCheckHost: (hostIp, hostPort) => ipcRenderer.invoke('print-share-check-host', hostIp, hostPort),
+
+  /**
+   * Dimensiones/estilo de la impresora de etiquetas de la caja anfitriona
+   * (para renderizar el sticker con el formato de allá antes de enviarlo).
+   * @returns {Promise<{success: boolean, params?: {configured, widthMm, heightMm, layout} | null}>}
+   */
+  printShareLabelParams: () => ipcRenderer.invoke('print-share-label-params'),
 
   /**
    * Renombra el equipo Windows (pide permiso de administrador). El nombre
