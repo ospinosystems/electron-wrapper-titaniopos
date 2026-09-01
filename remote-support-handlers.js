@@ -816,6 +816,55 @@ async function ensureServerKeyUpToDate(app) {
  * si el servicio no está y el usuario NO lo desactivó explícitamente, se
  * instala solo (un único UAC). Un intento por arranque, sin bloquear el boot.
  */
+/** ¿El servidor hbbs nos ve registrados AHORA? Verdad de tierra, no marcadores. */
+async function registeredOnHbbs(app) {
+  try {
+    const id = await resolveId(app);
+    if (!id) return { id: null, online: false };
+    const { onlineStatus } = require('./rustdesk-online-status');
+    const map = await onlineStatus([id]);
+    return { id, online: !!map && map[id] === 'online' };
+  } catch (_) {
+    return { id: null, online: false };
+  }
+}
+
+const HEAL_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Cura el soporte remoto con la VERDAD del servidor, no con los marcadores de
+ * config: había ~70 cajas encendidas cuyo config decía "key aplicada" mientras
+ * hbbs no las veía (servicio parado o mal apuntado; solo registraban al abrir
+ * la ventana de RustDesk). Si hbbs no nos ve al arrancar, se corre la
+ * reparación elevada (apply-config: TOML del servicio + password + restart +
+ * arranque automático) — un UAC, máximo un intento cada 24 h. Las cajas sanas
+ * no piden nada: el sondeo dice online y aquí se acaba.
+ */
+async function healIfUnregistered(app) {
+  const before = await registeredOnHbbs(app);
+  if (before.online) return;
+
+  const cfg = readConfig(app);
+  const last = Number(cfg.lastHealAttemptAt || 0);
+  if (Date.now() - last < HEAL_COOLDOWN_MS) {
+    console.log('[REMOTE] hbbs no nos ve, pero ya se intentó reparar hace <24 h — quieto.');
+    return;
+  }
+
+  console.warn('[REMOTE] hbbs no ve esta caja registrada (id:', before.id || '¿?', ') — reparando el servicio…');
+  writeConfig(app, { ...cfg, lastHealAttemptAt: Date.now() });
+  clearSetupResult(app);
+  const run = await runElevatedSetup(app, buildReconfigureBlock(), 'reconfig');
+  // El servicio tarda unos segundos en re-registrarse tras el restart.
+  await new Promise((r) => setTimeout(r, 15000));
+  const after = await registeredOnHbbs(app);
+  if (after.online) {
+    console.log('✅ [REMOTE] Reparada: registrada en hbbs.');
+  } else {
+    console.warn('⚠️ [REMOTE] Sigue sin registrar tras reparar:', (run && (run.error || '')) || 'ver rustdesk-setup-result.json');
+  }
+}
+
 function startRemoteSupportIfEnabled(app) {
   if (process.platform !== 'win32') return;
 
@@ -837,6 +886,7 @@ function startRemoteSupportIfEnabled(app) {
           writeConfig(app, { ...cfg, enabled: true, disabledByUser: false, password: cfg.password || DEFAULT_PASSWORD });
         }
         await ensureServerKeyUpToDate(app);
+        await healIfUnregistered(app);
         return;
       }
 
