@@ -213,5 +213,33 @@ if ((Test-Path $Installed) -and $RdPassword) {
   Write-Output 'PASSWORD set-attempted'
 }
 
+# 4) Diagnostico para la app (ProgramData, legible sin elevar): el ID con el
+# que registra el SERVICIO puede NO ser el del perfil del usuario (enc_id
+# distinto segun el metodo de instalacion historico) — por eso habia cajas
+# "sin registrar" cuyo servicio SI estaba en linea, bajo otro ID. La app cruza
+# estos candidatos contra el hbbs y reporta el que de verdad responde.
+try {
+  $diag = @{ at = (Get-Date -Format o) }
+  $svc2 = Get-RdSvc
+  $diag.service = if ($svc2) { "$($svc2.Status)" } else { 'missing' }
+  foreach ($dir in $ServiceConfigDirs) {
+    $toml = Join-Path $dir 'RustDesk.toml'
+    if (Test-Path $toml) {
+      $m = Select-String -Path $toml -Pattern "^\s*id\s*=\s*'([0-9]{6,})'" | Select-Object -First 1
+      if ($m) { $diag.tomlId = $m.Matches[0].Groups[1].Value }
+      $diag.hasEncId = [bool](Select-String -Path $toml -Pattern '^\s*enc_id\s*=' -Quiet)
+    }
+  }
+  if (Test-Path $Installed) {
+    $out = (& $Installed --get-id 2>$null | Out-String)
+    $m2 = [regex]::Match($out, '\d{6,}')
+    if ($m2.Success) { $diag.getId = $m2.Value }
+  }
+  $dir2 = 'C:\ProgramData\TitanioPOS'
+  New-Item -ItemType Directory -Force -Path $dir2 | Out-Null
+  $diag | ConvertTo-Json -Compress | Set-Content -Path (Join-Path $dir2 'rustdesk-diag.json') -Encoding utf8
+  Write-Output "DIAG written service=$($diag.service) tomlId=$($diag.tomlId) getId=$($diag.getId)"
+} catch { Write-Output "DIAG error: $($_.Exception.Message)" }
+
 Write-Output 'DONE'
 exit 0

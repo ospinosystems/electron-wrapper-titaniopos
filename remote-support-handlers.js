@@ -630,7 +630,9 @@ function registerRemoteSupportHandlers(app) {
   });
 
   ipcMain.handle('remote-support:get-id', async () => {
-    const id = await resolveId(app);
+    // El mejor candidato validado contra hbbs: es el ID con el que el panel
+    // puede conectar de verdad (el del servicio cuando difiere del de usuario).
+    const id = await bestRemoteId(app);
     return { success: !!id, id };
   });
 
@@ -816,10 +818,47 @@ async function ensureServerKeyUpToDate(app) {
  * si el servicio no está y el usuario NO lo desactivó explícitamente, se
  * instala solo (un único UAC). Un intento por arranque, sin bloquear el boot.
  */
+/**
+ * Diagnóstico que deja rustdesk-apply-config.ps1 (elevado, en cada update):
+ * estado del servicio y los IDs candidatos. Existe porque el SERVICIO puede
+ * registrar con un ID distinto al del perfil del usuario (enc_id divergente
+ * según el método de instalación histórico) — mitad de la flota aparecía "sin
+ * registrar" con el servicio en línea bajo otro ID.
+ */
+function readRustdeskDiag() {
+  try {
+    const raw = fs.readFileSync('C:\\ProgramData\\TitanioPOS\\rustdesk-diag.json', 'utf8');
+    return JSON.parse(raw);
+  } catch (_) {
+    return null;
+  }
+}
+
+/** El ID que de verdad responde en hbbs, probando todos los candidatos. */
+async function bestRemoteId(app) {
+  const candidates = [];
+  const diag = readRustdeskDiag() || {};
+  for (const v of [diag.tomlId, diag.getId]) {
+    if (/^\d{6,}$/.test(String(v || ''))) candidates.push(String(v));
+  }
+  const userId = await resolveId(app);
+  if (userId) candidates.push(userId);
+  const unique = [...new Set(candidates)];
+  if (unique.length > 1) {
+    try {
+      const { onlineStatus } = require('./rustdesk-online-status');
+      const map = await onlineStatus(unique);
+      const online = unique.find((i) => map && map[i] === 'online');
+      if (online) return online;
+    } catch (_) { /* se cae al primero */ }
+  }
+  return unique[0] || '';
+}
+
 /** ¿El servidor hbbs nos ve registrados AHORA? Verdad de tierra, no marcadores. */
 async function registeredOnHbbs(app) {
   try {
-    const id = await resolveId(app);
+    const id = await bestRemoteId(app);
     if (!id) return { id: null, online: false };
     const { onlineStatus } = require('./rustdesk-online-status');
     const map = await onlineStatus([id]);
