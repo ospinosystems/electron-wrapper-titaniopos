@@ -750,7 +750,10 @@ function registerRemoteSupportHandlers(app) {
       // esta máquina puede conservar la vieja y RustDesk corta con
       // "Key mismatch". `--config` es idempotente y retorna al instante.
       await runRustdesk(exe, ['--config', RUSTDESK_CONFIG], 8000);
-      const child = spawn(exe, ['--connect', targetId], { detached: true, stdio: 'ignore' });
+      // Pasar la clave desatendida en el propio connect: RustDesk 1.4.x acepta
+      // `--connect ID --password PW` y entra sin pedir clave a mano (la clave es
+      // la misma que fija apply-config en el servicio de cada caja).
+      const child = spawn(exe, ['--connect', targetId, '--password', DEFAULT_PASSWORD], { detached: true, stdio: 'ignore' });
       child.on('error', (e) => console.error('[REMOTE] spawn connect falló:', e.message));
       child.unref();
       return { success: true };
