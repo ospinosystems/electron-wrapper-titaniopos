@@ -182,6 +182,31 @@ if ($svc) {
   $svc = Get-RdSvc
   if ($svc -and $svc.Status -ne 'Running') {
     Start-Service -Name $svcName -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
+  }
+
+  # RE-REGISTRO cuando el servicio NO arranca (Error 1053). Causa raiz real
+  # confirmada 2026-09-04 en caja de tienda: el servicio quedo amarrado a un
+  # rustdesk.exe VIEJO (los updates reemplazan el binario pero no re-registran
+  # el servicio) -> arranca y muere antes de responderle al SCM (exit 0,
+  # Stopped, "no respondio a tiempo"). La config del servicio era PERFECTA
+  # (servidor + key correctos), por eso parchear el TOML nunca ayudo: habia que
+  # RE-REGISTRAR con el exe actual. --uninstall/--install-service preserva la
+  # config (RustDesk.toml con enc_id sigue en su carpeta) -> el ID no cambia.
+  $InstalledExe = 'C:\Program Files\RustDesk\rustdesk.exe'
+  $svc = Get-RdSvc
+  if ((Test-Path $InstalledExe) -and (-not $svc -or $svc.Status -ne 'Running')) {
+    Write-Output 'SERVICE not-running (re-registering with current exe)'
+    if ($svc) { & $InstalledExe --uninstall-service 2>$null | Out-Null; Start-Sleep -Seconds 4 }
+    & $InstalledExe --install-service 2>$null | Out-Null
+    Start-Sleep -Seconds 6
+    $svc = Get-RdSvc
+    if ($svc) {
+      & sc.exe config "$($svc.Name)" start= auto | Out-Null
+      & sc.exe failure "$($svc.Name)" reset= 86400 actions= restart/5000/restart/10000/restart/30000 | Out-Null
+      if ($svc.Status -ne 'Running') { Start-Service -Name $svc.Name -ErrorAction SilentlyContinue }
+    }
+    Write-Output "SERVICE re-registered status=$((Get-RdSvc).Status)"
   }
   Write-Output "SERVICE hardened start=auto status=$((Get-RdSvc).Status)"
 } else {
