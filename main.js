@@ -2665,6 +2665,53 @@ ipcMain.handle('backup-delete-order', async (event, orderId) => {
   }
 });
 
+// Reemplazar (o agregar) UNA orden en el backup de una FECHA dada.
+//
+// Lo usa la corrección de pagos: una venta de un día anterior ya no está en
+// memoria ni en IndexedDB (filtro de arrastre de initializeForStore) y
+// backup-save-all-orders solo escribe el archivo de HOY. Sin esto, el JSON
+// firmado del día de la venta quedaría con los pagos viejos para siempre.
+// Mismo patrón que backup-delete-order: read-modify-write bajo UN lock y con
+// el writer síncrono. Solo se acepta una orden con id; si la fecha no tiene
+// archivo se crea uno con esa sola orden.
+ipcMain.handle('backup-upsert-order-for-date', async (event, dateStr, order) => {
+  try {
+    if (!BACKUP_YMD_RE.test(String(dateStr || ''))) {
+      return { success: false, error: 'Fecha inválida (YYYY-MM-DD)' };
+    }
+    if (!order || typeof order !== 'object' || !order.id) {
+      return { success: false, error: 'Orden inválida' };
+    }
+    const backupPath = path.join(getBackupDir(), `backup_${dateStr}.json`);
+
+    let count = 0;
+    await withBackupWriteLock(backupPath, async () => {
+      let data = null;
+      try {
+        data = readBackupFileWithRecovery(backupPath, { migrateJwtToPlain: !BACKUP_WRITE_JWT });
+      } catch (readError) {
+        if (readError?.code !== 'BACKUP_NOT_FOUND') throw readError;
+      }
+      if (!data) {
+        data = { lastSync: null, date: dateStr, count: 0, orders: [] };
+      }
+      const idx = data.orders.findIndex((o) => String(o.id) === String(order.id));
+      if (idx === -1) data.orders.push(order);
+      else data.orders[idx] = order;
+      data.count = data.orders.length;
+      data.lastSync = new Date().toISOString();
+      count = data.count;
+      writeBackupFileAtomic(backupPath, data, BACKUP_WRITE_JWT);
+    });
+
+    console.log('📝 [BACKUP] Orden actualizada en', `backup_${dateStr}.json`, order.id);
+    return { success: true, date: dateStr, count };
+  } catch (error) {
+    console.error('❌ [BACKUP] Error actualizando orden por fecha:', error);
+    return { success: false, error: error.message };
+  }
+});
+
 // ==================== ADMIN: INSPECCIÓN / RE-FIRMA DE BACKUPS ====================
 // Estos handlers están pensados para una ventana admin oculta en la app: permiten listar
 // archivos del directorio de backup, leer uno sin verificar firma (para inspeccionarlo aunque

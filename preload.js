@@ -85,6 +85,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   backupDeleteOrder: (orderId) => ipcRenderer.invoke('backup-delete-order', orderId),
 
   /**
+   * Reemplazar/agregar una orden en el backup de una fecha (YYYY-MM-DD).
+   * Corrección de pagos sobre ventas de días anteriores.
+   */
+  backupUpsertOrderForDate: (dateStr, order) => ipcRenderer.invoke('backup-upsert-order-for-date', dateStr, order),
+
+  /**
    * Admin: desbloquear inspector con contraseña (verificada en main).
    * @param {string} password
    */
