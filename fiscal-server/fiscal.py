@@ -1055,4 +1055,9 @@ if __name__ == '__main__':
     print(f"Puerto COM: {leer_puerto_com()}")
     print(f"Puerto servidor: {PUERTO}")
     print("==================================================")
-    app.run(host='0.0.0.0', port=PUERTO)
+    # threaded=True: sin esto Flask atiende una conexion HTTP a la vez, asi que
+    # un GET /fiscal/estado/<job_id> (polling del frontend) bloqueaba el POST
+    # /fiscal de la siguiente factura hasta que el anterior respondia. La cola
+    # (cola_fiscal + lock_fiscal) sigue imprimiendo un documento a la vez en la
+    # maquina real; esto solo deja de serializar las conexiones HTTP entre si.
+    app.run(host='0.0.0.0', port=PUERTO, threaded=True)
