@@ -533,6 +533,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   remoteSupportStatus: () => ipcRenderer.invoke('remote-support:status'),
   /** Devuelve el ID de RustDesk de esta máquina. */
   remoteSupportGetId: () => ipcRenderer.invoke('remote-support:get-id'),
+  /** Diagnóstico compacto del soporte remoto para el latido (sin elevación). */
+  remoteSupportDiag: () => ipcRenderer.invoke('remote-support:diag'),
   /** Descarga rustdesk.exe del release oficial si no viene bundleado. */
   remoteSupportDownload: () => ipcRenderer.invoke('remote-support:download'),
   /** Activa el acceso desatendido con contraseña fija. Devuelve { id }. */

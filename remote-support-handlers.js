@@ -636,6 +636,40 @@ function registerRemoteSupportHandlers(app) {
     return { success: !!id, id };
   });
 
+  // Diagnóstico compacto para el latido (SIN elevación): con esto el panel sabe,
+  // caja por caja y sin conectarse, por qué una no registra en hbbs — si el
+  // servicio está detenido y la reparación nunca corrió (el cajero no aceptó el
+  // UAC) o si corrió y el servicio igual no arranca (instalación rota).
+  ipcMain.handle('remote-support:diag', async () => {
+    // Estado del servicio: `sc query` NO necesita admin. 1060 = no instalado.
+    let svc = 'unknown';
+    try {
+      const r = await new Promise((resolve) => {
+        execFile('sc.exe', ['query', 'RustDesk'], { timeout: 4000, windowsHide: true }, (err, out) => resolve({ err, out: (out || '').toString() }));
+      });
+      if (r.err && /1060/.test(r.err.message || '')) svc = 'missing';
+      else if (/RUNNING/.test(r.out)) svc = 'running';
+      else if (/STOPPED|PAUSED|START_PENDING|STOP_PENDING/.test(r.out)) svc = 'stopped';
+    } catch (_) { /* deja unknown */ }
+
+    const cfg = readConfig(app);
+    const healAt = Number(cfg.lastHealAttemptAt || 0);
+    const healAgeMin = healAt ? Math.round((Date.now() - healAt) / 60000) : null;
+    const sr = readSetupResult(app); // {ok,installed,running,step,error} o null
+
+    // Cadena corta y estable para guardar en el latido (<160):
+    // svc=<estado> heal=<edad|never> repair=<none|ran> run=<0/1> step=<..> err=<..>
+    const parts = [`svc=${svc}`, `heal=${healAgeMin === null ? 'never' : healAgeMin + 'm'}`];
+    if (sr) {
+      parts.push(`repair=ran`, `ok=${sr.ok ? 1 : 0}`, `run=${sr.running ? 1 : 0}`);
+      if (sr.step) parts.push(`step=${String(sr.step).slice(0, 24)}`);
+      if (sr.error) parts.push(`err=${String(sr.error).replace(/\s+/g, ' ').slice(0, 40)}`);
+    } else {
+      parts.push('repair=none');
+    }
+    return { diag: parts.join(' ').slice(0, 160) };
+  });
+
   // Descarga rustdesk del release oficial (cuando no viene bundleado).
   ipcMain.handle('remote-support:download', async () => {
     try {
