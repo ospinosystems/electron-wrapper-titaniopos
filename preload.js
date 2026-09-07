@@ -257,6 +257,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Verifica que el VPOS RESTService está vivo. */
   megaPosPing: (payload = {}) => ipcRenderer.invoke('mega-pos-ping', payload),
 
+  /** Diagnóstico de red al Merchant Server (ping, nslookup, tracert, puerto, IP pública). */
+  megaPosNetworkDiag: (payload = {}) => ipcRenderer.invoke('mega-pos-network-diag', payload),
+
   /** Reinicia / fuerza el arranque del servicio VPOS local. */
   megaPosRestart: () => ipcRenderer.invoke('mega-pos-restart'),
 
