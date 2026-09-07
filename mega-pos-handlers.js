@@ -381,6 +381,52 @@ function registerMegaPosHandlers() {
     }
   });
 
+  // -------- Diagnóstico de red al Merchant Server (host de vposconf.ini) --------
+  // Corre las mismas pruebas que soporte de Megasoft pide manualmente (ping,
+  // nslookup, tracert, prueba de puerto TCP e IP pública) y devuelve un reporte
+  // en un solo llamado, para el botón "Diagnóstico de red" de config de caja.
+  const runCmd = (cmd, args, timeoutMs = 15000) => new Promise((resolve) => {
+    execFile(cmd, args, { windowsHide: true, timeout: timeoutMs }, (error, stdout, stderr) => {
+      resolve({ code: error?.code ?? 0, output: (stdout || '') + (stderr || '') });
+    });
+  });
+
+  ipcMain.handle('mega-pos-network-diag', async (event, requestBody = {}) => {
+    const host = String(requestBody?.host || '').trim();
+    const port = parseInt(requestBody?.port, 10) || 443;
+    if (!host) return { success: false, error: 'Falta el host del Merchant Server (guarda la config de Mega POS primero).' };
+
+    const steps = [];
+
+    const internet = await runCmd('ping', ['-n', '4', '8.8.8.8']);
+    steps.push({ key: 'ping_internet', label: 'Ping a 8.8.8.8 (internet)', ok: internet.code === 0, output: internet.output });
+
+    const nslookup = await runCmd('nslookup', [host]);
+    steps.push({ key: 'nslookup', label: `nslookup ${host}`, ok: nslookup.code === 0 && !/can't find|No se pudo encontrar/i.test(nslookup.output), output: nslookup.output });
+
+    const pingHost = await runCmd('ping', ['-n', '4', host]);
+    steps.push({ key: 'ping_host', label: `Ping a ${host}`, ok: pingHost.code === 0, output: pingHost.output });
+
+    const psPort = [
+      `$r = Test-NetConnection -ComputerName '${host.replace(/'/g, "''")}' -Port ${port} -WarningAction SilentlyContinue;`,
+      `"RemoteAddress: " + $r.RemoteAddress;`,
+      `"TcpTestSucceeded: " + $r.TcpTestSucceeded;`,
+      `if (-not $r.TcpTestSucceeded) { exit 1 }`,
+    ].join(' ');
+    const portTest = await runCmd('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psPort], 20000);
+    steps.push({ key: 'port_test', label: `Puerto TCP ${host}:${port}`, ok: portTest.code === 0, output: portTest.output });
+
+    const tracert = await runCmd('tracert', ['-d', '-w', '1000', host], 30000);
+    steps.push({ key: 'tracert', label: `Tracert a ${host}`, ok: true, output: tracert.output });
+
+    const psPublicIp = `(Invoke-RestMethod -Uri 'https://api.ipify.org' -TimeoutSec 8)`;
+    const publicIp = await runCmd('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psPublicIp], 12000);
+    const ip = publicIp.output.trim();
+    steps.push({ key: 'public_ip', label: 'IP pública de esta localidad', ok: publicIp.code === 0 && ip.length > 0, output: ip || 'No se pudo obtener (revisa la conexión a internet).' });
+
+    return { success: true, host, port, steps, timestamp: new Date().toISOString() };
+  });
+
   // -------- Driver del pinpad Verifone (P200) --------
   // Resuelve drivers/verifone/<file> en dev y empaquetado.
   const getVerifoneFile = (file) => {
