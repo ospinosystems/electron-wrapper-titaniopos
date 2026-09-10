@@ -498,6 +498,27 @@ class Tfhka:
             self.last_error = str(e)
             return dar_status_error(0, 128)  # communication error
 
+    def _wait_not_in_transaction_locked(self, max_wait_s=20, poll_s=1.0):
+        """Sondea el status hasta que deje de estar 'en transaccion' o se agote
+        max_wait_s. Puerto ABIERTO y lock tomado (uso interno).
+
+        Con varias cajas compartiendo una sola fiscal (impresion en red), un
+        documento 'abierto' visto aqui casi siempre es OTRA caja que todavia
+        esta cerrando/cortando el papel — no un cuelgue de un intento previo.
+        Antes de asumir 'huerfano' y cancelarlo (lo que lo manda ANULADO),
+        hay que darle margen real a que cierre solo. 20s / 1s de sondeo
+        replica el mismo margen que el frontend ya usa para el turno de UNA
+        caja (PRINTER_IDLE_WAIT_MS); aqui protege tambien entre cajas, porque
+        el que sondea es el propio servidor Python que todas comparten.
+        """
+        status = self._read_status_locked()
+        elapsed = 0.0
+        while status and status.get("status") in _IN_TRANSACTION and elapsed < max_wait_s:
+            time.sleep(poll_s)
+            elapsed += poll_s
+            status = self._read_status_locked()
+        return status
+
     def read_fp_status(self):
         """ENQ -> STS/ERR -> dar_status_error. Devuelve dict de status o None."""
         with _SERIAL_LOCK:
@@ -615,9 +636,11 @@ class Tfhka:
                 pre = self._read_status_locked()
                 recovered = False
                 if pre and pre.get("status") in _IN_TRANSACTION:
-                    self.send_cmd("7", _keep_open=True)  # cancela doc abierto previo
-                    recovered = True
-                    pre = self._read_status_locked()
+                    pre = self._wait_not_in_transaction_locked()
+                    if pre and pre.get("status") in _IN_TRANSACTION:
+                        self.send_cmd("7", _keep_open=True)  # cancela doc abierto previo
+                        recovered = True
+                        pre = self._read_status_locked()
                 if pre and pre.get("error") in ("128", "137"):
                     return {"ok": False, "reason": "no_response", "pre_status": pre,
                             "recovered_open_doc": recovered}
@@ -673,11 +696,16 @@ class Tfhka:
             try:
                 pre = self._read_status_locked()
                 recovered = False
-                # 1. Documento abierto de antes -> cancelar y re-leer.
+                # 1. Documento abierto de antes: puede ser OTRA caja (fiscal en
+                #    red) todavia cerrando, asi que espera antes de asumir que
+                #    quedo huerfano. Si sigue en transaccion tras esperar, SI
+                #    se cancela (ese es el caso real de recuperacion).
                 if pre and pre.get("status") in _IN_TRANSACTION:
-                    self.send_cmd("7", _keep_open=True)
-                    recovered = True
-                    pre = self._read_status_locked()
+                    pre = self._wait_not_in_transaction_locked()
+                    if pre and pre.get("status") in _IN_TRANSACTION:
+                        self.send_cmd("7", _keep_open=True)
+                        recovered = True
+                        pre = self._read_status_locked()
                 # 2. Guard de comunicación / papel (errores no recuperables para imprimir).
                 if pre and pre.get("error") in ("128", "137"):
                     return {"ok": False, "reason": "no_response", "pre_status": pre,
@@ -733,10 +761,14 @@ class Tfhka:
                 #    si todas las líneas dieron ACK, reimprimir sería peor (doble factura).
                 #    El equipo tarda en finalizar/cortar, así que SONDEAMOS el estado
                 #    varias veces: apenas quede fuera de transacción, está cerrado.
+                #    20 intentos / 1s (antes 6×0.5s=3s): con varias cajas compartiendo
+                #    la fiscal, soltar el puerto antes de que cierre de verdad hacía
+                #    que la SIGUIENTE factura (de esta caja u otra) viera "en
+                #    transacción" y la cancelara — sale ANULADA bajo tráfico.
                 post = None
                 closed = False
-                for _ in range(6):
-                    time.sleep(0.5)
+                for _ in range(20):
+                    time.sleep(1.0)
                     post = self._read_status_locked()
                     if not (post and post.get("status") in _IN_TRANSACTION):
                         closed = True

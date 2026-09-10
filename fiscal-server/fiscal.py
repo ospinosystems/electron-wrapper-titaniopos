@@ -436,6 +436,11 @@ def procesar_cola_fiscal():
             trabajos_estado[job_id]['estado'] = 'procesando'
             trabajos_estado[job_id]['fecha_inicio'] = datetime.now()
             actualizar_estado_peticion(h, 'procesando')
+            # Diagnostico: sin esto un fallo real quedaba SOLO en memoria
+            # (trabajos_estado) y jamas llegaba al log — imposible depurar
+            # despues del hecho. cola_fiscal.qsize() = cuantos trabajos mas
+            # estaban esperando detras de este (confirma o descarta rafagas).
+            print(f"[FISCAL] Job {job_id} ({trabajo['type']}) iniciando, backlog restante: {cola_fiscal.qsize()}")
             try:
                 with lock_fiscal:
                     resultado = ejecutar_programa_fiscal(trabajo['parametros'], trabajo['type'], trabajo['file'])
@@ -443,15 +448,18 @@ def procesar_cola_fiscal():
                     trabajos_estado[job_id]['estado'] = 'completado'
                     trabajos_estado[job_id]['resultado'] = resultado
                     actualizar_estado_peticion(h, 'completado')
+                    print(f"[FISCAL] Job {job_id} completado")
                 else:
                     trabajos_estado[job_id]['estado'] = 'error'
                     trabajos_estado[job_id]['error'] = resultado['message']
                     trabajos_estado[job_id]['resultado'] = resultado
                     liberar_peticion(h)  # que el reintento legitimo no reciba 409
+                    print(f"[FISCAL] Job {job_id} ERROR: {resultado.get('message')} | reason={resultado.get('reason')} | printer_status={resultado.get('printer_status')}")
             except Exception as e:
                 trabajos_estado[job_id]['estado'] = 'error'
                 trabajos_estado[job_id]['error'] = str(e)
                 liberar_peticion(h)
+                print(f"[FISCAL] Job {job_id} EXCEPCION: {e}")
             trabajos_estado[job_id]['fecha_fin'] = datetime.now()
             cola_fiscal.task_done()
         except queue.Empty:
