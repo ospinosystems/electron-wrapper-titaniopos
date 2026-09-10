@@ -61,24 +61,37 @@ async function printWithNativeAPI(app, printerName, htmlContent, paperWidth = '8
   const labelMode = labelW > 0 && labelH > 0;
   if (labelMode) console.log(`🏷️ [NATIVE] Label mode ${labelW}mm × ${labelH}mm`);
 
-  // CSS parametrizado: en modo etiqueta usamos el tamaño exacto del sticker y
-  // sin padding/fuente forzada (la plantilla de etiqueta trae lo suyo).
+  // MODO HOJA COMPLETA — impresora normal/digital (no térmica de rollo). El
+  // frontend ya manda un HTML con su propio <style> (receipt-native-html.ts),
+  // así que aquí solo fijamos el tamaño de página A4 y dejamos el body sin
+  // fuente/ancho forzado (nada de Courier ni `width: paperWidth`).
+  const fullPage = !labelMode && options.fullPage === true;
+  if (fullPage) console.log('📄 [NATIVE] Full-page mode (A4)');
+
+  // CSS parametrizado: etiqueta = tamaño exacto del sticker; hoja completa =
+  // A4 con margen; recibo térmico (default, sin tocar) = rollo 80mm × 200mm.
   const pageCss = labelMode
     ? `size: ${labelW}mm ${labelH}mm; margin: 0;`
-    : `size: ${paperWidth} 200mm; margin: 0mm;`;
+    : fullPage
+      ? `size: A4; margin: 12mm;`
+      : `size: ${paperWidth} 200mm; margin: 0mm;`;
   const bodyCss = labelMode
     ? `width: ${labelW}mm; height: ${labelH}mm; margin: 0; padding: 0; background: white !important; color: #000000 !important;`
-    : `font-family: 'Courier New', monospace; font-size: 14px; width: ${paperWidth}; margin: 0; padding: 5mm; background: white !important; color: #000000 !important;`;
+    : fullPage
+      ? `margin: 0; padding: 0; background: white !important; color: #000000 !important;`
+      : `font-family: 'Courier New', monospace; font-size: 14px; width: ${paperWidth}; margin: 0; padding: 5mm; background: white !important; color: #000000 !important;`;
   const bodyPrintCss = labelMode
     ? `width: ${labelW}mm; margin: 0; padding: 0; color: #000000 !important;`
-    : `width: ${paperWidth}; margin: 0; padding: 5mm; color: #000000 !important;`;
+    : fullPage
+      ? `margin: 0; padding: 0; color: #000000 !important;`
+      : `width: ${paperWidth}; margin: 0; padding: 5mm; color: #000000 !important;`;
 
   try {
     // Create hidden window for rendering
     const printWindow = new BrowserWindow({
       show: false,
-      width: labelMode ? Math.max(120, Math.round((labelW / 25.4) * 96)) : (paperWidth === '58mm' ? 220 : 302),
-      height: labelMode ? Math.max(80, Math.round((labelH / 25.4) * 96)) : 800,
+      width: labelMode ? Math.max(120, Math.round((labelW / 25.4) * 96)) : fullPage ? 794 : (paperWidth === '58mm' ? 220 : 302),
+      height: labelMode ? Math.max(80, Math.round((labelH / 25.4) * 96)) : fullPage ? 1123 : 800,
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true
@@ -138,10 +151,12 @@ async function printWithNativeAPI(app, printerName, htmlContent, paperWidth = '8
       margins: { marginType: 'none' },
       pageSize: labelMode
         ? { width: Math.round(labelW * 1000), height: Math.round(labelH * 1000) }
-        : {
-            width: paperWidth === '58mm' ? 58000 : 80000,
-            height: 200000
-          }
+        : fullPage
+          ? 'A4'
+          : {
+              width: paperWidth === '58mm' ? 58000 : 80000,
+              height: 200000
+            }
     };
 
     console.log('📄 [NATIVE] Print options:', JSON.stringify(printOptions, null, 2));
@@ -154,10 +169,12 @@ async function printWithNativeAPI(app, printerName, htmlContent, paperWidth = '8
           marginsType: 1,
           pageSize: labelMode
             ? { width: Math.round(labelW * 1000), height: Math.round(labelH * 1000) }
-            : {
-                width: paperWidth === '58mm' ? 58000 : 80000,
-                height: 200000
-              },
+            : fullPage
+              ? 'A4'
+              : {
+                  width: paperWidth === '58mm' ? 58000 : 80000,
+                  height: 200000
+                },
           printBackground: true
         });
         pdfPath = path.join(backupDir, `print_native_${Date.now()}.pdf`);

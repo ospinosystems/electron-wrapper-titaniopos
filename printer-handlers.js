@@ -46,12 +46,14 @@ async function printWithConfiguredPrinter(app, content) {
 
   let result;
   if (effectiveMethod === 'native') {
+    // Impresora normal/digital (no térmica): el ticket va a hoja completa
+    // (A4), no al rollo continuo 80mm×200mm de las térmicas.
     result = await printerMethods.printWithNativeAPI(
       app,
       config.printerName,
       content,
       config.paperWidth,
-      { debugPdf: config.debugPdf === true }
+      { debugPdf: config.debugPdf === true, fullPage: true }
     );
   } else if (useDirect) {
     try {
@@ -242,7 +244,8 @@ function registerPrinterHandlers(app, mainWindow) {
           options.paperWidth || '80mm',
           // widthMm/heightMm activan el modo etiqueta (tamaño de página exacto).
           // Sólo los pasa la impresión de etiquetas; los recibos no, y quedan igual.
-          { debugPdf: options.debugPdf === true, widthMm: options.widthMm, heightMm: options.heightMm }
+          // fullPage activa el modo hoja completa (A4) de la impresora normal/digital.
+          { debugPdf: options.debugPdf === true, widthMm: options.widthMm, heightMm: options.heightMm, fullPage: options.fullPage === true }
         );
       } else if (method === 'escpos') {
         result = await printerMethods.printWithESCPOS(
