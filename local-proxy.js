@@ -25,6 +25,40 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
+const { execFile } = require('child_process');
+
+// Self-heal de EADDRINUSE en el puerto fijo del proxy (3010): para esta caja
+// llegar hasta acá ya pasó por app.requestSingleInstanceLock(), así que si
+// alguien más está escuchando en ese puerto NO puede ser otra instancia
+// legítima — solo puede ser un huérfano de un cierre forzado anterior (crash,
+// Task Manager, update a medio aplicar). Es seguro matarlo y reintentar solo,
+// en vez de dejar a la caja sin arrancar hasta que alguien lo note y lo mate
+// a mano (ver incidente Villa/CAJA 1, 2026-09-11: PID huérfano 'TitanioPOS').
+// Confirmado con el usuario antes de escribirlo (clasificador de auto-mode
+// lo marca como accion sensible por matar procesos).
+function killStaleOwnerOfPort(port) {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') return resolve(false);
+    execFile('netstat', ['-ano'], (err, stdout) => {
+      if (err || !stdout) return resolve(false);
+      const pids = new Set();
+      for (const line of stdout.split('\n')) {
+        // Formato: TCP  127.0.0.1:3010  0.0.0.0:0  LISTENING  1952
+        const m = line.match(/^\s*TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$/i);
+        if (m && parseInt(m[1], 10) === port) pids.add(m[2]);
+      }
+      if (pids.size === 0) return resolve(false);
+      let pending = pids.size;
+      let killedAny = false;
+      for (const pid of pids) {
+        execFile('taskkill', ['/PID', pid, '/F'], (killErr) => {
+          if (!killErr) killedAny = true;
+          if (--pending === 0) resolve(killedAny);
+        });
+      }
+    });
+  });
+}
 
 // Agentes con KEEP-ALIVE: reusan las conexiones (y el handshake TLS) al backend
 // real. Sin esto, CADA llamada a /__backend abría una conexión nueva con
@@ -303,14 +337,30 @@ function startProxy(localPort, nextPort, host = '127.0.0.1', uiUpstream = null, 
       socket.on('error', () => { try { socket.destroy(); } catch (_) {} });
     });
 
-    server.on('error', reject);
-    server.listen(localPort, host, () => {
-      console.log(`[PROXY] Escuchando en http://${host}:${localPort}`);
-      console.log(`[PROXY]   ${BACKEND_PREFIX}  -> ${BACKEND_URL} (origin spoof: ${SPOOF_ORIGIN})`);
-      console.log(`[PROXY]   ${ELECTRIC_PREFIX} -> ${ELECTRIC_URL}`);
-      console.log(`[PROXY]   UI                -> ${uiUpstream ? uiUpstream + ' (web ONLINE)' : localUI + ' (bundle OFFLINE)'}`);
-      resolve();
+    // Un solo reintento automático ante EADDRINUSE: ver killStaleOwnerOfPort
+    // arriba para por qué es seguro matar al dueño del puerto sin preguntar.
+    let retriedAfterKill = false;
+    const tryListen = () => {
+      server.listen(localPort, host, () => {
+        console.log(`[PROXY] Escuchando en http://${host}:${localPort}`);
+        console.log(`[PROXY]   ${BACKEND_PREFIX}  -> ${BACKEND_URL} (origin spoof: ${SPOOF_ORIGIN})`);
+        console.log(`[PROXY]   ${ELECTRIC_PREFIX} -> ${ELECTRIC_URL}`);
+        console.log(`[PROXY]   UI                -> ${uiUpstream ? uiUpstream + ' (web ONLINE)' : localUI + ' (bundle OFFLINE)'}`);
+        resolve();
+      });
+    };
+    server.on('error', async (err) => {
+      if (!retriedAfterKill && err && err.code === 'EADDRINUSE') {
+        retriedAfterKill = true;
+        console.warn(`[PROXY] Puerto ${localPort} ocupado (EADDRINUSE) — buscando huérfano para matarlo...`);
+        const killed = await killStaleOwnerOfPort(localPort).catch(() => false);
+        console.warn(`[PROXY] ${killed ? 'Huérfano eliminado' : 'No se encontró huérfano en el puerto'}; reintentando...`);
+        setTimeout(tryListen, 400);
+        return;
+      }
+      reject(err);
     });
+    tryListen();
   });
 }
 
