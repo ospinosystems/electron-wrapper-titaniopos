@@ -126,6 +126,14 @@ const DEFAULT_PRINT_SHARE = {
   sharePort: 3020,
   hostIp: '',
   hostPort: 3020,
+  // Alias de la anfitriona para no depender de UN solo dato: hostName = nombre
+  // Windows que ella misma reporta en /health; hostIps = sus IPs de LAN (las
+  // trae el mapa de la tienda y las refresca /health); hostLastIp = la IP que
+  // respondió la última vez. Si `hostIp` (lo que escribió el usuario) no
+  // resuelve, print-share prueba estos en orden en vez de fallar.
+  hostName: '',
+  hostIps: [],
+  hostLastIp: '',
   useRemoteTicket: false,
   useRemoteFiscal: false,
   useRemoteLabel: false,
@@ -217,6 +225,18 @@ function normalizeMegaPos(raw) {
   };
 }
 
+/** IPs/nombres de respaldo de la anfitriona: strings no vacíos, sin repetir, máximo 8. */
+function normalizeHostIps(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const v of raw) {
+    const s = String(v || '').trim();
+    if (s && !out.includes(s)) out.push(s);
+    if (out.length >= 8) break;
+  }
+  return out;
+}
+
 function normalizePrintShare(raw) {
   const base = raw && typeof raw === 'object' ? raw : {};
   const toPort = (v, def) => {
@@ -265,6 +285,9 @@ function normalizePrintShare(raw) {
     sharePort: toPort(base.sharePort, DEFAULT_PRINT_SHARE.sharePort),
     hostIp,
     hostPort: toPort(base.hostPort, DEFAULT_PRINT_SHARE.hostPort),
+    hostName: String(base.hostName || '').trim(),
+    hostIps: normalizeHostIps(base.hostIps),
+    hostLastIp: String(base.hostLastIp || '').trim(),
     useRemoteTicket,
     useRemoteFiscal,
     useRemoteLabel,

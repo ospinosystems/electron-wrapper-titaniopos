@@ -11,6 +11,10 @@
  * (getRemoteFiscalTarget / getRemoteFiscalParams). Las peticiones fiscales van
  * DIRECTO al servidor Flask de la anfitriona (ya escucha en 0.0.0.0); el
  * servidor de este módulo solo comparte la térmica y publica los parámetros.
+ *
+ * La anfitriona se alcanza por lo que configuró el usuario (`hostIp`: nombre
+ * Windows o IP) y, si eso no responde, por sus alias aprendidos (`hostLastIp`,
+ * `hostName`, `hostIps`) — ver hostCandidates/requestHost.
  */
 
 const { ipcMain } = require('electron');
@@ -28,6 +32,17 @@ const REMOTE_PRINT_TIMEOUT_MS = 8000;
 // fallan al instante durante esta ventana en vez de colgar la caja 8s cada vez.
 const REMOTE_PRINT_COOLDOWN_MS = 10000;
 const HEALTH_TIMEOUT_MS = 4000;
+// Conectar con UNA dirección de la anfitriona no puede comerse todo el tiempo
+// del ticket: si en 3s no hay TCP, se prueba la siguiente (IP conocida, nombre…).
+const CONNECT_TIMEOUT_MS = 3000;
+// Errores de RED/DNS con los que vale probar otra dirección de la anfitriona.
+// Todo lo demás (respondió y falló, se cortó a medias) NO se reintenta en un
+// POST de impresión: podría haber llegado y saldría un ticket doble.
+const UNREACHABLE_CODES = new Set([
+  'ENOTFOUND', 'EAI_AGAIN', 'EAI_FAIL', 'EAI_NONAME', 'EAI_NODATA',
+  'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'EHOSTDOWN', 'ETIMEDOUT',
+  'EADDRNOTAVAIL', 'ECONNTIMEOUT',
+]);
 const HOST_FISCAL_TTL_MS = 60000;
 // Caché negativa del /health fiscal: con la anfitriona caída no se reintenta
 // en cada poll (cada 1.5s); se usa el último snapshot conocido.
@@ -51,6 +66,12 @@ let lastRemotePrintFailAt = 0;
 // Snapshot de la impresora de etiquetas de la anfitriona (dims + layout).
 let hostLabelMem = { params: null, at: 0 };
 let lastRemoteLabelFailAt = 0;
+// Dirección (nombre o IP) de la anfitriona que respondió la última vez en
+// esta sesión: se prueba primero. Se invalida al guardar otra config.
+let sessionGoodHost = null; // { key, host }
+// `app` de Electron, para persistir lo aprendido de la anfitriona desde los
+// caminos que no lo reciben (printer-handlers llama sendRemotePrint sin app).
+let appRef = null;
 
 const loadPrintShareConfig = (app) => normalizePrintShare(readSettings(app).printShare);
 
@@ -77,6 +98,14 @@ const savePrintShareConfig = (app, partial) => {
       p.useRemoteFiscal = false;
       p.useRemoteLabel = false;
     }
+  }
+
+  // Otra anfitriona: lo aprendido de la anterior (nombre, IPs, última IP que
+  // respondió) ya no vale. Las IPs que mande la vista (mapa) sí se conservan.
+  if (typeof p.hostIp === 'string' && p.hostIp.trim() !== current.hostIp) {
+    p.hostName = '';
+    p.hostLastIp = '';
+    if (!Array.isArray(p.hostIps)) p.hostIps = [];
   }
 
   s.printShare = normalizePrintShare({
@@ -143,6 +172,9 @@ function buildHealthPayload(app) {
     app: 'titaniopos-print-share',
     version: app.getVersion(),
     hostname: os.hostname(),
+    // IPs de LAN: el cliente las guarda como respaldo por si el nombre deja
+    // de resolver (y la IP cambia por DHCP, de ahí que sea una lista viva).
+    ips: getLanIps(),
     // 'share' mientras el servidor esté expuesto: lo exige el checkHost de los
     // clientes viejos. El detalle por impresora va en `shared`.
     mode: share.mode,
@@ -181,9 +213,16 @@ function buildHealthPayload(app) {
   };
 }
 
-function httpJsonRequest({ hostname, port, path, method, body, timeoutMs }) {
+function httpJsonRequest({ hostname, port, path, method, body, timeoutMs, connectTimeoutMs }) {
   return new Promise((resolve, reject) => {
     const payload = body != null ? JSON.stringify(body) : null;
+    let connectTimer = null;
+    const clearConnectTimer = () => {
+      if (connectTimer) {
+        clearTimeout(connectTimer);
+        connectTimer = null;
+      }
+    };
     const req = http.request(
       {
         hostname,
@@ -197,23 +236,170 @@ function httpJsonRequest({ hostname, port, path, method, body, timeoutMs }) {
         },
       },
       (res) => {
+        // IP real que atendió (puede venir como ::ffff:192.168.1.5): con ella
+        // se aprende la dirección de la anfitriona aunque se configuró por nombre.
+        const remoteAddress = res.socket && res.socket.remoteAddress ? String(res.socket.remoteAddress) : '';
         let raw = '';
         res.setEncoding('utf8');
         res.on('data', (chunk) => { raw += chunk; });
         res.on('end', () => {
           let data = null;
           try { data = raw ? JSON.parse(raw) : null; } catch { data = { message: raw }; }
-          resolve({ statusCode: res.statusCode || 500, data });
+          resolve({ statusCode: res.statusCode || 500, data, remoteAddress });
         });
       }
     );
+    if (connectTimeoutMs) {
+      // Presupuesto SOLO para resolver el nombre y abrir el TCP; la respuesta
+      // (imprimir tarda) sigue bajo timeoutMs. Sin esto, un nombre que no
+      // resuelve o una IP muerta se comían el timeout completo por dirección.
+      connectTimer = setTimeout(() => {
+        const err = new Error(`Sin conexión en ${Math.round(connectTimeoutMs / 1000)}s`);
+        err.code = 'ECONNTIMEOUT';
+        req.destroy(err);
+      }, connectTimeoutMs);
+      req.on('socket', (socket) => {
+        // Socket reutilizado (keep-alive) ya está conectado.
+        if (socket.connecting === false) clearConnectTimer();
+        else socket.once('connect', clearConnectTimer);
+      });
+    }
     req.setTimeout(timeoutMs, () => {
       req.destroy(new Error(`Sin respuesta en ${Math.round(timeoutMs / 1000)}s`));
     });
-    req.on('error', reject);
+    req.on('error', (err) => {
+      clearConnectTimer();
+      reject(err);
+    });
+    req.on('close', clearConnectTimer);
     if (payload) req.write(payload);
     req.end();
   });
+}
+
+// ==================== ANFITRIONA: nombre + IPs de respaldo ====================
+
+const hostKey = (cfg) => `${String(cfg.hostIp || '')}|${cfg.hostPort}`;
+
+function isUnreachableError(e) {
+  return Boolean(e && UNREACHABLE_CODES.has(e.code));
+}
+
+/** '::ffff:192.168.1.5' -> '192.168.1.5'; '' si no es una IPv4. */
+function cleanIp(addr) {
+  const s = String(addr || '').replace(/^::ffff:/i, '').trim();
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(s) ? s : '';
+}
+
+/**
+ * Direcciones por las que se intenta llegar a la anfitriona, en orden: la que
+ * respondió en esta sesión, lo que configuró el usuario (nombre o IP), la
+ * última IP que respondió, el nombre que ella reportó y sus IPs de LAN.
+ *
+ * Antes solo se probaba `hostIp`: si el nombre no resolvía (perfil de red
+ * "Público", otra subred, equipo renombrado sin reiniciar) la caja se quedaba
+ * sin imprimir hasta que alguien escribiera la IP a mano — y al hacerlo perdía
+ * el nombre estable, que es el que sobrevive al DHCP.
+ */
+function hostCandidates(cfg) {
+  const out = [];
+  const push = (v) => {
+    const s = String(v || '').trim();
+    if (!s || out.some((x) => x.toLowerCase() === s.toLowerCase())) return;
+    out.push(s);
+  };
+  if (sessionGoodHost && sessionGoodHost.key === hostKey(cfg)) push(sessionGoodHost.host);
+  push(cfg.hostIp);
+  push(cfg.hostLastIp);
+  push(cfg.hostName);
+  for (const ip of cfg.hostIps || []) push(ip);
+  return out;
+}
+
+/** Dirección con más chance de responder ahora mismo (para la URL del fiscal). */
+function preferredHost(cfg) {
+  if (sessionGoodHost && sessionGoodHost.key === hostKey(cfg)) return sessionGoodHost.host;
+  return cfg.hostLastIp || cfg.hostIp;
+}
+
+/** Aplica un parche a printShare en disco solo si cambia algo. */
+function patchPrintShare(partial) {
+  if (!appRef) return;
+  try {
+    const s = readSettings(appRef);
+    const current = normalizePrintShare(s.printShare);
+    const next = normalizePrintShare({ ...current, ...partial });
+    if (JSON.stringify(current) === JSON.stringify(next)) return;
+    s.printShare = next;
+    writeSettings(appRef, s);
+  } catch (e) {
+    console.warn('[PRINT-SHARE] No se pudo persistir lo aprendido de la anfitriona:', e.message);
+  }
+}
+
+function rememberGoodHost(cfg, host, remoteAddress, persist) {
+  sessionGoodHost = { key: hostKey(cfg), host };
+  if (!persist) return;
+  const ip = cleanIp(remoteAddress);
+  if (ip && ip !== cfg.hostLastIp) patchPrintShare({ hostLastIp: ip });
+}
+
+/** Nombre e IPs de LAN que la anfitriona dice de sí misma en /health. */
+function captureHostIdentity(cfg, data, persist) {
+  if (!persist || !data) return;
+  const patch = {};
+  const name = String(data.hostname || '').trim();
+  if (name && name !== cfg.hostName) patch.hostName = name;
+  if (Array.isArray(data.ips)) {
+    const ips = data.ips.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 8);
+    if (ips.length && JSON.stringify(ips) !== JSON.stringify(cfg.hostIps || [])) patch.hostIps = ips;
+  }
+  if (Object.keys(patch).length) patchPrintShare(patch);
+}
+
+/**
+ * Petición a la anfitriona probando sus direcciones en orden. `idempotent`
+ * (GET /health) reintenta con la siguiente ante cualquier error; un POST de
+ * impresión solo si la dirección era inalcanzable (no llegó nada allá).
+ * `persist`: guardar lo aprendido — solo cuando cfg es la anfitriona
+ * configurada, no un diagnóstico de otra caja.
+ */
+async function requestHost(cfg, { path, method, body, timeoutMs, idempotent = false, persist = true }) {
+  const list = hostCandidates(cfg);
+  if (!list.length) {
+    const err = new Error('Sin caja anfitriona configurada');
+    err.code = 'ENOHOST';
+    throw err;
+  }
+  let lastErr = null;
+  const tried = [];
+  for (const host of list) {
+    tried.push(host);
+    try {
+      const res = await httpJsonRequest({
+        hostname: host, port: cfg.hostPort, path, method, body, timeoutMs, connectTimeoutMs: CONNECT_TIMEOUT_MS,
+      });
+      rememberGoodHost(cfg, host, res.remoteAddress, persist);
+      return { ...res, via: host };
+    } catch (e) {
+      lastErr = e;
+      const retry = idempotent || isUnreachableError(e);
+      if (retry && tried.length < list.length) {
+        console.warn(`[PRINT-SHARE] ${host}:${cfg.hostPort} no responde (${e.code || e.message}); probando la siguiente dirección`);
+        continue;
+      }
+      break;
+    }
+  }
+  const err = lastErr || new Error('Sin respuesta');
+  err.tried = tried;
+  throw err;
+}
+
+function describeTried(target, e) {
+  const tried = Array.isArray(e && e.tried) ? e.tried : [];
+  const extra = tried.length > 1 ? `; probadas: ${tried.join(', ')}` : '';
+  return `${target.hostIp}:${target.hostPort}${extra}`;
 }
 
 // ==================== SERVIDOR (modo 'share') ====================
@@ -502,7 +688,7 @@ function renameComputer(newName) {
 function getRemoteTicketTarget(app) {
   const cfg = loadPrintShareConfig(app);
   if (cfg.useRemoteTicket && cfg.hostIp) {
-    return { hostIp: cfg.hostIp, hostPort: cfg.hostPort };
+    return { hostIp: cfg.hostIp, hostPort: cfg.hostPort, cfg };
   }
   return null;
 }
@@ -515,10 +701,9 @@ async function sendRemotePrint(target, content, options = {}) {
       error: `La caja anfitriona (${target.hostIp}) no respondió hace un momento. Reintenta en unos segundos.`,
     };
   }
+  const cfg = target.cfg || { hostIp: target.hostIp, hostPort: target.hostPort, hostIps: [] };
   try {
-    const { statusCode, data } = await httpJsonRequest({
-      hostname: target.hostIp,
-      port: target.hostPort,
+    const { statusCode, data } = await requestHost(cfg, {
       path: '/print',
       method: 'POST',
       body: { content, options },
@@ -537,7 +722,7 @@ async function sendRemotePrint(target, content, options = {}) {
     return {
       success: false,
       remote: true,
-      error: `No se pudo imprimir en la caja anfitriona (${target.hostIp}:${target.hostPort}): ${e.message}`,
+      error: `No se pudo imprimir en la caja anfitriona (${describeTried(target, e)}): ${e.message}`,
     };
   }
 }
@@ -546,7 +731,7 @@ async function sendRemotePrint(target, content, options = {}) {
 function getRemoteLabelTarget(app) {
   const cfg = loadPrintShareConfig(app);
   if (cfg.useRemoteLabel && cfg.hostIp) {
-    return { hostIp: cfg.hostIp, hostPort: cfg.hostPort };
+    return { hostIp: cfg.hostIp, hostPort: cfg.hostPort, cfg };
   }
   return null;
 }
@@ -559,10 +744,9 @@ async function sendRemoteLabelPrint(target, content) {
       error: `La caja anfitriona (${target.hostIp}) no respondió hace un momento. Reintenta en unos segundos.`,
     };
   }
+  const cfg = target.cfg || { hostIp: target.hostIp, hostPort: target.hostPort, hostIps: [] };
   try {
-    const { statusCode, data } = await httpJsonRequest({
-      hostname: target.hostIp,
-      port: target.hostPort,
+    const { statusCode, data } = await requestHost(cfg, {
       path: '/print-label',
       method: 'POST',
       body: { content },
@@ -580,7 +764,7 @@ async function sendRemoteLabelPrint(target, content) {
     return {
       success: false,
       remote: true,
-      error: `No se pudo imprimir en la caja anfitriona (${target.hostIp}:${target.hostPort}): ${e.message}`,
+      error: `No se pudo imprimir en la caja anfitriona (${describeTried(target, e)}): ${e.message}`,
     };
   }
 }
@@ -593,7 +777,10 @@ function getRemoteFiscalTarget(app) {
     (hostFiscalMem.params && hostFiscalMem.params.port) ||
     (cfg.hostFiscal && cfg.hostFiscal.port) ||
     3005;
-  return { url: `http://${cfg.hostIp}:${port}`, hostIp: cfg.hostIp };
+  // La dirección que respondió (o la última IP conocida): el Flask de la
+  // anfitriona vive en la misma máquina que su servidor de compartir.
+  const host = preferredHost(cfg);
+  return { url: `http://${host}:${port}`, hostIp: host };
 }
 
 function persistHostFiscal(app, params) {
@@ -654,14 +841,14 @@ async function getRemoteLabelParams(app, { refresh = false } = {}) {
     return hostLabelMem.params || cfg.hostLabel || null;
   }
   try {
-    const { statusCode, data } = await httpJsonRequest({
-      hostname: cfg.hostIp,
-      port: cfg.hostPort,
+    const { statusCode, data } = await requestHost(cfg, {
       path: '/health',
       method: 'GET',
       timeoutMs: HEALTH_TIMEOUT_MS,
+      idempotent: true,
     });
     if (statusCode === 200 && data) {
+      captureHostIdentity(cfg, data, true);
       captureHostLabel(app, healthLabelOf(data), now);
       // Ya que el /health vino completo, refrescar también el snapshot fiscal.
       if (data.fiscal) {
@@ -698,14 +885,14 @@ async function getRemoteFiscalParams(app, { refresh = false } = {}) {
     return hostFiscalMem.params || cfg.hostFiscal || null;
   }
   try {
-    const { statusCode, data } = await httpJsonRequest({
-      hostname: cfg.hostIp,
-      port: cfg.hostPort,
+    const { statusCode, data } = await requestHost(cfg, {
       path: '/health',
       method: 'GET',
       timeoutMs: HEALTH_TIMEOUT_MS,
+      idempotent: true,
     });
     if (statusCode === 200 && data && data.fiscal) {
+      captureHostIdentity(cfg, data, true);
       const params = pickHostFiscalParams(data.fiscal);
       hostFiscalMem = { params, at: now };
       hostFiscalFailAt = 0;
@@ -722,48 +909,62 @@ async function getRemoteFiscalParams(app, { refresh = false } = {}) {
   return cfg.hostFiscal || null;
 }
 
-async function checkHost(app, hostIp, hostPort) {
+async function checkHost(app, hostIp, hostPort, fallbackIps = []) {
   const ip = String(hostIp || '').trim();
   const port = parseInt(hostPort, 10) || 3020;
-  if (!ip) return { success: false, error: 'Indica la IP de la caja anfitriona' };
+  if (!ip) return { success: false, error: 'Indica la IP o el nombre de la caja anfitriona' };
+  const cfg = loadPrintShareConfig(app);
+  // ¿Se diagnostica la anfitriona YA configurada? Entonces valen sus alias
+  // aprendidos y lo que se aprenda ahora se guarda.
+  const isSaved = cfg.hostIp !== '' && cfg.hostIp.toLowerCase() === ip.toLowerCase();
+  const probe = {
+    hostIp: ip,
+    hostPort: port,
+    hostName: isSaved ? cfg.hostName : '',
+    hostLastIp: isSaved ? cfg.hostLastIp : '',
+    hostIps: [...(Array.isArray(fallbackIps) ? fallbackIps : []), ...(isSaved ? cfg.hostIps : [])],
+  };
   try {
-    const { statusCode, data } = await httpJsonRequest({
-      hostname: ip, port, path: '/health', method: 'GET', timeoutMs: HEALTH_TIMEOUT_MS,
+    const { statusCode, data, via } = await requestHost(probe, {
+      path: '/health', method: 'GET', timeoutMs: HEALTH_TIMEOUT_MS, idempotent: true, persist: isSaved,
     });
     if (statusCode !== 200 || !data || data.app !== 'titaniopos-print-share') {
-      return { success: false, error: `Respondió algo que no es una caja compartiendo (HTTP ${statusCode})` };
+      return { success: false, error: `Respondió algo que no es una caja compartiendo (HTTP ${statusCode})`, via };
     }
     if (data.mode !== 'share') {
-      return { success: false, error: `La caja ${data.hostname} no está en modo compartir` };
+      return { success: false, error: `La caja ${data.hostname} no está en modo compartir`, via };
     }
-    // Probar también el servidor fiscal Flask de la anfitriona (puerto aparte).
+    // Probar también el servidor fiscal Flask de la anfitriona (puerto aparte),
+    // por la misma dirección que acaba de responder.
     let fiscalReachable = false;
     if (data.fiscal && data.fiscal.enabled) {
       try {
-        const probe = await httpJsonRequest({
-          hostname: ip, port: data.fiscal.port, path: '/health', method: 'GET', timeoutMs: 3000,
+        const fiscalProbe = await httpJsonRequest({
+          hostname: via, port: data.fiscal.port, path: '/health', method: 'GET', timeoutMs: 3000, connectTimeoutMs: CONNECT_TIMEOUT_MS,
         });
-        fiscalReachable = probe.statusCode === 200;
+        fiscalReachable = fiscalProbe.statusCode === 200;
       } catch { fiscalReachable = false; }
     }
     // Guardar el snapshot fiscal + etiquetas si esta caja apunta (o va a
-    // apuntar) a este host.
+    // apuntar) a este host; y su nombre/IPs si ya es la configurada.
     const params = pickHostFiscalParams(data.fiscal);
-    const cfg = loadPrintShareConfig(app);
-    if (!cfg.hostIp || cfg.hostIp === ip) {
+    if (!cfg.hostIp || isSaved) {
       hostFiscalMem = { params, at: Date.now() };
       persistHostFiscal(app, params);
       captureHostLabel(app, healthLabelOf(data), Date.now());
+      if (isSaved) captureHostIdentity(cfg, data, true);
     }
-    return { success: true, health: data, fiscalReachable };
+    return { success: true, health: data, fiscalReachable, via };
   } catch (e) {
-    return { success: false, error: `Sin conexión con ${ip}:${port} (${e.message})` };
+    const tried = Array.isArray(e.tried) && e.tried.length > 1 ? ` (probadas: ${e.tried.join(', ')})` : '';
+    return { success: false, error: `Sin conexión con ${ip}:${port}${tried}: ${e.message}` };
   }
 }
 
 // ==================== IPC ====================
 
 function registerPrintShareHandlers(app) {
+  appRef = app;
   ipcMain.handle('print-share-config-get', async () => {
     try {
       return { success: true, config: loadPrintShareConfig(app), status: await shareStatusWithRename(app) };
@@ -780,6 +981,7 @@ function registerPrintShareHandlers(app) {
       hostFiscalFailAt = 0;
       lastRemotePrintFailAt = 0;
       lastRemoteLabelFailAt = 0;
+      sessionGoodHost = null;
       const applied = await applyServerState(app);
       const status = await shareStatusWithRename(app);
       if (config.mode === 'share' && !applied.success) {
@@ -803,8 +1005,8 @@ function registerPrintShareHandlers(app) {
     }
   });
 
-  ipcMain.handle('print-share-check-host', async (event, hostIp, hostPort) => {
-    return checkHost(app, hostIp, hostPort);
+  ipcMain.handle('print-share-check-host', async (event, hostIp, hostPort, fallbackIps) => {
+    return checkHost(app, hostIp, hostPort, fallbackIps);
   });
 
   // Renombrar el equipo Windows (pide UAC). El nombre se aplica al reiniciar.
@@ -863,6 +1065,7 @@ function registerPrintShareHandlers(app) {
 }
 
 async function maybeStartPrintShareServer(app) {
+  appRef = app;
   try {
     const result = await applyServerState(app);
     if (result && result.port) {

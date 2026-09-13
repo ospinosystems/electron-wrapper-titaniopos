@@ -205,7 +205,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /**
    * Guarda la config de impresión en red y aplica el estado del servidor
    * (arranca/detiene/reubica el puerto según el modo).
-   * @param {object} partial - { mode, sharePort, hostIp, hostPort, useRemoteTicket, useRemoteFiscal }
+   * @param {object} partial - { shareEnabled, shareTicket, shareFiscal, shareLabel, sharePort,
+   *   hostIp (nombre o IP), hostPort, hostIps (IPs de LAN de respaldo), useRemoteTicket, useRemoteFiscal, useRemoteLabel }
    */
   printShareConfigSave: (partial) => ipcRenderer.invoke('print-share-config-save', partial),
 
@@ -214,10 +215,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   /**
    * Prueba la conexión con una caja anfitriona: /health del servidor de
-   * compartir + sondeo del servidor fiscal remoto.
-   * @returns {Promise<{success: boolean, health?: object, fiscalReachable?: boolean, error?: string}>}
+   * compartir + sondeo del servidor fiscal remoto. Si `hostIp` (nombre o IP)
+   * no responde se prueban `fallbackIps` (las IPs de LAN que reportó su
+   * latido); `via` dice por cuál dirección respondió.
+   * @returns {Promise<{success: boolean, health?: object, fiscalReachable?: boolean, via?: string, error?: string}>}
    */
-  printShareCheckHost: (hostIp, hostPort) => ipcRenderer.invoke('print-share-check-host', hostIp, hostPort),
+  printShareCheckHost: (hostIp, hostPort, fallbackIps = []) =>
+    ipcRenderer.invoke('print-share-check-host', hostIp, hostPort, fallbackIps),
 
   /**
    * Dimensiones/estilo de la impresora de etiquetas de la caja anfitriona
