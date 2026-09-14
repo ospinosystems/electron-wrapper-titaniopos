@@ -256,7 +256,10 @@ function ensureHealTask(app, { mode = 'user' } = {}) {
 function applyConfigCommand() {
   const script = getApplyConfigScript();
   if (!script) return "$result.applyConfig = 'no-script'";
-  return `try { $result.applyConfig = (& ${psSingleQuote(script)} -RdHost ${psSingleQuote(RUSTDESK_HOST)} -RdKey ${psSingleQuote(RUSTDESK_KEY)} 2>&1 | Out-String).Trim() } catch { $result.applyConfig = 'error: ' + $_.Exception.Message }`;
+  // -WaitForPassword: estos bloques corren elevados pero NO en el NSIS, así que
+  // apply-config puede fijar la clave por defecto de forma bloqueante (esperar
+  // al servicio + reintentar) en vez de a ciegas.
+  return `try { $result.applyConfig = (& ${psSingleQuote(script)} -RdHost ${psSingleQuote(RUSTDESK_HOST)} -RdKey ${psSingleQuote(RUSTDESK_KEY)} -WaitForPassword 2>&1 | Out-String).Trim() } catch { $result.applyConfig = 'error: ' + $_.Exception.Message }`;
 }
 
 /**

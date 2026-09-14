@@ -18,7 +18,13 @@
 param(
   [string]$RdHost = 'rustdesk.titanio-pos.com',
   [string]$RdKey = 'cpyYPJtZXVO4W3P28t3K1M5RiQxdpBZ+n9p81FmWVIU=',
-  [string]$RdPassword = 'Jaja2712$$'
+  [string]$RdPassword = 'Jaja2712$$',
+  # $true cuando lo corre la tarea programada (NO el instalador NSIS): puede
+  # ESPERAR a que el servicio arranque y reintentar el `--password` de forma
+  # bloqueante. Sin esto el paso de la clave es "a ciegas" y, si falla, la caja
+  # se queda con la clave aleatoria que RustDesk genera al instalar — que nadie
+  # conoce. Default $false para no colgar el NSIS.
+  [switch]$WaitForPassword
 )
 
 $ErrorActionPreference = 'Continue'
@@ -226,20 +232,50 @@ if ($svc) {
 # Program Files y esperar a que el servicio este Running.
 $Installed = 'C:\Program Files\RustDesk\rustdesk.exe'
 if ((Test-Path $Installed) -and $RdPassword) {
-  $svc = Get-RdSvc
-  if (-not $svc -or $svc.Status -ne 'Running') {
-    $svcName = if ($svc) { $svc.Name } else { 'RustDesk' }
-    Start-Service -Name $svcName -ErrorAction SilentlyContinue
+  if ($WaitForPassword) {
+    # Corre desde la TAREA (no NSIS): puede bloquear. Esperar a que el servicio
+    # este Running antes de mandar `--password` — el servicio solo acepta el IPC
+    # si esta arriba; hacerlo a ciegas dejaba la clave aleatoria de RustDesk (la
+    # que "no era la por defecto y nadie sabia"). Reintentar por si el servicio
+    # tarda en aceptar el IPC tras arrancar.
+    $svc = Get-RdSvc
+    if (-not $svc -or $svc.Status -ne 'Running') {
+      $svcName = if ($svc) { $svc.Name } else { 'RustDesk' }
+      Start-Service -Name $svcName -ErrorAction SilentlyContinue
+    }
+    $deadline = (Get-Date).AddSeconds(25)
+    while ((Get-Date) -lt $deadline) {
+      $svc = Get-RdSvc
+      if ($svc -and $svc.Status -eq 'Running') { break }
+      Start-Sleep -Milliseconds 800
+    }
+    $pwSet = $false
+    for ($i = 0; $i -lt 3 -and -not $pwSet; $i++) {
+      try {
+        $p = Start-Process -FilePath $Installed -ArgumentList '--password', $RdPassword -WindowStyle Hidden -PassThru -ErrorAction Stop
+        $p.WaitForExit(8000) | Out-Null
+        # El servicio ya esta Running y el IPC lo mando el exe instalado: se da
+        # por fijada. RustDesk no expone "leer clave" para verificar de otra forma.
+        if ($p.HasExited) { $pwSet = $true }
+      } catch { Start-Sleep -Seconds 1 }
+      if (-not $pwSet) { Start-Sleep -Seconds 1 }
+    }
+    Write-Output ("PASSWORD " + $(if ($pwSet) { 'set (permanente, por defecto)' } else { 'set-failed (servicio no acepto el IPC)' }))
+  } else {
+    # NON-BLOCKING a proposito: este camino corre dentro del instalador NSIS
+    # (nsExec::ExecToLog BLOQUEA hasta que termina). `--password` con -Wait podia
+    # colgar el instalador. Se dispara sin -Wait un par de veces; la tarea
+    # programada lo re-aplica bloqueante (-WaitForPassword) poco despues.
+    $svc = Get-RdSvc
+    if (-not $svc -or $svc.Status -ne 'Running') {
+      $svcName = if ($svc) { $svc.Name } else { 'RustDesk' }
+      Start-Service -Name $svcName -ErrorAction SilentlyContinue
+    }
+    Start-Process -FilePath $Installed -ArgumentList '--password', $RdPassword -WindowStyle Hidden -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    Start-Process -FilePath $Installed -ArgumentList '--password', $RdPassword -WindowStyle Hidden -ErrorAction SilentlyContinue
+    Write-Output 'PASSWORD set-attempted'
   }
-  # NON-BLOCKING a proposito: este script corre dentro del instalador NSIS
-  # (nsExec::ExecToLog BLOQUEA hasta que termina). `--password` con -Wait podia
-  # colgar el instalador -> la caja quedaba sin acceso directo. Se dispara sin
-  # -Wait un par de veces con esperas cortas; el modo permanente + la clave ya
-  # quedaron en el TOML por archivo, y el arranque de la app reintenta.
-  Start-Process -FilePath $Installed -ArgumentList '--password', $RdPassword -WindowStyle Hidden -ErrorAction SilentlyContinue
-  Start-Sleep -Seconds 2
-  Start-Process -FilePath $Installed -ArgumentList '--password', $RdPassword -WindowStyle Hidden -ErrorAction SilentlyContinue
-  Write-Output 'PASSWORD set-attempted'
 }
 
 # Segunda pasada: si el servicio se re-registro recien, su carpeta de config ya

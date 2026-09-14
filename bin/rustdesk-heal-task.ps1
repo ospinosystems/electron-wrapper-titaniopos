@@ -31,7 +31,10 @@ if (-not (Test-Path $ApplyScript)) {
   exit 1
 }
 
-$psArgs = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $ApplyScript
+# -WaitForPassword: la tarea NO es el instalador NSIS, así que apply-config
+# puede esperar al servicio y fijar la clave por defecto de forma bloqueante
+# (si no, la caja se queda con la clave aleatoria de RustDesk que nadie conoce).
+$psArgs = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -WaitForPassword' -f $ApplyScript
 
 # ── Camino principal: cmdlets ScheduledTasks (Win10+) ────────────────────────
 $registered = $false
@@ -72,7 +75,7 @@ try {
 
 # ── Fallback: schtasks.exe (mas universal; -Mode user, ONLOGON, HIGHEST) ─────
 if (-not $registered) {
-  $tr = 'powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $ApplyScript
+  $tr = 'powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -WaitForPassword' -f $ApplyScript
   if ($Mode -eq 'system') {
     & schtasks.exe /create /tn "$TaskName" /tr "$tr" /sc ONLOGON /rl HIGHEST /ru 'SYSTEM' /f 2>&1 | Out-Null
   } else {
