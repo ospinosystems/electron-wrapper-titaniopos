@@ -70,6 +70,9 @@ const RUSTDESK_CONFIG = `host=${RUSTDESK_HOST},key=${RUSTDESK_KEY}`;
 // distinguir el método, esa marca falsa hace que la corrección se salte a sí
 // misma para siempre. Al cambiar de mecanismo hay que cambiar este valor.
 const SERVER_KEY_METHOD = 'service-toml-v2';
+// Tarea programada de auto-reparacion (ver rustdesk-heal-task.ps1). El nombre
+// es el identificador estable; se consulta con schtasks para el diagnostico.
+const HEAL_TASK_NAME = 'TitanioPOS Soporte Remoto';
 
 // Nombre de exe que "bakea" el servidor: RustDesk lee host/key de su propio
 // nombre de archivo y los aplica al instalar (también al servicio). Método
@@ -194,6 +197,55 @@ function getApplyConfigScript() {
     try { if (fs.existsSync(c)) return c; } catch (_) { /* ignore */ }
   }
   return null;
+}
+
+/** Ruta a rustdesk-heal-task.ps1 (registra la tarea de auto-reparacion). */
+function getHealTaskScript() {
+  const candidates = [];
+  if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, 'bin', 'rustdesk-heal-task.ps1'));
+  candidates.push(path.join(__dirname, 'bin', 'rustdesk-heal-task.ps1'));
+  if (__dirname.includes('app.asar')) {
+    candidates.push(path.join(__dirname.split('app.asar')[0], 'bin', 'rustdesk-heal-task.ps1'));
+  }
+  for (const c of candidates) {
+    try { if (fs.existsSync(c)) return c; } catch (_) { /* ignore */ }
+  }
+  return null;
+}
+
+/**
+ * Snippet PS (para los bloques ELEVADOS) que registra la tarea de reparacion.
+ * `mode='system'`: solo se logra desde un contexto ya elevado, y deja la tarea
+ * como NT AUTHORITY\SYSTEM — permanente e independiente de la cuenta. La salida
+ * queda en `$result.healTask`.
+ */
+function registerHealTaskCommand(mode) {
+  const script = getHealTaskScript();
+  const apply = getApplyConfigScript();
+  if (!script || !apply) return "$result.healTask = 'no-script'";
+  return `try { $result.healTask = (& ${psSingleQuote(script)} -Mode ${mode} -ApplyScript ${psSingleQuote(apply)} 2>&1 | Out-String).Trim() } catch { $result.healTask = 'error: ' + $_.Exception.Message }`;
+}
+
+/**
+ * Registra (sin elevacion) la tarea de auto-reparacion para el USUARIO actual
+ * con RunLevel Highest. En cuenta admin se elevara sola sin UAC; en estandar
+ * corre sin elevar. Idempotente: -Force sobreescribe la definicion.
+ */
+function ensureHealTask(app, { mode = 'user' } = {}) {
+  return new Promise((resolve) => {
+    const script = getHealTaskScript();
+    const apply = getApplyConfigScript();
+    if (!script || !apply) return resolve({ ok: false, error: 'no-script' });
+    execFile(
+      'powershell',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Mode', mode, '-ApplyScript', apply],
+      { timeout: 60000, windowsHide: true },
+      (error, stdout) => {
+        const out = String(stdout || '').trim();
+        resolve({ ok: !error && /(^|\n)OK task=/.test(out), out, error: error && error.message });
+      }
+    );
+  });
 }
 
 /**
@@ -338,6 +390,7 @@ $result.passwordSet = $true
 # el exe bakeado suele bastar, pero si el exe no llevaba el nombre configurado
 # (solo estaba el instalado) la caja quedaba con la key equivocada.
 ${applyConfigCommand()}
+${registerHealTaskCommand('system')}
 
 # 4) Estado del servicio + ID en vivo (--get-id devuelve el ID del servicio).
 $result.step = 'read-id'
@@ -386,6 +439,7 @@ Start-Sleep -Seconds 2
 # caja se registra en el hbbs.
 $result.step = 'apply-service-config'
 ${applyConfigCommand()}
+${registerHealTaskCommand('system')}
 
 $result.step = 'read-id'
 $svc = Get-RdSvc
@@ -609,6 +663,42 @@ ${block}`;
   });
 }
 
+// ¿La cuenta actual es admin local? Mira el token (incluye el grupo
+// Administradores aunque UAC lo tenga filtrado): dice si la tarea de highest
+// podra elevarse sola. Cacheado por sesion (no cambia). null = no se pudo saber.
+let _adminCache = null;
+function isCurrentUserAdmin() {
+  if (_adminCache !== null) return Promise.resolve(_adminCache);
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') { _adminCache = false; return resolve(false); }
+    const ps = "$id=[Security.Principal.WindowsIdentity]::GetCurrent();"
+      + "$sid=New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544');"
+      + "if(($id.Groups | Where-Object { $_ -eq $sid })){'1'}else{'0'}";
+    execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps],
+      { timeout: 5000, windowsHide: true }, (err, out) => {
+        if (err) { resolve(null); return; } // no se cachea el fallo: reintenta luego
+        _adminCache = String(out || '').trim() === '1';
+        resolve(_adminCache);
+      });
+  });
+}
+
+// Estado de la tarea de auto-reparacion, por XML (etiquetas NO localizadas, a
+// diferencia de `schtasks /v`): none | user | system.
+function healTaskInfo() {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') return resolve('none');
+    execFile('schtasks.exe', ['/query', '/tn', HEAL_TASK_NAME, '/xml'],
+      { timeout: 5000, windowsHide: true }, (err, out) => {
+        if (err) return resolve('none');
+        const xml = String(out || '');
+        const uid = (xml.match(/<UserId>([^<]*)<\/UserId>/i) || [])[1] || '';
+        const sys = /S-1-5-18|SYSTEM|LocalSystem/i.test(uid) || /<LogonType>ServiceAccount<\/LogonType>/i.test(xml);
+        resolve(sys ? 'system' : 'user');
+      });
+  });
+}
+
 function registerRemoteSupportHandlers(app) {
   ipcMain.handle('remote-support:status', async () => {
     const exe = getRustdeskPath(app);
@@ -652,14 +742,20 @@ function registerRemoteSupportHandlers(app) {
       else if (/STOPPED|PAUSED|START_PENDING|STOP_PENDING/.test(r.out)) svc = 'stopped';
     } catch (_) { /* deja unknown */ }
 
-    const cfg = readConfig(app);
-    const healAt = Number(cfg.lastHealAttemptAt || 0);
-    const healAgeMin = healAt ? Math.round((Date.now() - healAt) / 60000) : null;
     const sr = readSetupResult(app); // {ok,installed,running,step,error} o null
+    const admin = await isCurrentUserAdmin();
+    const task = await healTaskInfo();
 
     // Cadena corta y estable para guardar en el latido (<160):
-    // svc=<estado> heal=<edad|never> repair=<none|ran> run=<0/1> step=<..> err=<..>
-    const parts = [`svc=${svc}`, `heal=${healAgeMin === null ? 'never' : healAgeMin + 'm'}`];
+    // svc=<estado> admin=<0/1/?> task=<none|user|system> repair=<none|ran> run=<0/1> step=<..> err=<..>
+    // La reparación ya no depende de un UAC por arranque, sino de `task`: en
+    // cuenta admin (admin=1) una tarea `task=user` se eleva sola y repara; una
+    // caja con admin=0 y task=user es la que aún necesita el bootstrap SYSTEM.
+    const parts = [
+      `svc=${svc}`,
+      `admin=${admin === null ? '?' : admin ? 1 : 0}`,
+      `task=${task}`,
+    ];
     if (sr) {
       parts.push(`repair=ran`, `ok=${sr.ok ? 1 : 0}`, `run=${sr.running ? 1 : 0}`);
       if (sr.step) parts.push(`step=${String(sr.step).slice(0, 24)}`);
@@ -905,39 +1001,28 @@ async function registeredOnHbbs(app) {
   }
 }
 
-const HEAL_COOLDOWN_MS = 24 * 60 * 60 * 1000;
-
 /**
  * Cura el soporte remoto con la VERDAD del servidor, no con los marcadores de
- * config: había ~70 cajas encendidas cuyo config decía "key aplicada" mientras
- * hbbs no las veía (servicio parado o mal apuntado; solo registraban al abrir
- * la ventana de RustDesk). Si hbbs no nos ve al arrancar, se corre la
- * reparación elevada (apply-config: TOML del servicio + password + restart +
- * arranque automático) — un UAC, máximo un intento cada 24 h. Las cajas sanas
- * no piden nada: el sondeo dice online y aquí se acaba.
+ * config: había cajas encendidas cuyo config decía "key aplicada" mientras hbbs
+ * no las veía (servicio parado o mal apuntado; solo registraban al abrir la
+ * ventana de RustDesk). Si hbbs no nos ve al arrancar, se garantiza la tarea de
+ * reparación (apply-config: TOML del servicio + password + restart + arranque
+ * automático), que se ejecuta con privilegios altos SIN UAC en cuentas admin.
+ * Las cajas sanas no hacen nada: el sondeo dice online y aquí se acaba.
  */
 async function healIfUnregistered(app) {
   const before = await registeredOnHbbs(app);
   if (before.online) return;
 
-  const cfg = readConfig(app);
-  const last = Number(cfg.lastHealAttemptAt || 0);
-  if (Date.now() - last < HEAL_COOLDOWN_MS) {
-    console.log('[REMOTE] hbbs no nos ve, pero ya se intentó reparar hace <24 h — quieto.');
-    return;
-  }
-
-  console.warn('[REMOTE] hbbs no ve esta caja registrada (id:', before.id || '¿?', ') — reparando el servicio…');
-  writeConfig(app, { ...cfg, lastHealAttemptAt: Date.now() });
-  clearSetupResult(app);
-  const run = await runElevatedSetup(app, buildReconfigureBlock(), 'reconfig');
-  // El servicio tarda unos segundos en re-registrarse tras el restart.
-  await new Promise((r) => setTimeout(r, 15000));
-  const after = await registeredOnHbbs(app);
-  if (after.online) {
-    console.log('✅ [REMOTE] Reparada: registrada en hbbs.');
-  } else {
-    console.warn('⚠️ [REMOTE] Sigue sin registrar tras reparar:', (run && (run.error || '')) || 'ver rustdesk-setup-result.json');
+  // NO se dispara un UAC: la reparación la hace la tarea programada de highest,
+  // que en cuenta admin se eleva SOLA sin prompt. Aquí solo se garantiza que la
+  // tarea exista (y ella misma se lanza al registrarse). En cuenta admin repara
+  // en segundos; en estándar corre sin elevar y hace falta el bootstrap SYSTEM,
+  // que se instala en cualquier momento elevado (install / botón Reparar).
+  console.warn('[REMOTE] hbbs no ve esta caja registrada (id:', before.id || '¿?', ') — lanzando la tarea de reparación…');
+  const task = await ensureHealTask(app, { mode: 'user' });
+  if (!task.ok) {
+    console.warn('⚠️ [REMOTE] No se pudo registrar la tarea de reparación:', task.error || task.out || '');
   }
 }
 
@@ -961,6 +1046,9 @@ function startRemoteSupportIfEnabled(app) {
         if (cfg.enabled !== true || cfg.disabledByUser === true) {
           writeConfig(app, { ...cfg, enabled: true, disabledByUser: false, password: cfg.password || DEFAULT_PASSWORD });
         }
+        // Auto-reparación sin cajero: la tarea de highest repara el servicio
+        // elevada y SIN UAC en cuentas admin. Se asegura en cada arranque.
+        await ensureHealTask(app, { mode: 'user' });
         await ensureServerKeyUpToDate(app);
         await healIfUnregistered(app);
         return;

@@ -96,8 +96,12 @@ foreach ($dir in $ServiceConfigDirs) {
 }
 
 if (-not $touched) {
-  Write-Output 'FAIL no-service-config-dir (RustDesk no instalado o servicio nunca arrancado)'
-  exit 1
+  # NO abortar. Justo las cajas trancadas son las que no tienen esta carpeta
+  # (servicio instalado pero que nunca arranco / mal registrado). El bloque de
+  # servicio de mas abajo lo re-registra con el exe actual — eso CREA la carpeta
+  # y registra la caja — y la "segunda pasada" del final parchea la key. Antes
+  # aqui se hacia `exit 1` y quedaban sin reparacion posible.
+  Write-Output 'WARN no-service-config-dir (sigo: re-registrare el servicio y parchare al final)'
 }
 
 # Reiniciar para que re-registre en el hbbs con la key nueva. Sin esto sigue
@@ -236,6 +240,37 @@ if ((Test-Path $Installed) -and $RdPassword) {
   Start-Sleep -Seconds 2
   Start-Process -FilePath $Installed -ArgumentList '--password', $RdPassword -WindowStyle Hidden -ErrorAction SilentlyContinue
   Write-Output 'PASSWORD set-attempted'
+}
+
+# Segunda pasada: si el servicio se re-registro recien, su carpeta de config ya
+# existe aunque en la primera pasada (arriba) no estuviera. Parchear la key y el
+# rendezvous ahora mismo y reiniciar, para reparar en UNA sola corrida en vez de
+# depender del proximo tick de la tarea.
+if (-not $touched) {
+  $secondTouched = $false
+  foreach ($dir in $ServiceConfigDirs) {
+    if (-not (Test-Path $dir)) { continue }
+    $secondTouched = $true
+    $toml = Join-Path $dir 'RustDesk2.toml'
+    $content = ''
+    if (Test-Path $toml) { $content = Get-Content $toml -Raw -ErrorAction SilentlyContinue }
+    if ($null -eq $content) { $content = '' }
+    if (Test-Path $toml) { Copy-Item -Force $toml "$toml.bak" -ErrorAction SilentlyContinue }
+    $new = Set-TomlOption -Content $content -Name 'key' -Value $RdKey
+    $new = Set-TomlOption -Content $new -Name 'custom-rendezvous-server' -Value $RdHost
+    $new = Set-TomlOption -Content $new -Name 'verification-method' -Value 'use-permanent-password'
+    $hadEncId = $content -match '(?m)^\s*enc_id\s*='
+    $keepsEncId = $new -match '(?m)^\s*enc_id\s*='
+    if ($hadEncId -and -not $keepsEncId) { Write-Output "FAIL would-lose-enc-id (2da pasada) $dir"; continue }
+    Set-Content -Path $toml -Value $new -Encoding UTF8 -ErrorAction SilentlyContinue
+    Write-Output "PATCHED (2da pasada) $dir"
+  }
+  if ($secondTouched) {
+    $svc = Get-RdSvc
+    if ($svc) { Restart-Service -Name $svc.Name -Force -ErrorAction SilentlyContinue; Write-Output "RESTARTED (2da pasada) status=$((Get-RdSvc).Status)" }
+  } else {
+    Write-Output 'WARN sin-carpeta-de-config tras re-registrar (revisar instalacion de RustDesk)'
+  }
 }
 
 # 4) Diagnostico para la app (ProgramData, legible sin elevar): el ID con el
