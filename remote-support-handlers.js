@@ -264,21 +264,65 @@ function ensureHealTask(app, { mode = 'user' } = {}) {
   });
 }
 
+/** Ruta a rustdesk-user-fallback.ps1 (reparacion en modo usuario, sin admin). */
+function getUserFallbackScript() {
+  const candidates = [];
+  if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, 'bin', 'rustdesk-user-fallback.ps1'));
+  candidates.push(path.join(__dirname, 'bin', 'rustdesk-user-fallback.ps1'));
+  if (__dirname.includes('app.asar')) {
+    candidates.push(path.join(__dirname.split('app.asar')[0], 'bin', 'rustdesk-user-fallback.ps1'));
+  }
+  for (const c of candidates) {
+    try { if (fs.existsSync(c)) return c; } catch (_) { /* ignore */ }
+  }
+  return null;
+}
+
+/** Resultado del ultimo intento en modo usuario, para el latido. */
+let _lastFallback = '';
+
 /**
- * Corrige la config de USUARIO de RustDesk (servidor self-host + key). NO
- * necesita admin: `--config` escribe %APPDATA%\RustDesk del usuario que lo
- * ejecuta. Es lo unico reparable sin privilegios, y en las cajas donde el
- * script elevado nunca corrio esa config quedo apuntando mal — con esto, si
- * alguien abre RustDesk a mano, al menos registra contra el servidor correcto.
- * Inofensivo donde el servicio ya funciona: el servicio usa su propia config.
+ * Reparacion SIN privilegios — el unico camino que funciona en esta flota.
+ *
+ * Reparar el SERVICIO de Windows exige admin (su config vive bajo
+ * C:\Windows\ServiceProfiles) y las cuentas de las cajas no lo tienen: medido
+ * el 15-sep-2026, la tarea de highest no se pudo crear en 164 de 166 cajas.
+ * Pero el par de RustDesk tambien corre como proceso de USUARIO y registra
+ * igual contra el hbbs, que es lo que hace falta para poder conectarse.
+ *
+ * El script escribe los TOML de %APPDATA% (del propio usuario, sin permisos) y
+ * lanza `rustdesk.exe --server`, que no tiene control de root y corre sin
+ * ventana. NO se usa el CLI: `--config` y `--password` estan cerrados tras
+ * is_installed() && is_root() y con cuenta estandar no hacen nada.
+ *
+ * Solo se invoca cuando hbbs NO ve la caja: donde el servicio ya funciona no
+ * hay que levantar un segundo par.
  */
-function ensureUserConfig(app) {
+function ensureUserModeFallback(app) {
   return new Promise((resolve) => {
-    if (process.platform !== 'win32') return resolve({ ok: false, error: 'no-win32' });
+    if (process.platform !== 'win32') { _lastFallback = 'no-win32'; return resolve({ ok: false }); }
+    const script = getUserFallbackScript();
     const exe = getRustdeskPath(app);
-    if (!exe) return resolve({ ok: false, error: 'no-exe' });
-    execFile(exe, ['--config', RUSTDESK_CONFIG], { timeout: 20000, windowsHide: true },
-      (error) => resolve({ ok: !error, error: error && error.message }));
+    if (!script || !exe) {
+      _lastFallback = !script ? 'no-script' : 'no-exe';
+      return resolve({ ok: false, error: _lastFallback });
+    }
+    execFile(
+      'powershell',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script,
+        '-RdHost', RUSTDESK_HOST, '-RdKey', RUSTDESK_KEY, '-RdPassword', DEFAULT_PASSWORD, '-ExePath', exe],
+      { timeout: 60000, windowsHide: true },
+      (error, stdout, stderr) => {
+        const out = String(stdout || '').trim();
+        const ok = !error && /(^|\n)OK /.test(out);
+        const mark = (out.match(/(?:OK|WARN|FAIL)[^\n]*/) || [])[0]
+          || String(stderr || '').trim()
+          || (error && error.message)
+          || 'sin-detalle';
+        _lastFallback = mark.replace(/\s+/g, ' ').slice(0, 48);
+        resolve({ ok, out, error: error && error.message });
+      }
+    );
   });
 }
 
@@ -815,6 +859,9 @@ function registerRemoteSupportHandlers(app) {
       `task=${task}`,
     ];
     if (task === 'none' && _lastTaskErr) parts.push(`taskerr=${_lastTaskErr}`);
+    // Resultado del modo usuario (la reparación sin privilegios). Es lo que
+    // dice si la caja recuperó el acceso pese a no tener admin.
+    if (_lastFallback) parts.push(`fb=${_lastFallback}`);
     if (sr) {
       parts.push(`repair=ran`, `ok=${sr.ok ? 1 : 0}`, `run=${sr.running ? 1 : 0}`);
       if (sr.step) parts.push(`step=${String(sr.step).slice(0, 24)}`);
@@ -1078,10 +1125,23 @@ async function healIfUnregistered(app) {
   // tarea exista (y ella misma se lanza al registrarse). En cuenta admin repara
   // en segundos; en estándar corre sin elevar y hace falta el bootstrap SYSTEM,
   // que se instala en cualquier momento elevado (install / botón Reparar).
-  console.warn('[REMOTE] hbbs no ve esta caja registrada (id:', before.id || '¿?', ') — lanzando la tarea de reparación…');
+  console.warn('[REMOTE] hbbs no ve esta caja registrada (id:', before.id || '¿?', ') — reparando…');
+
+  // 1) Camino con privilegios: solo funciona en las pocas cajas admin.
   const task = await ensureHealTask(app, { mode: 'user' });
   if (!task.ok) {
-    console.warn('⚠️ [REMOTE] No se pudo registrar la tarea de reparación:', task.error || task.out || '');
+    console.warn('[REMOTE] Sin privilegios para reparar el servicio:', task.error || task.out || '');
+  }
+
+  // 2) Camino SIN privilegios, que es el que cubre a la flota entera: deja la
+  // config de usuario correcta y levanta el par con --server (sin ventana).
+  // Se corre SIEMPRE, no solo si lo anterior falló: en cuenta estándar el paso
+  // 1 nunca prospera y esto es lo único que devuelve el acceso a la caja.
+  const fb = await ensureUserModeFallback(app);
+  if (fb.ok) {
+    console.log('✅ [REMOTE] RustDesk levantado en modo usuario (sin privilegios).');
+  } else {
+    console.warn('⚠️ [REMOTE] Modo usuario no prosperó:', fb.error || _lastFallback || '');
   }
 }
 
@@ -1105,13 +1165,10 @@ function startRemoteSupportIfEnabled(app) {
         if (cfg.enabled !== true || cfg.disabledByUser === true) {
           writeConfig(app, { ...cfg, enabled: true, disabledByUser: false, password: cfg.password || DEFAULT_PASSWORD });
         }
-        // Lo ÚNICO reparable sin privilegios: dejar la config de usuario
-        // apuntando al self-host. No arregla el servicio, pero hace que la caja
-        // registre si alguien abre RustDesk a mano.
-        await ensureUserConfig(app);
-        // Auto-reparación sin cajero: la tarea de highest repara el servicio
-        // elevada y SIN UAC, pero SOLO si la cuenta tiene derechos de admin.
-        // En cuenta estándar esto falla y `taskerr` lo reporta en el latido.
+        // Intento de reparar el SERVICIO: solo prospera si la cuenta tiene
+        // derechos de admin, lo que en esta flota casi nunca ocurre. Se deja
+        // porque en las pocas cajas admin lo arregla de raíz y es inofensivo.
+        // La reparación que de verdad cubre a todas va en healIfUnregistered.
         await ensureHealTask(app, { mode: 'user' });
         await ensureServerKeyUpToDate(app);
         await healIfUnregistered(app);
