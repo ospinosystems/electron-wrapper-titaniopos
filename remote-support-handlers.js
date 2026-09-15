@@ -231,20 +231,54 @@ function registerHealTaskCommand(mode) {
  * con RunLevel Highest. En cuenta admin se elevara sola sin UAC; en estandar
  * corre sin elevar. Idempotente: -Force sobreescribe la definicion.
  */
+// Motivo por el que NO se pudo registrar la tarea, para el latido. Saber solo
+// `task=none` no distinguia "sin permisos" de "script ausente" o "cmdlet roto".
+let _lastTaskErr = '';
+
 function ensureHealTask(app, { mode = 'user' } = {}) {
   return new Promise((resolve) => {
     const script = getHealTaskScript();
     const apply = getApplyConfigScript();
-    if (!script || !apply) return resolve({ ok: false, error: 'no-script' });
+    if (!script || !apply) { _lastTaskErr = 'no-script'; return resolve({ ok: false, error: 'no-script' }); }
     execFile(
       'powershell',
       ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Mode', mode, '-ApplyScript', apply],
       { timeout: 60000, windowsHide: true },
-      (error, stdout) => {
+      (error, stdout, stderr) => {
         const out = String(stdout || '').trim();
-        resolve({ ok: !error && /(^|\n)OK task=/.test(out), out, error: error && error.message });
+        const ok = !error && /(^|\n)OK task=/.test(out);
+        if (ok) {
+          _lastTaskErr = '';
+        } else {
+          // Lo mas informativo primero: el WARN/FAIL que imprime el script, y si
+          // no, el stderr de PowerShell (ahi sale el "Acceso denegado").
+          const why = (out.match(/(?:WARN|FAIL)[^\n]*/) || [])[0]
+            || String(stderr || '').trim()
+            || (error && error.message)
+            || 'sin-detalle';
+          _lastTaskErr = why.replace(/\s+/g, ' ').slice(0, 60);
+        }
+        resolve({ ok, out, error: error && error.message });
       }
     );
+  });
+}
+
+/**
+ * Corrige la config de USUARIO de RustDesk (servidor self-host + key). NO
+ * necesita admin: `--config` escribe %APPDATA%\RustDesk del usuario que lo
+ * ejecuta. Es lo unico reparable sin privilegios, y en las cajas donde el
+ * script elevado nunca corrio esa config quedo apuntando mal — con esto, si
+ * alguien abre RustDesk a mano, al menos registra contra el servidor correcto.
+ * Inofensivo donde el servicio ya funciona: el servicio usa su propia config.
+ */
+function ensureUserConfig(app) {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') return resolve({ ok: false, error: 'no-win32' });
+    const exe = getRustdeskPath(app);
+    if (!exe) return resolve({ ok: false, error: 'no-exe' });
+    execFile(exe, ['--config', RUSTDESK_CONFIG], { timeout: 20000, windowsHide: true },
+      (error) => resolve({ ok: !error, error: error && error.message }));
   });
 }
 
@@ -666,22 +700,37 @@ ${block}`;
   });
 }
 
-// ¿La cuenta actual es admin local? Mira el token (incluye el grupo
-// Administradores aunque UAC lo tenga filtrado): dice si la tarea de highest
-// podra elevarse sola. Cacheado por sesion (no cambia). null = no se pudo saber.
-let _adminCache = null;
-function isCurrentUserAdmin() {
-  if (_adminCache !== null) return Promise.resolve(_adminCache);
+/**
+ * Privilegios de la cuenta, con la distincion que de verdad importa:
+ *
+ *   adm = privilegio EFECTIVO ahora mismo (IsInRole Administrator). 1 solo si
+ *         el token ya viene con derechos de admin (elevado, o UAC desactivado).
+ *   grp = pertenece al grupo Administradores, AUNQUE UAC le filtre el token.
+ *         Se lee de `whoami /groups` buscando el SID S-1-5-32-544 — los SIDs no
+ *         estan localizados, asi que funciona en Windows en español.
+ *
+ * La combinacion desambigua lo que el chequeo anterior no podia:
+ *   grp=1 adm=0 -> admin con UAC filtrando: basta UN clic de "Si" para elevar.
+ *   grp=1 adm=1 -> ya tiene derechos: crear la tarea deberia funcionar.
+ *   grp=0        -> cuenta ESTANDAR: no hay clic que valga, hacen falta
+ *                   credenciales de administrador.
+ * Cacheado por sesion; '?' si no se pudo determinar.
+ */
+let _elevCache = null;
+function elevationInfo() {
+  if (_elevCache !== null) return Promise.resolve(_elevCache);
   return new Promise((resolve) => {
-    if (process.platform !== 'win32') { _adminCache = false; return resolve(false); }
-    const ps = "$id=[Security.Principal.WindowsIdentity]::GetCurrent();"
-      + "$sid=New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544');"
-      + "if(($id.Groups | Where-Object { $_ -eq $sid })){'1'}else{'0'}";
+    if (process.platform !== 'win32') return resolve({ adm: '?', grp: '?' });
+    const ps = "$p=[Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent();"
+      + "$r=if($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){1}else{0};"
+      + "$m=if((whoami /groups) -match 'S-1-5-32-544'){1}else{0};"
+      + "\"$r$m\"";
     execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps],
-      { timeout: 5000, windowsHide: true }, (err, out) => {
-        if (err) { resolve(null); return; } // no se cachea el fallo: reintenta luego
-        _adminCache = String(out || '').trim() === '1';
-        resolve(_adminCache);
+      { timeout: 8000, windowsHide: true }, (err, out) => {
+        const s = String(out || '').trim();
+        if (err || !/^[01][01]$/.test(s)) return resolve({ adm: '?', grp: '?' }); // sin cachear: reintenta
+        _elevCache = { adm: s[0], grp: s[1] };
+        resolve(_elevCache);
       });
   });
 }
@@ -746,19 +795,26 @@ function registerRemoteSupportHandlers(app) {
     } catch (_) { /* deja unknown */ }
 
     const sr = readSetupResult(app); // {ok,installed,running,step,error} o null
-    const admin = await isCurrentUserAdmin();
+    const elev = await elevationInfo();
     const task = await healTaskInfo();
 
-    // Cadena corta y estable para guardar en el latido (<160):
-    // svc=<estado> admin=<0/1/?> task=<none|user|system> repair=<none|ran> run=<0/1> step=<..> err=<..>
-    // La reparación ya no depende de un UAC por arranque, sino de `task`: en
-    // cuenta admin (admin=1) una tarea `task=user` se eleva sola y repara; una
-    // caja con admin=0 y task=user es la que aún necesita el bootstrap SYSTEM.
+    // Cadena corta y estable para guardar en el latido (<190; la columna admite 200):
+    // svc=<estado> adm=<0/1/?> grp=<0/1/?> task=<none|user|system> taskerr=<..> repair=<..>
+    //
+    // Lo que decide el plan de cada caja:
+    //   grp=1 adm=0 -> admin con UAC: un solo clic de "Sí" la repara y deja la
+    //                  tarea SYSTEM permanente.
+    //   grp=0        -> cuenta ESTÁNDAR: ningún clic sirve, hacen falta
+    //                  credenciales de administrador una vez.
+    //   task=none + taskerr -> por qué no se pudo crear la tarea (p. ej. acceso
+    //                  denegado), que es justo lo que faltaba saber.
     const parts = [
       `svc=${svc}`,
-      `admin=${admin === null ? '?' : admin ? 1 : 0}`,
+      `adm=${elev.adm}`,
+      `grp=${elev.grp}`,
       `task=${task}`,
     ];
+    if (task === 'none' && _lastTaskErr) parts.push(`taskerr=${_lastTaskErr}`);
     if (sr) {
       parts.push(`repair=ran`, `ok=${sr.ok ? 1 : 0}`, `run=${sr.running ? 1 : 0}`);
       if (sr.step) parts.push(`step=${String(sr.step).slice(0, 24)}`);
@@ -766,7 +822,7 @@ function registerRemoteSupportHandlers(app) {
     } else {
       parts.push('repair=none');
     }
-    return { diag: parts.join(' ').slice(0, 160) };
+    return { diag: parts.join(' ').slice(0, 190) };
   });
 
   // Descarga rustdesk del release oficial (cuando no viene bundleado).
@@ -1049,8 +1105,13 @@ function startRemoteSupportIfEnabled(app) {
         if (cfg.enabled !== true || cfg.disabledByUser === true) {
           writeConfig(app, { ...cfg, enabled: true, disabledByUser: false, password: cfg.password || DEFAULT_PASSWORD });
         }
+        // Lo ÚNICO reparable sin privilegios: dejar la config de usuario
+        // apuntando al self-host. No arregla el servicio, pero hace que la caja
+        // registre si alguien abre RustDesk a mano.
+        await ensureUserConfig(app);
         // Auto-reparación sin cajero: la tarea de highest repara el servicio
-        // elevada y SIN UAC en cuentas admin. Se asegura en cada arranque.
+        // elevada y SIN UAC, pero SOLO si la cuenta tiene derechos de admin.
+        // En cuenta estándar esto falla y `taskerr` lo reporta en el latido.
         await ensureHealTask(app, { mode: 'user' });
         await ensureServerKeyUpToDate(app);
         await healIfUnregistered(app);
