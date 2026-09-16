@@ -278,6 +278,45 @@ if ((Test-Path $Installed) -and $RdPassword) {
   }
 }
 
+# 3b) FIABLE: escribir la clave en TEXTO PLANO en el RustDesk.toml del SERVICIO.
+# `--password` por IPC es inconstante (auth por ruta del exe, exige el servicio
+# Running); si falla, la caja se queda con la clave ALEATORIA que RustDesk genera
+# al instalar — que nadie conoce, justo el sintoma reportado. Escribir el TOML y
+# reiniciar hace que RustDesk la CIFRE al arrancar, atada a esta maquina: es el
+# metodo documentado y el que de verdad deja la clave por defecto conocida.
+# (Mismo enfoque que rustdesk-user-fallback.ps1 para la config de usuario.)
+$pwWritten = $false
+foreach ($dir in $ServiceConfigDirs) {
+  if (-not (Test-Path $dir)) { continue }
+  $toml1 = Join-Path $dir 'RustDesk.toml'
+  $content = ''
+  if (Test-Path $toml1) { $content = Get-Content $toml1 -Raw -ErrorAction SilentlyContinue }
+  if ($null -eq $content) { $content = '' }
+  $line = "password = '$RdPassword'"
+  if ($content -match "(?m)^\s*password\s*=") {
+    $new = [regex]::Replace($content, "(?m)^\s*password\s*=.*$", $line)
+  } else {
+    # Clave de RAIZ (fuera de cualquier seccion): al frente, para no caer dentro
+    # de un [options] por accidente.
+    $new = "$line`n" + $content
+  }
+  # NO perder enc_id: si se va, la caja estrena ID remoto y hay que re-registrar.
+  $hadEncId = $content -match '(?m)^\s*enc_id\s*='
+  $keepsEncId = $new -match '(?m)^\s*enc_id\s*='
+  if ($hadEncId -and -not $keepsEncId) { Write-Output "FAIL password would-lose-enc-id $dir"; continue }
+  if (Test-Path $toml1) { Copy-Item -Force $toml1 "$toml1.bak" -ErrorAction SilentlyContinue }
+  Set-Content -Path $toml1 -Value $new -Encoding UTF8 -ErrorAction SilentlyContinue
+  Write-Output "PATCHED password (texto plano, se cifra al arrancar) $dir"
+  $pwWritten = $true
+}
+if ($pwWritten) {
+  $svc = Get-RdSvc
+  if ($svc) {
+    Restart-Service -Name $svc.Name -Force -ErrorAction SilentlyContinue
+    Write-Output "RESTARTED (para cifrar la clave) status=$((Get-RdSvc).Status)"
+  }
+}
+
 # Segunda pasada: si el servicio se re-registro recien, su carpeta de config ya
 # existe aunque en la primera pasada (arriba) no estuviera. Parchear la key y el
 # rendezvous ahora mismo y reiniciar, para reparar en UNA sola corrida en vez de
