@@ -910,6 +910,30 @@ function registerRemoteSupportHandlers(app) {
     };
   });
 
+  // Reparación LIVIANA (un solo UAC): NO desinstala ni reinstala. Re-registra el
+  // servicio con el exe actual (arregla el "servicio detenido"/Error 1053),
+  // parchea la config del servicio (servidor + key + clave por defecto) y lo
+  // reinicia. Es lo que la CAMPAÑA debe usar: la reinstalación completa
+  // (remote-support:repair) es frágil — "no se ha podido instalar" y se abre la
+  // GUI de RustDesk — y la caja no necesita reinstalar para volver a registrar.
+  ipcMain.handle('remote-support:reconfigure', async () => {
+    const base = getRustdeskPath(app);
+    if (!base) return { success: false, error: 'RustDesk no está instalado en esta caja.' };
+    clearSetupResult(app);
+    const run = await runElevatedSetup(app, buildReconfigureBlock(), 'reconfig');
+    if (!run.ok) {
+      return { success: false, error: run.error || describeSetupFailure(run.result), result: run.result || null };
+    }
+    const result = run.result || {};
+    writeConfig(app, { ...readConfig(app), enabled: true, disabledByUser: false, serverKey: RUSTDESK_KEY, serverKeyMethod: SERVER_KEY_METHOD });
+    return {
+      success: true,
+      id: result.id || '',
+      installed: !!result.installed,
+      running: !!result.running,
+    };
+  });
+
   // Reparar = desinstalar limpio + reinstalar en UN solo UAC. Para cuando el
   // servicio quedó a medio instalar (sin feedback, ID que no coincide, etc.).
   ipcMain.handle('remote-support:repair', async (_event, password) => {
