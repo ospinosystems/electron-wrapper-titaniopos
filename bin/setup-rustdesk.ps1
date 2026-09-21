@@ -64,6 +64,26 @@ if (Test-Path $applyCfg) {
   Write-Output 'WARN no-apply-config-script'
 }
 
+# 2c) DEJAR PLANTADA LA AUTO-REPARACION PERMANENTE (tarea SYSTEM).
+# El instalador NSIS corre elevado, asi que ESTE es el momento fiable de toda la
+# vida de la caja donde se puede registrar una tarea con principal
+# NT AUTHORITY\SYSTEM (crearla exige un token ya elevado; el bus, con el token
+# filtrado del cajero, no puede — por eso fallaba en 164 de 166). Una vez creada,
+# corre como SYSTEM en cada arranque/inicio de sesion y cada 2h, sin aviso y sin
+# cajero: reimpone servidor+key+clave y levanta el servicio si se cayo. Es lo que
+# vuelve la caja autonoma tras UN solo toque elevado (este install, o una
+# reinstalacion que haga soporte por RustDesk). Un fallo aqui NO aborta el setup.
+$healTask = Join-Path $PSScriptRoot 'rustdesk-heal-task.ps1'
+if (Test-Path $healTask) {
+  try {
+    & $healTask -Mode system -ApplyScript $applyCfg
+  } catch {
+    Write-Output "WARN heal-task-system: $($_.Exception.Message)"
+  }
+} else {
+  Write-Output 'WARN no-heal-task-script'
+}
+
 $svc = Get-RdSvc
 if ($svc) {
   Write-Output "OK service=$($svc.Status)"

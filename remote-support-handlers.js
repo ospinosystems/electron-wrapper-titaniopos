@@ -934,6 +934,27 @@ function registerRemoteSupportHandlers(app) {
     };
   });
 
+  // Reparación DESATENDIDA — la que dispara EL BUS. No usa el flujo elevado
+  // interactivo, así que no interrumpe a la persona en la caja (antes ese aviso
+  // se cancelaba en 142 de 146). Corre el fallback de USUARIO: escribe la config
+  // del propio usuario y levanta `rustdesk.exe --server`, con lo que la caja
+  // vuelve a registrarse en el hbbs y soporte ya la ve. Es exactamente lo que la
+  // app ya hace sola en cada arranque (healIfUnregistered), pero a demanda para
+  // no esperar al reinicio. La cura durable (servicio + tarea SYSTEM que reimpone
+  // servidor/key/clave en bucle) la deja el instalador elevado o soporte al entrar.
+  ipcMain.handle('remote-support:heal-unattended', async () => {
+    const base = getRustdeskPath(app);
+    if (!base) return { success: false, error: 'RustDesk no está instalado en esta caja.' };
+    const fb = await ensureUserModeFallback(app);
+    const detail = (fb.out || fb.error || '').toString().split('\n').filter(Boolean).pop() || '';
+    return {
+      success: !!fb.ok,
+      unattended: true,
+      detail,
+      error: fb.ok ? undefined : (fb.error || 'No se pudo re-registrar en modo usuario.'),
+    };
+  });
+
   // Reparar = desinstalar limpio + reinstalar en UN solo UAC. Para cuando el
   // servicio quedó a medio instalar (sin feedback, ID que no coincide, etc.).
   ipcMain.handle('remote-support:repair', async (_event, password) => {

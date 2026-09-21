@@ -553,6 +553,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   remoteSupportRepair: (password) => ipcRenderer.invoke('remote-support:repair', password),
   /** Reparación LIVIANA: re-registra + reconfigura el servicio, sin reinstalar. */
   remoteSupportReconfigure: () => ipcRenderer.invoke('remote-support:reconfigure'),
+  /** Reparación DESATENDIDA (sin UAC, sin cajero): la que dispara el bus. */
+  remoteSupportHealUnattended: () => ipcRenderer.invoke('remote-support:heal-unattended'),
   /** Desactiva el acceso desatendido y cierra RustDesk. */
   remoteSupportDisable: (password) => ipcRenderer.invoke('remote-support:disable', password),
   /** Abre la ventana de RustDesk manualmente. */
