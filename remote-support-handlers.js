@@ -793,11 +793,26 @@ function elevationInfo() {
 // Estado de la tarea de auto-reparacion, por XML (etiquetas NO localizadas, a
 // diferencia de `schtasks /v`): none | user | system.
 function healTaskInfo() {
+  // El marcador que deja heal-task.ps1 al crear la tarea. Se lee cuando el
+  // `schtasks /query` falla: un usuario NO elevado NO puede leer una tarea
+  // SYSTEM, así que el query da error y el badge "blindada" reportaba task=none
+  // aunque la tarea existiera. Este marcador (ProgramData, legible por usuario)
+  // es la verdad de tierra en ese caso.
+  const readMarker = () => {
+    try {
+      const m = fs.readFileSync('C:\\ProgramData\\TitanioPOS\\heal-task-mode.txt', 'utf8').trim().toLowerCase();
+      if (m === 'system' || m === 'user') return m;
+    } catch (_) { /* ignore */ }
+    return null;
+  };
   return new Promise((resolve) => {
     if (process.platform !== 'win32') return resolve('none');
     execFile('schtasks.exe', ['/query', '/tn', HEAL_TASK_NAME, '/xml'],
       { timeout: 5000, windowsHide: true }, (err, out) => {
-        if (err) return resolve('none');
+        // El query falló: casi siempre es un usuario NO elevado que no puede leer
+        // la tarea SYSTEM. Ahí manda el marcador. Si el query FUNCIONA, se confía
+        // en él (es la verdad viva; el marcador podría quedar viejo).
+        if (err) return resolve(readMarker() || 'none');
         const xml = String(out || '');
         const uid = (xml.match(/<UserId>([^<]*)<\/UserId>/i) || [])[1] || '';
         const sys = /S-1-5-18|SYSTEM|LocalSystem/i.test(uid) || /<LogonType>ServiceAccount<\/LogonType>/i.test(xml);

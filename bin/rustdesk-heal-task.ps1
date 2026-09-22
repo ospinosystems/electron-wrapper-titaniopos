@@ -90,6 +90,18 @@ if (-not $registered) {
   }
 }
 
+# Marcador legible por el USUARIO para el diagnostico: Windows le OCULTA una tarea
+# SYSTEM al `schtasks /query` no elevado, asi que el badge "blindada" reportaba
+# task=none aunque la tarea existiera. ProgramData es escribible por admin/SYSTEM
+# y legible por el usuario; el diagnostico lo lee cuando el query falla.
+if ($registered) {
+  try {
+    $md = 'C:\ProgramData\TitanioPOS'
+    New-Item -ItemType Directory -Force -Path $md -ErrorAction SilentlyContinue | Out-Null
+    Set-Content -Path (Join-Path $md 'heal-task-mode.txt') -Value $Mode -Encoding ascii -ErrorAction SilentlyContinue
+  } catch {}
+}
+
 # Dispararla YA para no esperar al primer trigger: la caja se repara en segundos.
 try { & schtasks.exe /run /tn "$TaskName" 2>&1 | Out-Null } catch {}
 exit 0
