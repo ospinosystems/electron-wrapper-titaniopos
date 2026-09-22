@@ -60,7 +60,8 @@
       "!.env.bak"
     ],
     "asarUnpack": [
-      "**/*.ico"
+      "**/*.ico",
+      "bin/*.ps1"
     ],
     "extraResources": [
       {

@@ -41,6 +41,7 @@ const { ipcMain, app: electronApp } = require('electron');
 const { spawn, execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const https = require('https');
 
 let rustdeskProc = null;
@@ -186,31 +187,48 @@ function getPortableExe(app, opts = {}) {
  * instalada; `--config` no sirve para eso (escribe la config del usuario).
  * Devuelve null en builds viejos que no lo incluyen.
  */
-function getApplyConfigScript() {
-  const candidates = [];
-  if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, 'bin', 'rustdesk-apply-config.ps1'));
-  candidates.push(path.join(__dirname, 'bin', 'rustdesk-apply-config.ps1'));
-  if (__dirname.includes('app.asar')) {
-    candidates.push(path.join(__dirname.split('app.asar')[0], 'bin', 'rustdesk-apply-config.ps1'));
+/**
+ * Resuelve un .ps1 de bin/ a una ruta REAL en disco que PowerShell pueda correr.
+ *
+ * BUG QUE ARREGLA (caja real, 1.0.241): un .ps1 DENTRO de app.asar NO existe como
+ * archivo real. `fs.existsSync` da true (shim de Electron sobre el asar), pero
+ * `powershell -File <ruta-en-asar>` falla con "no existe" y el arreglo del bus no
+ * corre NADA. Antes se devolvía justo esa ruta empaquetada. Ahora:
+ *  1) se prefieren copias reales: extraResources (resources\bin) y asar.unpacked;
+ *  2) se RECHAZA la ruta dentro de app.asar (no la corre PowerShell);
+ *  3) si solo queda la empaquetada, se EXTRAE a un temp real (fs SÍ la lee).
+ */
+function resolvePs1(name) {
+  const real = [];
+  if (process.resourcesPath) {
+    real.push(path.join(process.resourcesPath, 'bin', name));                       // extraResources
+    real.push(path.join(process.resourcesPath, 'app.asar.unpacked', 'bin', name));  // asarUnpack
   }
-  for (const c of candidates) {
+  real.push(path.join(__dirname, 'bin', name).replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`));
+  for (const c of real) {
+    if (c.includes(`app.asar${path.sep}`) && !c.includes('app.asar.unpacked')) continue; // nunca la empaquetada
     try { if (fs.existsSync(c)) return c; } catch (_) { /* ignore */ }
   }
+  // Último recurso: solo existe la copia empaquetada dentro del asar. fs la lee;
+  // la volcamos a un temp REAL para que PowerShell la pueda ejecutar.
+  const packed = path.join(__dirname, 'bin', name);
+  try {
+    if (fs.existsSync(packed)) {
+      const dest = path.join(os.tmpdir(), 'titanio-' + name);
+      fs.writeFileSync(dest, fs.readFileSync(packed));
+      return dest;
+    }
+  } catch (_) { /* ignore */ }
   return null;
+}
+
+function getApplyConfigScript() {
+  return resolvePs1('rustdesk-apply-config.ps1');
 }
 
 /** Ruta a rustdesk-heal-task.ps1 (registra la tarea de auto-reparacion). */
 function getHealTaskScript() {
-  const candidates = [];
-  if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, 'bin', 'rustdesk-heal-task.ps1'));
-  candidates.push(path.join(__dirname, 'bin', 'rustdesk-heal-task.ps1'));
-  if (__dirname.includes('app.asar')) {
-    candidates.push(path.join(__dirname.split('app.asar')[0], 'bin', 'rustdesk-heal-task.ps1'));
-  }
-  for (const c of candidates) {
-    try { if (fs.existsSync(c)) return c; } catch (_) { /* ignore */ }
-  }
-  return null;
+  return resolvePs1('rustdesk-heal-task.ps1');
 }
 
 /**
@@ -266,16 +284,7 @@ function ensureHealTask(app, { mode = 'user' } = {}) {
 
 /** Ruta a rustdesk-user-fallback.ps1 (reparacion en modo usuario, sin admin). */
 function getUserFallbackScript() {
-  const candidates = [];
-  if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, 'bin', 'rustdesk-user-fallback.ps1'));
-  candidates.push(path.join(__dirname, 'bin', 'rustdesk-user-fallback.ps1'));
-  if (__dirname.includes('app.asar')) {
-    candidates.push(path.join(__dirname.split('app.asar')[0], 'bin', 'rustdesk-user-fallback.ps1'));
-  }
-  for (const c of candidates) {
-    try { if (fs.existsSync(c)) return c; } catch (_) { /* ignore */ }
-  }
-  return null;
+  return resolvePs1('rustdesk-user-fallback.ps1');
 }
 
 /** Resultado del ultimo intento en modo usuario, para el latido. */
