@@ -343,10 +343,11 @@ function ensureUserModeFallback(app) {
 function applyConfigCommand() {
   const script = getApplyConfigScript();
   if (!script) return "$result.applyConfig = 'no-script'";
-  // -WaitForPassword: estos bloques corren elevados pero NO en el NSIS, así que
-  // apply-config puede fijar la clave por defecto de forma bloqueante (esperar
-  // al servicio + reintentar) en vez de a ciegas.
-  return `try { $result.applyConfig = (& ${psSingleQuote(script)} -RdHost ${psSingleQuote(RUSTDESK_HOST)} -RdKey ${psSingleQuote(RUSTDESK_KEY)} -WaitForPassword 2>&1 | Out-String).Trim() } catch { $result.applyConfig = 'error: ' + $_.Exception.Message }`;
+  // Secuencia PROBADA a mano en una caja real (54/3, 22-sep): clave explícita y
+  // SIN -WaitForPassword. -WaitForPassword BLOQUEA esperando al servicio y podía
+  // colgar el botón elevado; la corrida directa fija la clave y termina rápido,
+  // que es justo lo que funcionó (imprimió PATCHED password + RESTARTED).
+  return `try { $result.applyConfig = (& ${psSingleQuote(script)} -RdHost ${psSingleQuote(RUSTDESK_HOST)} -RdKey ${psSingleQuote(RUSTDESK_KEY)} -RdPassword ${psSingleQuote(DEFAULT_PASSWORD)} 2>&1 | Out-String).Trim() } catch { $result.applyConfig = 'error: ' + $_.Exception.Message }`;
 }
 
 /**
@@ -564,6 +565,7 @@ function runElevatedSetup(app, innerBlock, mode) {
     const ps1 = path.join(tmpDir, `rd-${mode}-${innerBlock.length}.ps1`);
 
     const script = `$ErrorActionPreference = 'Continue'
+Set-ExecutionPolicy -Scope Process Bypass -Force -ErrorAction SilentlyContinue
 $result = [ordered]@{ ok = $false; installed = $false; running = $false; passwordSet = $false; id = ''; step = 'start'; error = '' }
 try {
 ${innerBlock}
