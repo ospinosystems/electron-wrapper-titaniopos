@@ -502,7 +502,7 @@ for ($i = 0; $i -lt 8 -and -not $result.id; $i++) {
 # Marcar ok por 'installed' a secas dejaba cajas con la key vieja anotadas como
 # al día, y ensureServerKeyUpToDate ya no reintentaba (mismo bug que reconfigure).
 $result.ok = $result.installed -and
-  ($result.applyConfig -match 'PATCHED|already-current') -and
+  ($result.applyConfig -match 'PATCHED|already-current|RESTARTED') -and
   -not ($result.applyConfig -match 'FAIL')
 `;
 }
@@ -521,13 +521,18 @@ $rd = if (Test-Path $installed) { $installed } else { '${INSTALLED_PATHS[1]}' }
 
 function Get-RdSvc { foreach ($n in 'RustDesk','rustdesk') { $s = Get-Service -Name $n -ErrorAction SilentlyContinue; if ($s) { return $s } } return $null }
 
-$result.step = 'config'
-Start-Process -FilePath $rd -ArgumentList '--config',${psSingleQuote(RUSTDESK_CONFIG)}
-Start-Sleep -Seconds 2
+# Matar los peers de RustDesk en modo USUARIO (los que levanta el fallback del
+# bus: fb=OK ya-corriendo pidX). Medido 23-sep con la caja del usuario (Elorza 1,
+# fb=OK, repair=none): las cajas con ese peer corriendo COLGABAN la reparación
+# ("tardó demasiado"), porque competía por el ID y bloqueaba el reinicio del
+# servicio. El SERVICIO corre en sesión 0 y NO se toca aquí (SessionId -ne 0).
+# También se quita el paso '--config' de antes, que levantaba OTRO peer de
+# usuario: no hacía falta, apply-config es lo que arregla el servicio.
+$result.step = 'kill-user-peers'
+try { Get-Process -Name 'rustdesk' -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -ne 0 } | Stop-Process -Force -ErrorAction SilentlyContinue } catch {}
+Start-Sleep -Milliseconds 700
 
-# Lo anterior solo toca la config del USUARIO. Esto parchea la del SERVICIO
-# (LocalService) y lo reinicia — es lo único que cambia la key con la que la
-# caja se registra en el hbbs.
+# Parchea la config del SERVICIO (LocalService) + reinicia + planta la tarea.
 $result.step = 'apply-service-config'
 ${applyConfigCommand()}
 ${registerHealTaskCommand('system')}
@@ -548,7 +553,7 @@ for ($i = 0; $i -lt 8 -and -not $result.id; $i++) {
 # Éxito = la key llegó al SERVICIO. Marcar ok solo porque el servicio existe fue
 # lo que dejó cajas rotas anotadas como "al día": el reintento no volvía a correr.
 $result.ok = $result.installed -and
-  ($result.applyConfig -match 'PATCHED|already-current') -and
+  ($result.applyConfig -match 'PATCHED|already-current|RESTARTED') -and
   -not ($result.applyConfig -match 'FAIL')
 `;
 }
