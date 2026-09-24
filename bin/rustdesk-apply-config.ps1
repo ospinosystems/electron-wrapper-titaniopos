@@ -293,13 +293,13 @@ foreach ($dir in $ServiceConfigDirs) {
   if (Test-Path $toml1) { $content = Get-Content $toml1 -Raw -ErrorAction SilentlyContinue }
   if ($null -eq $content) { $content = '' }
   $line = "password = '$RdPassword'"
-  if ($content -match "(?m)^\s*password\s*=") {
-    $new = [regex]::Replace($content, "(?m)^\s*password\s*=.*$", $line)
-  } else {
-    # Clave de RAIZ (fuera de cualquier seccion): al frente, para no caer dentro
-    # de un [options] por accidente.
-    $new = "$line`n" + $content
-  }
+  # Quitar cualquier 'password =' vieja y poner la nueva ARRIBA (clave de RAIZ, no
+  # dentro de [options]). Se EVITA [regex]::Replace a proposito: en .NET un '$$' en
+  # el REEMPLAZO se colapsa a '$', y la clave Jaja2712$$ quedaba Jaja2712$ (BUG real
+  # medido el 24-sep en Elorza 1: el toml tenia password = 'Jaja2712$'). El filtrado
+  # por linea no interpreta el '$'.
+  $keptLines = @(($content -replace "`r", '') -split "`n") | Where-Object { $_ -notmatch '^\s*password\s*=' }
+  $new = (@($line) + $keptLines) -join "`n"
   # NO perder enc_id: si se va, la caja estrena ID remoto y hay que re-registrar.
   $hadEncId = $content -match '(?m)^\s*enc_id\s*='
   $keepsEncId = $new -match '(?m)^\s*enc_id\s*='

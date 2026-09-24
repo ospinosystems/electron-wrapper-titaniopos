@@ -60,10 +60,11 @@ function Set-TomlRoot {
   param([string]$Content, [string]$Name, [string]$Value)
   $escaped = [regex]::Escape($Name)
   $line = "$Name = '$Value'"
-  if ($Content -match "(?m)^\s*$escaped\s*=") {
-    return [regex]::Replace($Content, "(?m)^\s*$escaped\s*=.*$", $line)
-  }
-  return "$line`n" + $Content
+  # Se EVITA [regex]::Replace: en .NET un '$$' en el REEMPLAZO se colapsa a '$', y
+  # la clave Jaja2712$$ quedaba Jaja2712$ (BUG real). Filtrado por linea + prepend,
+  # que no interpreta el '$'.
+  $kept = @(($Content -replace "`r", '') -split "`n") | Where-Object { $_ -notmatch "^\s*$escaped\s*=" }
+  return (@($line) + $kept) -join "`n"
 }
 
 function Read-TextOrEmpty {
