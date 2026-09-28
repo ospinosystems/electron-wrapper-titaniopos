@@ -206,7 +206,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * Guarda la config de impresión en red y aplica el estado del servidor
    * (arranca/detiene/reubica el puerto según el modo).
    * @param {object} partial - { shareEnabled, shareTicket, shareFiscal, shareLabel, sharePort,
-   *   hostIp (nombre o IP), hostPort, hostIps (IPs de LAN de respaldo), useRemoteTicket, useRemoteFiscal, useRemoteLabel }
+   *   hosts: { ticket, fiscal, label } — anfitriona POR IMPRESORA, cada una
+   *     { hostIp (nombre o IP), hostPort, hostIps (IPs de LAN de respaldo) } o null
+   *     para volver a la local; solo se tocan las impresoras que se nombran }
+   *   Vistas de una sola anfitriona: hostIp, hostPort, hostIps, useRemoteTicket,
+   *   useRemoteFiscal, useRemoteLabel (la config devuelta trae `hosts` si el shell lo soporta).
    */
   printShareConfigSave: (partial) => ipcRenderer.invoke('print-share-config-save', partial),
 

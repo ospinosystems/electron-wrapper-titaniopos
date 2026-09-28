@@ -114,9 +114,15 @@ const DEFAULT_MEGA_POS = {
 //   hostFiscal/hostLabel — último snapshot de los parámetros de la anfitriona
 //     (formato fiscal / dimensiones de etiqueta) para operar aunque el /health
 //     no responda en el momento.
+//   hosts — anfitriona POR IMPRESORA ({ ticket, fiscal, label }, null = usa la
+//     local). Es la fuente de verdad de qué se consume y de dónde: la tickera
+//     puede venir de una caja y la fiscal de otra. hostIp/hostName/... y los
+//     useRemote* de la raíz quedan como RESUMEN derivado (la primera anfitriona
+//     en uso) para las vistas que solo conocen una anfitriona.
 //
-// Migración: una config guardada por versiones anteriores (sin shareEnabled)
-// se traduce en normalizePrintShare preservando EXACTAMENTE su comportamiento.
+// Migración: una config guardada por versiones anteriores (sin shareEnabled, o
+// sin hosts) se traduce en normalizePrintShare preservando EXACTAMENTE su
+// comportamiento: su única anfitriona pasa a ser la de cada impresora en uso.
 const DEFAULT_PRINT_SHARE = {
   mode: 'off',
   shareEnabled: false,
@@ -137,10 +143,13 @@ const DEFAULT_PRINT_SHARE = {
   useRemoteTicket: false,
   useRemoteFiscal: false,
   useRemoteLabel: false,
+  hosts: { ticket: null, fiscal: null, label: null },
   hostFiscal: null,
   hostLabel: null,
   lastUpdated: null,
 };
+
+const PRINT_SHARE_KINDS = ['ticket', 'fiscal', 'label'];
 
 const DEFAULT_SETTINGS = {
   schemaVersion: 1,
@@ -237,13 +246,31 @@ function normalizeHostIps(raw) {
   return out;
 }
 
+function toPrintSharePort(v, def) {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) && n > 0 && n <= 65535 ? n : def;
+}
+
+/**
+ * Una anfitriona: lo que configuró el usuario (hostIp = nombre Windows o IP,
+ * hostPort) más sus alias aprendidos. null si no hay a quién apuntar.
+ */
+function normalizePrintShareHost(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const hostIp = String(raw.hostIp || '').trim();
+  if (!hostIp) return null;
+  return {
+    hostIp,
+    hostPort: toPrintSharePort(raw.hostPort, DEFAULT_PRINT_SHARE.hostPort),
+    hostName: String(raw.hostName || '').trim(),
+    hostIps: normalizeHostIps(raw.hostIps),
+    hostLastIp: String(raw.hostLastIp || '').trim(),
+  };
+}
+
 function normalizePrintShare(raw) {
   const base = raw && typeof raw === 'object' ? raw : {};
-  const toPort = (v, def) => {
-    const n = parseInt(v, 10);
-    return Number.isFinite(n) && n > 0 && n <= 65535 ? n : def;
-  };
-  const hostIp = String(base.hostIp || '').trim();
+  const toPort = toPrintSharePort;
   const legacyMode = base.mode === 'share' || base.mode === 'receive' ? base.mode : 'off';
   // shareEnabled presente = formato flex (lo escribe la UI/save nuevos).
   const isFlex = typeof base.shareEnabled === 'boolean';
@@ -272,7 +299,24 @@ function normalizePrintShare(raw) {
     useRemoteLabel = legacyMode === 'receive' && base.useRemoteLabel !== false;
   }
 
-  const consumesRemote = (useRemoteTicket || useRemoteFiscal || useRemoteLabel) && hostIp !== '';
+  // Anfitriona por impresora. Con `hosts` en disco, manda `hosts`; una config
+  // anterior (una sola anfitriona + flags) la reparte entre lo que consumía.
+  const rootHost = normalizePrintShareHost(base);
+  const hosts = {};
+  if (base.hosts && typeof base.hosts === 'object') {
+    for (const kind of PRINT_SHARE_KINDS) hosts[kind] = normalizePrintShareHost(base.hosts[kind]);
+  } else {
+    const uses = { ticket: useRemoteTicket, fiscal: useRemoteFiscal, label: useRemoteLabel };
+    for (const kind of PRINT_SHARE_KINDS) hosts[kind] = uses[kind] ? normalizePrintShareHost(rootHost) : null;
+  }
+  useRemoteTicket = hosts.ticket !== null;
+  useRemoteFiscal = hosts.fiscal !== null;
+  useRemoteLabel = hosts.label !== null;
+
+  const consumesRemote = useRemoteTicket || useRemoteFiscal || useRemoteLabel;
+  // Resumen para las vistas de UNA anfitriona: la primera en uso; si no se
+  // consume nada, la última que se configuró (para volver a activarla).
+  const summary = hosts.ticket || hosts.fiscal || hosts.label || rootHost;
 
   return {
     // Resumen legado para builds viejas: 'share' gana (era el comportamiento
@@ -283,14 +327,15 @@ function normalizePrintShare(raw) {
     shareFiscal,
     shareLabel,
     sharePort: toPort(base.sharePort, DEFAULT_PRINT_SHARE.sharePort),
-    hostIp,
-    hostPort: toPort(base.hostPort, DEFAULT_PRINT_SHARE.hostPort),
-    hostName: String(base.hostName || '').trim(),
-    hostIps: normalizeHostIps(base.hostIps),
-    hostLastIp: String(base.hostLastIp || '').trim(),
+    hostIp: summary ? summary.hostIp : '',
+    hostPort: summary ? summary.hostPort : toPort(base.hostPort, DEFAULT_PRINT_SHARE.hostPort),
+    hostName: summary ? summary.hostName : '',
+    hostIps: summary ? [...summary.hostIps] : [],
+    hostLastIp: summary ? summary.hostLastIp : '',
     useRemoteTicket,
     useRemoteFiscal,
     useRemoteLabel,
+    hosts,
     hostFiscal: base.hostFiscal && typeof base.hostFiscal === 'object' ? base.hostFiscal : null,
     hostLabel: base.hostLabel && typeof base.hostLabel === 'object' ? base.hostLabel : null,
     lastUpdated: base.lastUpdated ?? null,
@@ -526,6 +571,8 @@ module.exports = {
   normalizeUi,
   normalizeMegaPos,
   normalizePrintShare,
+  normalizePrintShareHost,
+  PRINT_SHARE_KINDS,
   DEFAULT_SETTINGS,
   DEFAULT_CAJA,
   DEFAULT_UI,
