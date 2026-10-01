@@ -126,16 +126,16 @@ function proxyToUpstream(req, res, upstreamBase, stripPrefix, spoof) {
     headers.referer = SPOOF_ORIGIN + '/';
   }
   Object.assign(headers, getVersionHeaders());
-  // accept-encoding: para /__backend pasa TAL CUAL — el cuerpo se pipea intacto
-  // con su content-encoding y el navegador descomprime (verificado: cookies de
-  // Sanctum se reescriben igual, son headers; y prod SÍ comprime: login y API
-  // viajaban sin gzip por el delete "por las dudas" que había acá).
-  // Para /__electric se sigue quitando: Electric hoy NO comprime sus shapes
-  // (cero ganancia) y sus long-polls live son sensibles a latencia — si un CDN
-  // comprimiera con buffering, los updates en vivo llegarían tarde.
-  if (stripPrefix === ELECTRIC_PREFIX) {
-    delete headers['accept-encoding'];
-  }
+  // accept-encoding: pasa TAL CUAL, para /__backend y para /__electric — el
+  // cuerpo se pipea intacto con su content-encoding y el navegador descomprime
+  // (verificado en /__backend: cookies de Sanctum se reescriben igual, son
+  // headers; y prod SÍ comprime: login y API viajaban sin gzip por el delete
+  // "por las dudas" que había acá).
+  // /__electric también: delante de Electric hay un nginx con gzip
+  // (titanio-pos-infra, lib/electric-service.ts) con proxy_buffering off para
+  // no demorar los long-polls live (medido: misma latencia con y sin gzip). Los
+  // shapes son JSON y comprimen ~12x; eran ~90% de la salida de datos de AWS.
+  // Si del otro lado nadie comprime, la respuesta llega plana y nada cambia.
 
   const options = {
     protocol: base.protocol,
