@@ -42,6 +42,33 @@ function Get-RdSvc {
   return $null
 }
 
+# Ejecuta rustdesk.exe con TIEMPO MAXIMO y devuelve su salida.
+# NUNCA usar `& rustdesk.exe ... | Out-Null` / `| Out-String`: el pipe espera a
+# que se cierre la salida, y RustDesk arranca procesos hijos (el icono de la
+# bandeja, --tray) que HEREDAN esa salida y viven para siempre. Resultado
+# confirmado 2026-10-01 en una PC limpia (Windows Sandbox): el instalador NSIS
+# se quedaba al 95 % indefinidamente hasta matar el --tray. Aca se lanza por
+# ShellExecute (cmd.exe sin heredar NINGUN handle de este proceso, ni el pipe
+# del NSIS), la salida va a un archivo, y se espera al PROCESO con corte por
+# tiempo: un hijo de RustDesk que siga vivo ya no puede bloquear a nadie.
+function Invoke-RdBounded {
+  param([string]$Exe, [string[]]$Arguments, [int]$TimeoutSec = 20)
+  $tmpOut = [IO.Path]::GetTempFileName()
+  try {
+    $line = '""' + $Exe + '" ' + ($Arguments -join ' ') + ' > "' + $tmpOut + '" 2>&1"'
+    $p = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList '/c', $line `
+      -WindowStyle Hidden -PassThru -ErrorAction Stop
+    if (-not $p.WaitForExit($TimeoutSec * 1000)) {
+      Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+    }
+    return [string](Get-Content -Raw -Path $tmpOut -ErrorAction SilentlyContinue)
+  } catch {
+    return ''
+  } finally {
+    Remove-Item $tmpOut -Force -ErrorAction SilentlyContinue
+  }
+}
+
 # Setea `name = 'value'` dentro de la seccion [options], creando clave o seccion
 # si faltan. Devuelve el contenido nuevo.
 function Set-TomlOption {
@@ -207,8 +234,8 @@ if ($svc) {
   $svc = Get-RdSvc
   if ((Test-Path $InstalledExe) -and (-not $svc -or $svc.Status -ne 'Running')) {
     Write-Output 'SERVICE not-running (re-registering with current exe)'
-    if ($svc) { & $InstalledExe --uninstall-service 2>$null | Out-Null; Start-Sleep -Seconds 4 }
-    & $InstalledExe --install-service 2>$null | Out-Null
+    if ($svc) { Invoke-RdBounded -Exe $InstalledExe -Arguments '--uninstall-service' | Out-Null; Start-Sleep -Seconds 4 }
+    Invoke-RdBounded -Exe $InstalledExe -Arguments '--install-service' | Out-Null
     Start-Sleep -Seconds 6
     $svc = Get-RdSvc
     if ($svc) {
@@ -366,7 +393,7 @@ try {
     }
   }
   if (Test-Path $Installed) {
-    $out = (& $Installed --get-id 2>$null | Out-String)
+    $out = [string](Invoke-RdBounded -Exe $Installed -Arguments '--get-id' -TimeoutSec 10)
     $m2 = [regex]::Match($out, '\d{6,}')
     if ($m2.Success) { $diag.getId = $m2.Value }
   }
