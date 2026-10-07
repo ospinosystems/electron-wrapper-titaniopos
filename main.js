@@ -4048,8 +4048,9 @@ app.whenReady().then(() => {
   // Se guarda en el settings unificado y se reescribe en vposconf.ini al reiniciar.
   ipcMain.handle('mega-pos-config-get', async () => {
     try {
-      const { readSettings, normalizeMegaPos } = require('./titaniopos-settings-file');
-      return { success: true, config: normalizeMegaPos(readSettings(app).megaPos) };
+      const { readSettings, normalizeMegaPos, resolveMegaPosChannels } = require('./titaniopos-settings-file');
+      const config = normalizeMegaPos(readSettings(app).megaPos);
+      return { success: true, config, channels: resolveMegaPosChannels(config) };
     } catch (error) {
       console.error('❌ [MEGA_POS CONFIG] get:', error);
       return { success: false, error: error.message };
@@ -4074,6 +4075,44 @@ app.whenReady().then(() => {
       return { success: true, config: s.megaPos };
     } catch (error) {
       console.error('❌ [MEGA_POS CONFIG] save:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Cambia el canal del Merchant Server (primario <-> secundario) y reinicia el
+  // VPOS para que tome el host nuevo. Lo usa la UI de la caja y el comando
+  // remoto `mega_pos_switch_channel`. channel: 'primary' | 'secondary' | 'toggle'.
+  // Pedir el secundario cuando no hay uno configurado NI implícito es un error
+  // (no se reinicia nada); el resultado trae el canal y el host que quedaron.
+  ipcMain.handle('mega-pos-switch-channel', async (_e, payload) => {
+    try {
+      const { readSettings, writeSettings, normalizeMegaPos, resolveMegaPosChannels } = require('./titaniopos-settings-file');
+      const requested = String((payload && payload.channel) || 'toggle');
+      const s = readSettings(app);
+      const current = resolveMegaPosChannels(normalizeMegaPos(s.megaPos));
+      let target;
+      if (requested === 'primary' || requested === 'secondary') target = requested;
+      else if (requested === 'toggle') target = current.active === 'primary' ? 'secondary' : 'primary';
+      else return { success: false, error: `Canal desconocido: ${requested}` };
+      if (target === 'secondary' && !current.secondary) {
+        return { success: false, error: 'Esta caja no tiene canal secundario configurado.', channel: current.active, host: current.effective.host, port: current.effective.port };
+      }
+      s.megaPos = normalizeMegaPos({ ...(s.megaPos || {}), activeChannel: target, lastConfigUpdate: new Date().toISOString() });
+      writeSettings(app, s);
+      const next = resolveMegaPosChannels(s.megaPos);
+      console.log(`🟣 [MEGA_POS] Canal ${current.active} -> ${next.active} (${next.effective.host}:${next.effective.port})`);
+      const restart = await restartMegaPosServer(app);
+      return {
+        success: true,
+        channel: next.active,
+        host: next.effective.host,
+        port: next.effective.port,
+        ssl: next.effective.ssl,
+        restarted: Boolean(restart && restart.success),
+        restartMessage: restart && (restart.message || restart.error),
+      };
+    } catch (error) {
+      console.error('❌ [MEGA_POS] switch-channel:', error);
       return { success: false, error: error.message };
     }
   });

@@ -20,7 +20,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 
-const { readSettings, normalizeMegaPos } = require('./titaniopos-settings-file');
+const { readSettings, normalizeMegaPos, resolveMegaPosChannels } = require('./titaniopos-settings-file');
 
 const LOG_FILE = path.join(os.homedir(), 'titaniopos-mega-pos.log');
 const logToFile = (msg) => {
@@ -504,6 +504,12 @@ const startMegaPosServerUnlocked = async (app) => {
     runtimeDir = await ensureRuntimeCopy(app);
     const settings = readSettings(app);
     const cfg = normalizeMegaPos(settings.megaPos);
+    // Canal activo (primario/secundario): el ini solo conoce UN host/puerto.
+    const channels = resolveMegaPosChannels(cfg);
+    cfg.serverHost = channels.effective.host;
+    cfg.serverPort = channels.effective.port;
+    cfg.ssl = channels.effective.ssl;
+    log(`[MEGA_POS] Canal ${channels.active}: ${cfg.serverHost}:${cfg.serverPort} ssl=${cfg.ssl ? 1 : 0}`);
     // El id de [vtid] es el número de caja en la tienda: sale solo del número
     // de caja ya configurado en la app (no se pide aparte en la UI).
     const cajaNum = settings.caja && settings.caja.cashRegisterNumber;

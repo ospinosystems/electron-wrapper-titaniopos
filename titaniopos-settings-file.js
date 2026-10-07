@@ -97,6 +97,15 @@ const DEFAULT_MEGA_POS = {
   ssl: true,
   vtid: '',
   id: '',
+  // Canal SECUNDARIO del Merchant Server (respaldo). Vacío = sin secundario,
+  // salvo que el primario NO sea el de Megasoft: en ese caso el secundario
+  // implícito es ssl.megasoftve.com:4772 (ver resolveMegaPosChannels).
+  secondaryHost: '',
+  secondaryPort: '',
+  secondarySsl: true,
+  // Canal con el que arranca el VPOS: 'primary' | 'secondary'. Lo cambia la UI
+  // de la caja o el comando remoto `mega_pos_switch_channel`.
+  activeChannel: 'primary',
   lastConfigUpdate: '',
 };
 
@@ -230,8 +239,37 @@ function normalizeMegaPos(raw) {
     ssl: base.ssl === undefined || base.ssl === null ? true : Boolean(base.ssl),
     vtid: String(base.vtid ?? ''),
     id: String(base.id ?? ''),
+    secondaryHost: String(base.secondaryHost ?? '').trim(),
+    secondaryPort: String(base.secondaryPort ?? '').replace(/\D+/g, ''),
+    secondarySsl: base.secondarySsl === undefined || base.secondarySsl === null ? true : Boolean(base.secondarySsl),
+    activeChannel: base.activeChannel === 'secondary' ? 'secondary' : 'primary',
     lastConfigUpdate: String(base.lastConfigUpdate ?? ''),
   };
+}
+
+/**
+ * Canales del Merchant Server que tiene esta caja y cuál está en uso.
+ *
+ * - `primary`: lo configurado en serverHost/serverPort/ssl (default Megasoft).
+ * - `secondary`: lo configurado en secondary*; si está vacío y el primario NO es
+ *   el Merchant de Megasoft, el secundario implícito es ese (ssl.megasoftve.com).
+ *   Si el primario YA es Megasoft y no hay secundario, `secondary` es null.
+ * - `active`: el canal que de verdad se aplica (`effective`). Pedir 'secondary'
+ *   sin tener uno cae al primario, nunca a un host vacío.
+ *
+ * @param {object} cfg  salida de normalizeMegaPos
+ */
+function resolveMegaPosChannels(cfg) {
+  const c = normalizeMegaPos(cfg);
+  const primary = { host: c.serverHost, port: c.serverPort, ssl: c.ssl };
+  let secondary = null;
+  if (c.secondaryHost) {
+    secondary = { host: c.secondaryHost, port: c.secondaryPort || DEFAULT_MEGA_POS.serverPort, ssl: c.secondarySsl };
+  } else if (c.serverHost.toLowerCase() !== DEFAULT_MEGA_POS.serverHost) {
+    secondary = { host: DEFAULT_MEGA_POS.serverHost, port: DEFAULT_MEGA_POS.serverPort, ssl: true };
+  }
+  const active = c.activeChannel === 'secondary' && secondary ? 'secondary' : 'primary';
+  return { primary, secondary, active, effective: active === 'secondary' ? secondary : primary };
 }
 
 /** IPs/nombres de respaldo de la anfitriona: strings no vacíos, sin repetir, máximo 8. */
@@ -570,6 +608,7 @@ module.exports = {
   normalizeFiscal,
   normalizeUi,
   normalizeMegaPos,
+  resolveMegaPosChannels,
   normalizePrintShare,
   normalizePrintShareHost,
   PRINT_SHARE_KINDS,

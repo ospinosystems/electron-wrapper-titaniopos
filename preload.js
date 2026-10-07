@@ -276,6 +276,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   /** Reinicia / fuerza el arranque del servicio VPOS local. */
   megaPosRestart: () => ipcRenderer.invoke('mega-pos-restart'),
+  /** Cambia el canal del Merchant Server ('primary' | 'secondary' | 'toggle') y reinicia el VPOS.
+   *  @returns {Promise<{success: boolean, channel?: 'primary'|'secondary', host?: string, port?: string, restarted?: boolean, error?: string}>} */
+  megaPosSwitchChannel: (channel = 'toggle') => ipcRenderer.invoke('mega-pos-switch-channel', { channel }),
 
   /** Tareas de caja: imprimeUltimoVoucher | imprimeUltimoVoucherP | precierre | cierre | ultimoCierre. */
   megaPosTask: (action) => ipcRenderer.invoke('mega-pos-task', { action }),
