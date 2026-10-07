@@ -64,9 +64,21 @@ const readDistroVersion = (dir) => {
 };
 
 /**
- * Copia la distribución a la carpeta escribible si falta, si la versión de la
- * app cambió (upgrade) o si cambió la versión del propio VPOS empaquetado
- * (p.ej. 3.15.10 -> 3.16.0). Copia única de ~270MB en la primera ejecución.
+ * Copia la distribución a la carpeta escribible si falta o si cambió la
+ * versión del propio VPOS empaquetado (p.ej. 3.15.10 -> 3.16.0). Copia única
+ * de ~270MB en la primera ejecución.
+ *
+ * El marcador `.installed-version` guarda SOLO la versión de la distro
+ * (`vpos-3.16.0`). Antes incluía la versión de la app (`1.0.246:vpos-3.16.0`),
+ * así que cada release de Electron (casi a diario) borraba el runtime entero…
+ * y con él el estado que el VPOS escribe por terminal en `conf/<VTID>/`
+ * (consecutivo `seqnumber`, advices pendientes). Esa era la causa del
+ * "EB - FALTA ARCHIVO DE CONFIGURACION (SEQNUM)" y de los "SeqNum ya existe en
+ * Batch" tras actualizar la app. Un marcador viejo con el sufijo `:vpos-X`
+ * sigue valiendo para no forzar una recopia más en el upgrade.
+ *
+ * Cuando SÍ hay que recopiar, el estado por VTID se respalda antes del borrado
+ * y se restaura después (ver `backupVposState`/`restoreVposState`).
  *
  * La copia corre en un proceso HIJO (Electron en modo Node), no en el main:
  * `fs.rmSync` + `fs.cpSync` de ~270MB bloqueaban el hilo principal minutos en
@@ -120,11 +132,73 @@ const copyRuntimeInChild = (source, runtime, version) =>
     });
   });
 
+/**
+ * Estado que el VPOS genera en tiempo de ejecución y que NO viene en la distro:
+ * todo subdirectorio de `conf/` que no exista en la distro empaquetada (el VPOS
+ * crea `conf/<VTID>/<VTID>.ini` con el consecutivo y los advices pendientes).
+ * Se respalda en una carpeta hermana del runtime y se restaura tras la copia.
+ * Nunca lanza: si no se puede respaldar, se avisa en el log y se sigue (es el
+ * comportamiento anterior, no uno peor).
+ */
+const stateBackupDir = (runtime) => `${runtime}.state-bak`;
+
+const listVposStateDirs = (source, runtime) => {
+  const confDir = path.join(runtime, 'conf');
+  const srcConf = path.join(source, 'conf');
+  let entries = [];
+  try { entries = fs.readdirSync(confDir, { withFileTypes: true }); } catch (_) { return []; }
+  return entries
+    .filter((e) => e.isDirectory() && !fs.existsSync(path.join(srcConf, e.name)))
+    .map((e) => e.name);
+};
+
+const backupVposState = (source, runtime) => {
+  const bak = stateBackupDir(runtime);
+  try {
+    const dirs = listVposStateDirs(source, runtime);
+    fs.rmSync(bak, { recursive: true, force: true });
+    if (!dirs.length) return [];
+    fs.mkdirSync(bak, { recursive: true });
+    for (const d of dirs) {
+      fs.cpSync(path.join(runtime, 'conf', d), path.join(bak, d), { recursive: true });
+    }
+    log(`[MEGA_POS] Estado del VPOS respaldado (${dirs.join(', ')}) en ${bak}`);
+    return dirs;
+  } catch (e) {
+    logErr('[MEGA_POS] No se pudo respaldar el estado del VPOS:', e.message);
+    return [];
+  }
+};
+
+const restoreVposState = (runtime, dirs) => {
+  const bak = stateBackupDir(runtime);
+  if (!dirs.length) return;
+  try {
+    for (const d of dirs) {
+      const from = path.join(bak, d);
+      if (!fs.existsSync(from)) continue;
+      const to = path.join(runtime, 'conf', d);
+      fs.rmSync(to, { recursive: true, force: true });
+      fs.cpSync(from, to, { recursive: true });
+    }
+    log(`[MEGA_POS] Estado del VPOS restaurado (${dirs.join(', ')})`);
+    fs.rmSync(bak, { recursive: true, force: true });
+  } catch (e) {
+    // El respaldo se deja en disco para recuperarlo a mano.
+    logErr(`[MEGA_POS] No se pudo restaurar el estado del VPOS (queda en ${bak}):`, e.message);
+  }
+};
+
+/** El marcador vale si es exactamente `vpos-X` o el formato viejo `app:vpos-X`. */
+const markerMatches = (markerText, version) => {
+  const m = String(markerText || '').trim();
+  return m === version || m.endsWith(`:${version}`);
+};
+
 const ensureRuntimeCopy = async (app) => {
   const source = getVposSourceDir();
   const runtime = getVposRuntimeDir(app);
-  const appVersion = (app && app.getVersion && app.getVersion()) || '0';
-  const version = `${appVersion}:vpos-${readDistroVersion(source)}`;
+  const version = `vpos-${readDistroVersion(source)}`;
   const marker = path.join(runtime, '.installed-version');
 
   if (!fs.existsSync(source)) {
@@ -136,14 +210,15 @@ const ensureRuntimeCopy = async (app) => {
     upToDate =
       fs.existsSync(path.join(runtime, 'lib_rest', 'vposrestservice.jar')) &&
       fs.existsSync(marker) &&
-      fs.readFileSync(marker, 'utf8').trim() === version;
+      markerMatches(fs.readFileSync(marker, 'utf8'), version);
   } catch (_) { upToDate = false; }
 
   if (!upToDate) {
     // Borrar la copia anterior COMPLETA antes de copiar: cpSync sobre un
     // runtime viejo mezcla distros (p.ej. jre/lib/ext de Java 8 sobrevivía
     // al upgrade a Java 21 y la JVM abortaba con "extensions mechanism no
-    // longer supported").
+    // longer supported"). El estado por VTID se salva aparte.
+    const stateDirs = backupVposState(source, runtime);
     log(`[MEGA_POS] Copiando distribución VPOS a ${runtime} (una vez, en segundo plano)...`);
     try {
       await copyRuntimeInChild(source, runtime, version);
@@ -151,6 +226,7 @@ const ensureRuntimeCopy = async (app) => {
       logErr('[MEGA_POS] Copia en proceso hijo falló, se usa la copia directa:', e.message);
       copyRuntimeSync(source, runtime, version, marker);
     }
+    restoreVposState(runtime, stateDirs);
     log('[MEGA_POS] Copia completa.');
   }
   return runtime;
@@ -399,7 +475,7 @@ const pingVpos = () =>
     req.end();
   });
 
-const startMegaPosServer = async (app) => {
+const startMegaPosServerUnlocked = async (app) => {
   if (isRunning && vposProcess) {
     return { success: true, message: 'VPOS ya está corriendo' };
   }
@@ -505,13 +581,45 @@ const stopMegaPosServer = () => {
   isRunning = false;
 };
 
-/** Reaplica config y reinicia el servicio (tras guardar config en la UI). */
-const restartMegaPosServer = async (app) => {
-  stopMegaPosServer();
-  // pequeño respiro para que el puerto libere
-  await new Promise((r) => setTimeout(r, 800));
-  return startMegaPosServer(app);
+/**
+ * Candado: arranques y reinicios se ejecutan de a UNO. Sin esto, el arranque
+ * de `whenReady`, `mega-pos-restart`, `mega-pos-config-save` y `mega-pos-task`
+ * corrían en paralelo (el log mostraba 4 "VPOS listo" en el mismo milisegundo
+ * y dos copias del runtime solapadas); la segunda copia hacía `rmSync` sobre
+ * la carpeta que la primera estaba llenando y el estado por VTID quedaba en
+ * cero bytes ("Archivo [./conf/<VTID>/<VTID>.ini] existe con longitud 0").
+ *
+ * - `startMegaPosServer`: si ya hay una operación en curso, se SUMA a ella y
+ *   devuelve su mismo resultado (el objetivo —servicio arriba— es el mismo).
+ * - `restartMegaPosServer`: siempre se encola detrás de lo que esté corriendo.
+ */
+const createSerializer = () => {
+  let inFlight = null;
+  let chain = Promise.resolve();
+  const enqueue = (fn) => {
+    const p = chain.then(fn);
+    inFlight = p;
+    chain = p.catch(() => {}).finally(() => { if (inFlight === p) inFlight = null; });
+    return p;
+  };
+  return {
+    enqueue,
+    /** Se suma a la operación en curso si la hay; si no, encola `fn`. */
+    join: (fn) => inFlight || enqueue(fn),
+  };
 };
+const ops = createSerializer();
+
+const startMegaPosServer = (app) => ops.join(() => startMegaPosServerUnlocked(app));
+
+/** Reaplica config y reinicia el servicio (tras guardar config en la UI). */
+const restartMegaPosServer = (app) =>
+  ops.enqueue(async () => {
+    stopMegaPosServer();
+    // pequeño respiro para que el puerto libere
+    await new Promise((r) => setTimeout(r, 800));
+    return startMegaPosServerUnlocked(app);
+  });
 
 module.exports = {
   startMegaPosServer,
@@ -520,4 +628,6 @@ module.exports = {
   pingVpos,
   getVposRuntimeDir,
   setSeqNum,
+  // Solo para tests.
+  _internals: { ensureRuntimeCopy, markerMatches, listVposStateDirs, backupVposState, restoreVposState, createSerializer },
 };

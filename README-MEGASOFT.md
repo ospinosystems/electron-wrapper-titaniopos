@@ -42,6 +42,11 @@ settings; editar los `.ini` a mano no sirve (se pisan al reiniciar).
 | `vpos-rest/conf/vposuniversal.ini` | `[COMPRA_MEDIOS_PAGO] activo=1` (requisito Megasoft; de fábrica viene en 0). |
 | `vpos-rest/conf/confSeguridad.ini` | Credenciales internas del VPOS — no se toca. |
 
+> El botón de soporte "N° de secuencia" escribe `[SeqNum] seqnum` en `vposconf.ini`.
+> El consecutivo que el VPOS usa en producción vive en `conf/<VTID>/<VTID>.ini`
+> (`seqnumber`), así que ese botón NO está confirmado como forma de realinear la
+> secuencia con el Merchant: validar con Megasoft qué clave leen antes de usarlo.
+
 > Esquema pinpad 3.16.0: `marca`/`tipoPuerto`/`dataSensibleEncriptada` se
 > mudaron de `[pinpad-verifone]` a `[pinpad]` (soporte multi-marca
 > Verifone/Morefun). Los valores `comandosNuevos=1`/`DUKPT`/`encriptada=1`
@@ -52,7 +57,8 @@ settings; editar los `.ini` a mano no sirve (se pisan al reiniciar).
 
 | Ruta | Qué es |
 |---|---|
-| `%APPDATA%\titaniopos-electron\vpos-rest\` | Copia runtime escribible — desde aquí corre el VPOS y aquí se aplican los `.ini`. Se recopia sola cuando cambia la versión de la app **o** la de la distro (marcador `.installed-version` = `app:vpos-X.Y.Z`). |
+| `%APPDATA%\titaniopos-electron\vpos-rest\` | Copia runtime escribible — desde aquí corre el VPOS y aquí se aplican los `.ini`. Se recopia sola **solo** cuando cambia la versión de la distro (marcador `.installed-version` = `vpos-X.Y.Z`; el formato viejo `app:vpos-X.Y.Z` sigue valiendo). Al recopiar se conserva `conf\<VTID>\` (fila siguiente). |
+| `%APPDATA%\titaniopos-electron\vpos-rest\conf\<VTID>\<VTID>.ini` | **Estado que escribe el propio VPOS** por terminal: consecutivo (`seqnumber`), advices pendientes. No viene en la distro. Si se pierde, el VPOS responde `EB - FALTA ARCHIVO DE CONFIGURACION (SEQNUM)` o `X5 - SeqNum ya existe en Batch`. Hasta la 1.0.247 cada release de la app borraba el runtime entero y con él este archivo; ahora se respalda en `vpos-rest.state-bak` durante la recopia y se restaura. |
 | `Documentos\TitanioPOS-Settings\titaniopos-settings.json` | Settings unificado (bloque `megaPos`). Sobrevive updates de la app. |
 | `C:\voucher\` | Vouchers `.txt` que escribe el VPOS (la app los lee con `mega-pos-read-voucher` para imprimir en la térmica). |
 | `%USERPROFILE%\titaniopos-mega-pos.log` | Log del manager + stdout/stderr del VPOS. |
