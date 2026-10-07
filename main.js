@@ -4152,6 +4152,16 @@ app.whenReady().then(() => {
     }
   });
 
+  // Ruta del ini de estado del VTID configurado (conf/<VTID>/<VTID>.ini), o null sin VTID.
+  const vtidStateFile = (appRef) => {
+    try {
+      const { readSettings, normalizeMegaPos } = require('./titaniopos-settings-file');
+      const vtid = normalizeMegaPos(readSettings(appRef).megaPos).vtid.trim();
+      if (!vtid || /[\\/]/.test(vtid)) return null;
+      return path.join(getVposRuntimeDir(appRef), 'conf', vtid, `${vtid}.ini`);
+    } catch (_) { return null; }
+  };
+
   // Devuelve la LISTA de archivos de config relevantes (nombre + ruta), para el visor de la UI.
   ipcMain.handle('mega-pos-config-files', async () => {
     try {
@@ -4163,6 +4173,9 @@ app.whenReady().then(() => {
         { key: 'settings', label: 'Credenciales (UI)', path: settingsPath },
         { key: 'vposconf', label: 'vposconf.ini (servidor, vtid, pinpad)', path: path.join(confDir, 'vposconf.ini') },
         { key: 'vposuniversal', label: 'vposuniversal.ini (medios de pago, pinpads)', path: path.join(confDir, 'vposuniversal.ini') },
+        // Estado que escribe el propio VPOS por terminal: ahí vive el consecutivo
+        // REAL (seqnumber) y los advices pendientes. Solo lectura, para soporte.
+        ...(vtidStateFile(app) ? [{ key: 'vtidstate', label: 'conf/<VTID>/<VTID>.ini (consecutivo real del VPOS)', path: vtidStateFile(app) }] : []),
       ].map((f) => ({ ...f, exists: (() => { try { return fs.existsSync(f.path); } catch { return false; } })() }));
       return { success: true, files };
     } catch (error) {
@@ -4181,6 +4194,7 @@ app.whenReady().then(() => {
         settings: settingsPath,
         vposconf: path.join(confDir, 'vposconf.ini'),
         vposuniversal: path.join(confDir, 'vposuniversal.ini'),
+        vtidstate: vtidStateFile(app) || '',
       };
       const target = MAP[key];
       if (!target) return { success: false, error: 'Archivo no permitido.' };

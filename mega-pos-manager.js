@@ -290,6 +290,12 @@ const applyConfigToIni = (runtimeDir, cfg) => {
     ssl: { active: cfg.ssl === false ? '0' : '1' },
     vtid: { vtid: cfg.vtid, id: cfg.id },
   };
+  // [vtid] es la identidad de ESTA caja: se escribe tal cual está en el settings,
+  // también vacío. Antes "vacío = no tocar", y borrar el VTID en la pantalla
+  // dejaba el ini con el VTID anterior (la caja seguía transaccionando con el
+  // terminal de otra). Host/puerto nunca llegan vacíos (normalizeMegaPos).
+  const writeEvenIfEmpty = { vtid: true };
+  if (!String(cfg.vtid || '').trim()) log('[MEGA_POS] Aviso: VTID vacío en el settings; el ini queda sin terminal.');
 
   const lines = fs.readFileSync(iniPath, 'utf8').split(/\r?\n/);
   let section = null;
@@ -302,9 +308,10 @@ const applyConfigToIni = (runtimeDir, cfg) => {
         const key = kv[2];
         if (key in overrides[section]) {
           const val = overrides[section][key];
-          // Solo sobreescribimos si tenemos un valor; vacío = no tocar.
-          if (val !== undefined && val !== null && String(val) !== '') {
-            return `${kv[1]}${key}=${val}`;
+          // Solo sobreescribimos si tenemos un valor; vacío = no tocar
+          // (salvo las secciones de identidad, que siempre reflejan el settings).
+          if (val !== undefined && val !== null && (String(val) !== '' || writeEvenIfEmpty[section])) {
+            return `${kv[1]}${key}=${val == null ? '' : val}`;
           }
         }
       }
@@ -475,6 +482,36 @@ const pingVpos = () =>
     req.end();
   });
 
+/**
+ * Mata SOLO los procesos Java cuya línea de comando es la del VPOS de Megasoft
+ * (clase VposWebService o jar vposrestservice), no cualquier Java de la
+ * máquina: antes `taskkill /IM java.exe` se llevaba por delante cualquier otra
+ * app Java instalada en la caja.
+ */
+const killExternalVpos = () => {
+  if (process.platform !== 'win32') return;
+  try {
+    const { execFileSync } = require('child_process');
+    const ps = [
+      "Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^javaw?\\.exe$' -and $_.CommandLine -match 'VposWebService|vposrestservice|vpos-rest' }",
+      '| ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; "killed " + $_.ProcessId }',
+    ].join(' ');
+    const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, timeout: 15000 }).toString().trim();
+    log('[MEGA_POS] Java del VPOS terminados:', out || '(ninguno encontrado)');
+  } catch (e) {
+    logErr('[MEGA_POS] No se pudo listar/terminar el VPOS externo:', e.message);
+  }
+};
+
+const killAllJava = () => {
+  if (process.platform !== 'win32') return;
+  try {
+    const { execSync } = require('child_process');
+    try { execSync('taskkill /F /IM javaw.exe', { stdio: 'ignore' }); } catch (_) {}
+    try { execSync('taskkill /F /IM java.exe', { stdio: 'ignore' }); } catch (_) {}
+  } catch (_) { /* noop */ }
+};
+
 const startMegaPosServerUnlocked = async (app) => {
   if (isRunning && vposProcess) {
     return { success: true, message: 'VPOS ya está corriendo' };
@@ -486,16 +523,20 @@ const startMegaPosServerUnlocked = async (app) => {
   // (Antes lo reusábamos a ciegas, lo que provocaba "FALTA VTID".)
   if (await pingVpos()) {
     log('[MEGA_POS] VPOS externo detectado en :8085; se termina para arrancar el de la app.');
-    if (process.platform === 'win32') {
-      try {
-        const { execSync } = require('child_process');
-        try { execSync('taskkill /F /IM javaw.exe', { stdio: 'ignore' }); } catch (_) {}
-        try { execSync('taskkill /F /IM java.exe', { stdio: 'ignore' }); } catch (_) {}
-      } catch (_) { /* noop */ }
-    }
+    killExternalVpos();
     // Esperar a que libere el puerto.
     for (let i = 0; i < 10 && (await pingVpos()); i++) {
       await new Promise((r) => setTimeout(r, 400));
+    }
+    // Si sigue vivo (p.ej. un Java lanzado con otra línea de comando), se cae
+    // al barrido anterior: matar todos los java/javaw. Es brusco, pero es el
+    // único camino conocido para evitar el "FALTA VTID" de una instancia ajena.
+    if (await pingVpos()) {
+      logErr('[MEGA_POS] El VPOS externo no soltó :8085; se matan todos los java.exe/javaw.exe.');
+      killAllJava();
+      for (let i = 0; i < 10 && (await pingVpos()); i++) {
+        await new Promise((r) => setTimeout(r, 400));
+      }
     }
   }
 
@@ -635,5 +676,5 @@ module.exports = {
   getVposRuntimeDir,
   setSeqNum,
   // Solo para tests.
-  _internals: { ensureRuntimeCopy, markerMatches, listVposStateDirs, backupVposState, restoreVposState, createSerializer },
+  _internals: { ensureRuntimeCopy, markerMatches, listVposStateDirs, backupVposState, restoreVposState, createSerializer, applyConfigToIni },
 };
