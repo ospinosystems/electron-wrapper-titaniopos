@@ -29,6 +29,8 @@ const makeFixture = ({ marker, distroVersion = '3.16.0' }) => {
   fs.writeFileSync(path.join(runtime, 'conf', 'vposconf.ini'), INI);
   fs.writeFileSync(path.join(runtime, 'conf', 'GTGUARA07', 'GTGUARA07.ini'), STATE);
   fs.writeFileSync(path.join(runtime, 'conf', 'GTGUARA07', 'GTGUARA07.ini_copia'), STATE);
+  // Archivo suelto que el VPOS dejó dentro de una carpeta que SÍ viene en la distro.
+  fs.writeFileSync(path.join(runtime, 'conf', 'verifone', 'llaves.dat'), 'pinpad');
   fs.writeFileSync(path.join(runtime, 'lib_rest', 'vposrestservice.jar'), 'old-jar');
   fs.writeFileSync(path.join(runtime, 'stale.txt'), 'de la distro vieja');
   if (marker) fs.writeFileSync(path.join(runtime, '.installed-version'), marker);
@@ -70,14 +72,22 @@ test('cambio de distro recopia todo pero conserva conf/<VTID>/', async () => {
   assert.equal(fs.readFileSync(path.join(runtime, 'conf', 'GTGUARA07', 'GTGUARA07.ini'), 'utf8'), STATE);
   assert.equal(fs.readFileSync(path.join(runtime, 'conf', 'GTGUARA07', 'GTGUARA07.ini_copia'), 'utf8'), STATE);
   assert.equal(fs.existsSync(`${runtime}.state-bak`), false, 'el respaldo temporal se limpia');
-  // conf/verifone viene en la distro: no cuenta como estado (se toma de la copia nueva)
+  // conf/verifone viene en la distro, pero el archivo que el VPOS dejó ahí sobrevive.
   assert.equal(fs.existsSync(path.join(runtime, 'conf', 'verifone')), true);
+  assert.equal(fs.readFileSync(path.join(runtime, 'conf', 'verifone', 'llaves.dat'), 'utf8'), 'pinpad');
+});
+
+test('listVposStateDirs: carpeta ajena completa + archivo suelto en carpeta de la distro', () => {
+  const { listVposStateDirs } = load();
+  const { runtime, source } = makeFixture({ marker: null });
+  assert.deepEqual(listVposStateDirs(source, runtime).sort(), ['GTGUARA07', path.join('verifone', 'llaves.dat')]);
 });
 
 test('sin marcador (primera instalación) copia y no falla sin estado previo', async () => {
   const { ensureRuntimeCopy, listVposStateDirs } = load();
   const { runtime, source, app } = makeFixture({ marker: null });
   fs.rmSync(path.join(runtime, 'conf', 'GTGUARA07'), { recursive: true, force: true });
+  fs.rmSync(path.join(runtime, 'conf', 'verifone', 'llaves.dat'), { force: true });
   assert.deepEqual(listVposStateDirs(source, runtime), []);
   await ensureRuntimeCopy(app);
   assert.equal(fs.readFileSync(path.join(runtime, '.installed-version'), 'utf8'), 'vpos-3.16.0');

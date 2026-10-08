@@ -143,13 +143,28 @@ const copyRuntimeInChild = (source, runtime, version) =>
 const stateBackupDir = (runtime) => `${runtime}.state-bak`;
 
 const listVposStateDirs = (source, runtime) => {
+  // Rutas relativas a conf/ que NO existen en la distro: una carpeta entera
+  // (conf/<VTID>/) o un archivo suelto dentro de una carpeta que sí viene en
+  // la distro (p.ej. algo que el pinpad deje en conf/verifone/). Se recorre en
+  // profundidad; una carpeta ajena a la distro se toma completa sin bajar más.
   const confDir = path.join(runtime, 'conf');
   const srcConf = path.join(source, 'conf');
-  let entries = [];
-  try { entries = fs.readdirSync(confDir, { withFileTypes: true }); } catch (_) { return []; }
-  return entries
-    .filter((e) => e.isDirectory() && !fs.existsSync(path.join(srcConf, e.name)))
-    .map((e) => e.name);
+  const out = [];
+  const walk = (rel) => {
+    let entries = [];
+    try { entries = fs.readdirSync(path.join(confDir, rel), { withFileTypes: true }); } catch (_) { return; }
+    for (const e of entries) {
+      const childRel = rel ? path.join(rel, e.name) : e.name;
+      const inDistro = fs.existsSync(path.join(srcConf, childRel));
+      if (e.isDirectory()) {
+        if (inDistro) walk(childRel); else out.push(childRel);
+      } else if (e.isFile() && !inDistro) {
+        out.push(childRel);
+      }
+    }
+  };
+  walk('');
+  return out;
 };
 
 const backupVposState = (source, runtime) => {
@@ -160,6 +175,7 @@ const backupVposState = (source, runtime) => {
     if (!dirs.length) return [];
     fs.mkdirSync(bak, { recursive: true });
     for (const d of dirs) {
+      fs.mkdirSync(path.dirname(path.join(bak, d)), { recursive: true });
       fs.cpSync(path.join(runtime, 'conf', d), path.join(bak, d), { recursive: true });
     }
     log(`[MEGA_POS] Estado del VPOS respaldado (${dirs.join(', ')}) en ${bak}`);
@@ -179,6 +195,7 @@ const restoreVposState = (runtime, dirs) => {
       if (!fs.existsSync(from)) continue;
       const to = path.join(runtime, 'conf', d);
       fs.rmSync(to, { recursive: true, force: true });
+      fs.mkdirSync(path.dirname(to), { recursive: true });
       fs.cpSync(from, to, { recursive: true });
     }
     log(`[MEGA_POS] Estado del VPOS restaurado (${dirs.join(', ')})`);
