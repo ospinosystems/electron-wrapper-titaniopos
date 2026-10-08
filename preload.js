@@ -166,7 +166,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @returns {Promise<{success: boolean, method?: string, error?: string}>}
    */
   printerPrint: (content, options = {}) => ipcRenderer.invoke('printer-print', content, options),
-  
+
+  /**
+   * Vacía la cola de impresión de Windows de la tickera configurada (trabajos
+   * guardados que saldrían en pila al encender la caja). La vista lo llama al
+   * confirmar el cierre de caja; Electron lo hace solo al arrancar.
+   * @param {object} options - { olderThanSeconds } (default 30: respeta un ticket que esté saliendo)
+   * @returns {Promise<{success: boolean, removed: number, found: number, error?: string}>}
+   */
+  printerPurgeQueue: (options = {}) => ipcRenderer.invoke('printer-purge-queue', options),
+
   /**
    * Test print with specific method
    * @param {string} method - Method to test ('native' or 'escpos')

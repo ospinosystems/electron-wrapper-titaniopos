@@ -3886,6 +3886,18 @@ app.whenReady().then(() => {
   migrateToUnifiedSettings(app);
   splitFiscalResponsesFromUnifiedIfPresent(app);
 
+  // Cola de impresión de Windows: lo que quedó guardado en el spooler de la
+  // tickera (apagón, impresora apagada, archivos de spool reencolados) saldría
+  // en pila al encender la caja. Se borra antes de abrir la vista, sin UI.
+  // Fire-and-forget: no retrasa el arranque ni lo bloquea si PowerShell falla.
+  // Respeta lo encolado en los últimos segundos (una caja anfitriona puede
+  // estar recibiendo un ticket de otra caja justo ahora).
+  try {
+    void require('./printer-queue').purgeTicketPrinterQueue({ olderThanSeconds: 10 });
+  } catch (e) {
+    console.warn('⚠️ [PRINT-QUEUE] No se pudo vaciar la cola al arrancar:', e && e.message);
+  }
+
   const backupPath = getBackupDir();
   console.log('📁 [BACKUP] Backup directory:', backupPath);
   console.log('📱 [BARCODE] Barcode scanner system initialized');

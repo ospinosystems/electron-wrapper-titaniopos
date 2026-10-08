@@ -170,7 +170,19 @@ function registerPrinterHandlers(app, mainWindow) {
       return { success: false, error: error.message };
     }
   });
-  
+
+  /**
+   * Vacía la cola de Windows de la tickera configurada. La vista lo pide al
+   * confirmar el cierre de caja (Electron lo hace solo al arrancar). Borra
+   * únicamente trabajos más viejos que `olderThanSeconds` (default 30 s) para
+   * no tocar un ticket que esté saliendo en ese momento. Nunca lanza.
+   */
+  ipcMain.handle('printer-purge-queue', async (event, options = {}) => {
+    const { purgeTicketPrinterQueue } = require('./printer-queue');
+    const age = Number(options && options.olderThanSeconds);
+    return purgeTicketPrinterQueue({ olderThanSeconds: Number.isFinite(age) ? age : 30 });
+  });
+
   /**
    * Imprime una ETIQUETA (HTML) ruteando como printer-print: si esta caja usa
    * la impresora de etiquetas de otra (modo receive + useRemoteLabel), el
