@@ -59,6 +59,11 @@ async function printWithConfiguredPrinter(app, content) {
     try {
       result = await printWithDirect(app, config.printerName, content);
     } catch (directErr) {
+      if (directErr.timedOut) {
+        // La impresora no responde: el fallback ESC/POS escribe al mismo puerto
+        // y se quedaria esperando otros 15 s. Fallar ya, con mensaje claro.
+        return { success: false, error: directErr.message, timedOut: true };
+      }
       console.warn('⚠️ [PRINT] Direct method failed, falling back to ESC/POS:', directErr.message);
       result = await printerMethods.printWithESCPOS(
         app,

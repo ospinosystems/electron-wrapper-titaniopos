@@ -192,6 +192,15 @@ async function printWithDirect(app, printerName, textContent) {
       if (success) {
         console.log('✅ [DIRECT] Print successful');
         resolve({ success: true, method: 'Direct .EXE (winspool)' });
+      } else if (error && error.killed) {
+        // Tope de 15 s: con la impresora en modo directo (sin spool), WritePrinter
+        // se queda esperando al puerto si la impresora esta apagada o desconectada.
+        // Se marca para que printer-handlers NO reintente por ESC/POS (misma
+        // espera en el mismo puerto) y la caja reciba el fallo de una vez.
+        console.log('❌ [DIRECT] Print timed out (printer not responding)');
+        const err = new Error('La impresora no responde (apagada, sin papel o desconectada)');
+        err.timedOut = true;
+        reject(err);
       } else {
         console.log('❌ [DIRECT] Print failed:', out, stderr);
         reject(new Error(out || stderr || 'Direct print failed'));
