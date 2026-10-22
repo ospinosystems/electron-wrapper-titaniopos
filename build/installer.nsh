@@ -126,6 +126,21 @@
   ${Else}
     DetailPrint "TitanioPOS: rustdesk.exe no incluido en este build - se omite"
   ${EndIf}
+
+  ; --- 4. Tickera en modo directo (sin spool en disco). -------------------
+  ; Windows reenviaba al arrancar los tickets que dejaba guardados en
+  ; spool\PRINTERS (apagones, bajones): pila de tickets viejos al encender la
+  ; caja (VLP1 y Calabozo 2, oct 2026). Con PRINTER_ATTRIBUTE_DIRECT no guarda
+  ; nada. Aqui, con el admin del instalador, se aplica a la tickera del
+  ; settings y se limpia de una vez lo que el spooler tenga guardado (la
+  ; instalacion corre post-cierre, sin nada imprimiendo). Idempotente; un
+  ; fallo NO aborta la instalacion. Resultado: ProgramData\TitanioPOS\printer-direct.json
+  ${If} ${FileExists} "$INSTDIR\resources\bin\printer-direct-mode.ps1"
+    DetailPrint "TitanioPOS: tickera en modo directo..."
+    nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\resources\bin\printer-direct-mode.ps1" -CleanSpool'
+    Pop $0
+    DetailPrint "  Tickera modo directo: exit $0"
+  ${EndIf}
 !macroend
 
 ; customRemoveFiles REEMPLAZA el borrado por defecto del uninstaller. Por defecto

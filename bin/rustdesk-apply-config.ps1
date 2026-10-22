@@ -376,5 +376,17 @@ try {
   Write-Output "DIAG written service=$($diag.service) tomlId=$($diag.tomlId) getId=$($diag.getId)"
 } catch { Write-Output "DIAG error: $($_.Exception.Message)" }
 
+# 5) Tickera en modo directo (ver printer-direct-mode.ps1). Esta tarea corre
+# elevada/SYSTEM en cada arranque, inicio de sesion y cada 2 h: se reaplica por
+# si un driver reinstalado o alguien en Propiedades lo quito. SIN -CleanSpool:
+# esto corre en horario de venta y no debe tocar la cola ni detener el spooler
+# (eso solo lo hace el instalador, post-cierre).
+try {
+  $pdm = Join-Path $PSScriptRoot 'printer-direct-mode.ps1'
+  if (Test-Path $pdm) {
+    & $pdm 2>&1 | ForEach-Object { Write-Output "PRINTER $_" }
+  }
+} catch { Write-Output "PRINTER error: $($_.Exception.Message)" }
+
 Write-Output 'DONE'
 exit 0
