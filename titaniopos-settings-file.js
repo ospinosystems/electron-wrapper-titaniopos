@@ -160,6 +160,16 @@ const DEFAULT_PRINT_SHARE = {
 
 const PRINT_SHARE_KINDS = ['ticket', 'fiscal', 'label'];
 
+// Modo directo de la tickera (ver bin/printer-direct-mode.ps1 y
+// printer-direct-pilot.js). `enabled`: null = no decidido (el script no toca
+// nada), true = aplicar, false = revertir. Vive en su propia sección porque
+// el guardado de la impresora desde la vista reemplaza thermalPrinter entero.
+const DEFAULT_PRINTER_DIRECT_MODE = {
+  enabled: null,
+  pilot: '',
+  at: null,
+};
+
 const DEFAULT_SETTINGS = {
   schemaVersion: 1,
   caja: { ...DEFAULT_CAJA },
@@ -169,6 +179,7 @@ const DEFAULT_SETTINGS = {
   ui: { ...DEFAULT_UI },
   megaPos: { ...DEFAULT_MEGA_POS },
   printShare: { ...DEFAULT_PRINT_SHARE },
+  printerDirectMode: { ...DEFAULT_PRINTER_DIRECT_MODE },
 };
 
 
@@ -396,6 +407,16 @@ function normalizeSettings(raw) {
     ui: normalizeUi(raw.ui || {}),
     megaPos: normalizeMegaPos(raw.megaPos || raw.smartPos || {}),
     printShare: normalizePrintShare(raw.printShare || {}),
+    printerDirectMode: normalizePrinterDirectMode(raw.printerDirectMode || {}),
+  };
+}
+
+function normalizePrinterDirectMode(raw) {
+  const base = { ...DEFAULT_PRINTER_DIRECT_MODE, ...(raw || {}) };
+  return {
+    enabled: base.enabled === true ? true : base.enabled === false ? false : null,
+    pilot: String(base.pilot ?? ''),
+    at: base.at ?? null,
   };
 }
 

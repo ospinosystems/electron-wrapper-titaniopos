@@ -24,9 +24,13 @@
 #    en horario de venta) solo se limpia si TODOS los trabajos en cola llevan
 #    mas de 10 min (cola atascada, nadie espera ese papel); si hay trabajos
 #    recientes se pospone a la siguiente pasada. printui corre con tope de 20 s.
-#  - Reversible: `-Revert`, o `"spoolMode": "spooled"` en la seccion
-#    thermalPrinter de titaniopos-settings.json (la tarea SYSTEM lo respeta y
-#    revierte sola en su siguiente pasada).
+#  - COMPUERTA: sin -PrinterName solo actua donde titaniopos-settings.json
+#    tiene `printerDirectMode.enabled` = true (lo enciende Electron en las
+#    cajas piloto, ver printer-direct-pilot.js). null = no se toca nada;
+#    false = se revierte al modo en cola. Asi el release llega a toda la
+#    flota pero el cambio solo se activa donde se decidio.
+#  - Reversible: `-Revert`, o `printerDirectMode.enabled = false` (la tarea
+#    SYSTEM lo respeta y revierte sola en su siguiente pasada).
 #  - El spooler SIEMPRE queda arrancado al final (reintentos; si no se detuvo
 #    por las buenas se mata spoolsv.exe y se arranca de nuevo).
 #  - Idempotente, nunca aborta la instalacion: exit 0 siempre.
@@ -120,10 +124,14 @@ function Find-ConfiguredPrinters {
       if (-not $name -or $name.Trim() -eq '') { continue }
       $name = $name.Trim()
       if ($found | Where-Object { $_.name -eq $name }) { continue }
+      # printerDirectMode.enabled: $true / $false / ausente (null) -> 'on' / 'off' / 'unset'
+      $flag = $null
+      try { $flag = $json.printerDirectMode.enabled } catch {}
+      $directMode = if ($flag -eq $true) { 'on' } elseif ($flag -eq $false) { 'off' } else { 'unset' }
       $found += @{
         name = $name
         method = ([string]$tp.method).Trim().ToLower()
-        spoolMode = ([string]$tp.spoolMode).Trim().ToLower()
+        directMode = $directMode
         file = $file
       }
     } catch {
@@ -270,8 +278,12 @@ if ($manual.Count -gt 0) {
   foreach ($m in $manual) { $plan += @{ name = $m; wantDirect = (-not $Revert); why = 'manual' } }
 } else {
   foreach ($cfg in @(Find-ConfiguredPrinters)) {
-    if ($Revert -or $cfg.spoolMode -eq 'spooled') {
-      $plan += @{ name = $cfg.name; wantDirect = $false; why = $(if ($Revert) { 'revert' } else { 'spoolMode=spooled' }) }
+    if ($Revert -or $cfg.directMode -eq 'off') {
+      $plan += @{ name = $cfg.name; wantDirect = $false; why = $(if ($Revert) { 'revert' } else { 'enabled=false' }) }
+    } elseif ($cfg.directMode -ne 'on') {
+      # Nadie lo ha habilitado en esta caja (ni piloto ni soporte): no se toca nada.
+      $result.printers += @{ name = $cfg.name; skipped = 'not-enabled'; ok = $true }
+      Write-Output ("SKIP {0} printerDirectMode.enabled no esta en true (se deja como esta)" -f $cfg.name)
     } elseif ($cfg.method -eq 'native') {
       # Impresora normal/digital por driver: el modo directo cambia como imprime. No se toca.
       $result.printers += @{ name = $cfg.name; skipped = 'native'; ok = $true }

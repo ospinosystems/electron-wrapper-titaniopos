@@ -3897,6 +3897,14 @@ app.whenReady().then(() => {
   } catch (e) {
     console.warn('⚠️ [PRINT-QUEUE] No se pudo vaciar la cola al arrancar:', e && e.message);
   }
+  // Piloto del modo directo de la tickera: en las cajas de la lista enciende
+  // printerDirectMode.enabled; el cambio real lo hace la tarea SYSTEM de
+  // soporte remoto (bin/printer-direct-mode.ps1). Fuera del piloto no toca nada.
+  try {
+    require('./printer-direct-pilot').applyPrinterDirectPilot(app);
+  } catch (e) {
+    console.warn('⚠️ [PRINT-DIRECT] piloto:', e && e.message);
+  }
 
   const backupPath = getBackupDir();
   console.log('📁 [BACKUP] Backup directory:', backupPath);
