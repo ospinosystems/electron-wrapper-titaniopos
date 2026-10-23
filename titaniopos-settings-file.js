@@ -65,6 +65,8 @@ const DEFAULT_UI = {
   // Pantalla del cliente en el segundo monitor (customer-display.js):
   // 'auto' = abrirla si hay otro monitor; 'off' = nunca.
   customerDisplay: 'auto',
+  // Abrir la app en pantalla completa real (main.js createWindow). F11 alterna.
+  fullscreenOnStart: true,
 };
 
 // Impresora de etiquetas (RC-8610). La config canónica vive en el FRONT

@@ -820,6 +820,19 @@ function createWindow() {
   // Abrir maximizada por defecto (la caja se usa a pantalla completa).
   mainWindow.maximize();
 
+  // Pantalla completa real al abrir (sin barra de título ni de tareas). F11 la
+  // quita y la vuelve a poner (rol togglefullscreen del menú); al salir queda
+  // la ventana maximizada de arriba. ui.fullscreenOnStart = false en
+  // titaniopos-settings.json la desactiva en una caja.
+  try {
+    const { readSettings, normalizeUi } = require('./titaniopos-settings-file');
+    if (normalizeUi(readSettings(app).ui).fullscreenOnStart !== false) {
+      mainWindow.setFullScreen(true);
+    }
+  } catch (e) {
+    console.warn('[APP] No se pudo abrir en pantalla completa:', e && e.message);
+  }
+
   // [Path B/prueba] Quitar service workers viejos que intercepten las llamadas
   // (la PWA queda desactivada en la caja; el offline va por el bundle local).
   // También 'cachestorage': los caches de workbox (js/static de builds viejos,
