@@ -18,6 +18,11 @@ const os = require('os');
 /** Cajas piloto: código de tienda (settings.caja.storeCode) + nombre de equipo. */
 const PILOT = [
   { store: 'calabozo2', host: 'caja1' },
+  // Prueba en tienda (2026-10-23): Anaco caja 2. Se incluyen las dos tiendas
+  // Anaco (anaco, anaco2) porque la prueba se hace en "Anaco caja 2" y el
+  // equipo se llama CAJA2.
+  { store: 'anaco', host: 'caja2' },
+  { store: 'anaco2', host: 'caja2' },
 ];
 
 /** true = encender en toda la flota (ya no hace falta la lista). */
