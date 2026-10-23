@@ -62,6 +62,9 @@ const DEFAULT_FISCAL = {
 
 const DEFAULT_UI = {
   reduceAnimations: false,
+  // Pantalla del cliente en el segundo monitor (customer-display.js):
+  // 'auto' = abrirla si hay otro monitor; 'off' = nunca.
+  customerDisplay: 'auto',
 };
 
 // Impresora de etiquetas (RC-8610). La config canónica vive en el FRONT

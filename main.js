@@ -3911,6 +3911,13 @@ app.whenReady().then(() => {
   console.log('📱 [BARCODE] Barcode scanner system initialized');
 
   createWindow();
+  // Pantalla del cliente: segunda ventana en el otro monitor (si lo hay) con
+  // el carrito de la venta en curso. Ver customer-display.js.
+  try {
+    require('./customer-display').init(app, mainWindow);
+  } catch (e) {
+    console.warn('⚠️ [CUSTOMER-DISPLAY] init:', e && e.message);
+  }
   if (app.isPackaged) {
     setupAutoUpdater();
     // Self-heal: los updates NSIS borran el acceso directo del escritorio.

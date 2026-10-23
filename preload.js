@@ -176,6 +176,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
    */
   printerPurgeQueue: (options = {}) => ipcRenderer.invoke('printer-purge-queue', options),
 
+  // ── Pantalla del cliente (segundo monitor, ver customer-display.js) ─────────
+  /** La caja publica el resumen de la orden activa; Electron lo reenvía a la pantalla. */
+  customerDisplayPublish: (payload) => ipcRenderer.invoke('customer-display:publish', payload),
+  /** Último resumen publicado (la pantalla lo pide al abrir). */
+  customerDisplayLast: () => ipcRenderer.invoke('customer-display:last'),
+  /** { enabled, displays, open, simulated, hasPayload } */
+  customerDisplayStatus: () => ipcRenderer.invoke('customer-display:status'),
+  /** Abre (true) o cierra (false) la pantalla simulada sobre el monitor principal. */
+  customerDisplaySimulate: (open) => ipcRenderer.invoke('customer-display:simulate', Boolean(open)),
+  /** La pantalla del cliente se suscribe a los resúmenes; devuelve la función para desuscribirse. */
+  onCustomerDisplayUpdate: (callback) => {
+    const listener = (_event, payload) => { try { callback(payload); } catch (_) {} };
+    ipcRenderer.on('customer-display:update', listener);
+    return () => ipcRenderer.removeListener('customer-display:update', listener);
+  },
+
   /**
    * Test print with specific method
    * @param {string} method - Method to test ('native' or 'escpos')
