@@ -63,24 +63,74 @@ $ATTR_DIRECT = 0x0002
 $ATTR_KEEPPRINTEDJOBS = 0x0100
 $PRINTUI_TIMEOUT_MS = 20000
 $STUCK_JOB_MINUTES = 10
+# Al arrancar Windows la tarea SYSTEM puede correr antes de que la impresora o
+# el spooler estén listos (Anaco caja 2, 2026-10-23: "no instalada" a las
+# 17:21 y encontrada minutos después a mano). Se espera y se reintenta.
+$SPOOLER_WAIT_SEC = 90
+$LOOKUP_RETRIES = 12
+$LOOKUP_RETRY_SEC = 10
 $PrintersKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Print\Printers'
 $ResultDir = 'C:\ProgramData\TitanioPOS'
 $ResultFile = Join-Path $ResultDir 'printer-direct.json'
+
+$uptimeSec = $null
+try { $uptimeSec = [int]((Get-Date) - (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime).TotalSeconds } catch {}
 
 $result = @{
   at = (Get-Date -Format o)
   dryRun = [bool]$DryRun
   revert = [bool]$Revert
   cleanSpool = [bool]$CleanSpool
+  user = $(try { [Security.Principal.WindowsIdentity]::GetCurrent().Name } catch { $null })
+  uptimeSec = $uptimeSec
+  spoolerAtStart = $(try { [string](Get-Service -Name Spooler -ErrorAction Stop).Status } catch { 'unknown' })
+  spoolerWaitSec = 0
   printers = @()
   spool = $null
   errors = @()
 }
 
+# Última búsqueda de impresora: por dónde se encontró y qué error dio el registro.
+$script:lastLookup = @{ via = $null; regError = $null; wmiError = $null }
+
+# Atributos de una impresora local: registro primero; si no está o no se puede
+# leer, WMI (Win32_Printer.Attributes, mismo bitmask). Nunca lanza.
 function Get-PrinterAttributes([string]$name) {
-  $reg = Get-ItemProperty -Path (Join-Path $PrintersKey $name) -ErrorAction SilentlyContinue
-  if ($null -eq $reg -or $null -eq $reg.Attributes) { return $null }
-  return [int]$reg.Attributes
+  $script:lastLookup = @{ via = $null; regError = $null; wmiError = $null }
+  try {
+    $reg = Get-ItemProperty -LiteralPath (Join-Path $PrintersKey $name) -ErrorAction Stop
+    if ($null -ne $reg.Attributes) {
+      $script:lastLookup.via = 'registry'
+      return [int]$reg.Attributes
+    }
+    $script:lastLookup.regError = 'la clave existe pero sin valor Attributes'
+  } catch {
+    $script:lastLookup.regError = $_.Exception.Message
+  }
+  try {
+    $esc = $name -replace "'", "\'"
+    $w = Get-CimInstance -ClassName Win32_Printer -Filter "Name='$esc'" -ErrorAction Stop | Select-Object -First 1
+    if ($w -and $null -ne $w.Attributes) {
+      $script:lastLookup.via = 'wmi'
+      return [int]$w.Attributes
+    }
+    $script:lastLookup.wmiError = 'WMI no la lista'
+  } catch {
+    $script:lastLookup.wmiError = $_.Exception.Message
+  }
+  return $null
+}
+
+# Espera a que el spooler esté corriendo (al arrancar Windows puede no estarlo
+# todavía). Devuelve los segundos esperados.
+function Wait-Spooler([int]$maxSec) {
+  $start = Get-Date
+  $deadline = $start.AddSeconds($maxSec)
+  while ((Get-Date) -lt $deadline) {
+    try { if ((Get-Service -Name Spooler -ErrorAction Stop).Status -eq 'Running') { break } } catch {}
+    Start-Sleep -Seconds 2
+  }
+  return [int]((Get-Date) - $start).TotalSeconds
 }
 
 function Describe-Attributes([int]$a) {
@@ -155,14 +205,24 @@ function Invoke-PrintUi([string]$name, [string]$attributes) {
 
 # Aplica (o revierte) el modo a UNA impresora local. Nunca lanza.
 function Set-PrinterMode([string]$name, [bool]$wantDirect) {
-  $entry = @{ name = $name; wantDirect = $wantDirect; before = $null; after = $null; changed = $false; ok = $false; via = $null; error = $null; queue = $null }
+  $entry = @{ name = $name; wantDirect = $wantDirect; before = $null; after = $null; changed = $false; ok = $false; via = $null; error = $null; queue = $null; lookup = $null; attempts = 0 }
   if ($name -match '"') {
     $entry.error = 'nombre con comillas, omitido'
     return $entry
   }
-  $before = Get-PrinterAttributes $name
+  # Al arrancar Windows la impresora puede no estar lista todavía: reintentar
+  # antes de darla por no instalada (en dry-run no se espera).
+  $tries = if ($DryRun) { 1 } else { $LOOKUP_RETRIES }
+  $before = $null
+  for ($i = 1; $i -le $tries; $i++) {
+    $entry.attempts = $i
+    $before = Get-PrinterAttributes $name
+    if ($null -ne $before) { break }
+    if ($i -lt $tries) { Start-Sleep -Seconds $LOOKUP_RETRY_SEC }
+  }
+  $entry.lookup = @{ via = $script:lastLookup.via; regError = $script:lastLookup.regError; wmiError = $script:lastLookup.wmiError }
   if ($null -eq $before) {
-    $entry.error = 'no instalada en este equipo (o es una conexion de red)'
+    $entry.error = "no se encontro la impresora tras $($entry.attempts) intento(s) (registro: $($script:lastLookup.regError); WMI: $($script:lastLookup.wmiError))"
     return $entry
   }
   $entry.before = Describe-Attributes $before
@@ -296,6 +356,12 @@ if ($manual.Count -gt 0) {
 
 if ($plan.Count -eq 0 -and $result.printers.Count -eq 0) {
   Write-Output 'NO_PRINTER sin tickera configurada en este equipo'
+}
+
+# 0) Con algo que hacer y el spooler aún arrancando (inicio de Windows), esperarlo.
+if ($plan.Count -gt 0 -and -not $DryRun -and $result.spoolerAtStart -ne 'Running') {
+  $result.spoolerWaitSec = Wait-Spooler $SPOOLER_WAIT_SEC
+  Write-Output ("SPOOLER estaba {0}; esperado {1} s" -f $result.spoolerAtStart, $result.spoolerWaitSec)
 }
 
 # 1) Limpiar la cola ANTES de cambiar el modo (ver SEGURIDAD arriba).
