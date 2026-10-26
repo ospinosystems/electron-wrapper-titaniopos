@@ -68,3 +68,49 @@ test('error leyendo el settings no lanza', () => {
   assert.equal(r.changed, false);
   assert.equal(r.reason, 'error');
 });
+
+// ── Flota (PILOT_ALL) y comando remoto printer_direct_mode ───────────────────
+const { setPrinterDirectMode } = require('../printer-direct-pilot');
+
+test('flota: una caja fuera de la lista se enciende marcada "all:"', () => {
+  const settings = fakeSettings({ caja: { storeCode: 'elorza' }, printerDirectMode: { enabled: null } });
+  const r = applyPrinterDirectPilot({}, { settings, hostname: 'CAJA8', list: LIST, all: true });
+  assert.equal(r.changed, true);
+  assert.equal(r.reason, 'fleet');
+  assert.equal(settings.writes[0].printerDirectMode.enabled, true);
+  assert.equal(settings.writes[0].printerDirectMode.pilot, 'all:elorza/caja8');
+});
+
+test('flota: una caja de la lista conserva su marca de piloto', () => {
+  const settings = fakeSettings({ caja: { storeCode: 'calabozo2' }, printerDirectMode: { enabled: null } });
+  const r = applyPrinterDirectPilot({}, { settings, hostname: 'caja1', list: LIST, all: true });
+  assert.equal(r.reason, 'pilot');
+  assert.equal(settings.writes[0].printerDirectMode.pilot, 'calabozo2/caja1');
+});
+
+test('flota: caja sin código de tienda también se enciende', () => {
+  const settings = fakeSettings({ caja: {}, printerDirectMode: {} });
+  const r = applyPrinterDirectPilot({}, { settings, hostname: 'DESKTOP-X', list: LIST, all: true });
+  assert.equal(r.changed, true);
+  assert.equal(settings.writes[0].printerDirectMode.pilot, 'all:/desktop-x');
+});
+
+test('comando remoto: apagar escribe enabled=false y la flota no lo vuelve a encender', () => {
+  const settings = fakeSettings({ caja: { storeCode: 'elorza' }, printerDirectMode: { enabled: true, pilot: 'all:elorza/caja8' } });
+  const r = setPrinterDirectMode({}, false, { settings });
+  assert.deepEqual({ success: r.success, enabled: r.enabled, previous: r.previous }, { success: true, enabled: false, previous: true });
+  assert.equal(settings.writes[0].printerDirectMode.enabled, false);
+  assert.equal(settings.writes[0].printerDirectMode.pilot, 'remote');
+  const again = applyPrinterDirectPilot({}, { settings, hostname: 'CAJA8', list: LIST, all: true });
+  assert.equal(again.changed, false);
+  assert.equal(again.reason, 'already-set');
+  assert.equal(settings.writes.length, 1);
+});
+
+test('comando remoto: volver a encender y validar el valor', () => {
+  const settings = fakeSettings({ caja: {}, printerDirectMode: { enabled: false } });
+  assert.equal(setPrinterDirectMode({}, true, { settings }).enabled, true);
+  assert.equal(settings.writes[0].printerDirectMode.enabled, true);
+  assert.equal(setPrinterDirectMode({}, 'no', { settings }).success, false);
+  assert.equal(settings.writes.length, 1);
+});

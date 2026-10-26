@@ -176,6 +176,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
    */
   printerPurgeQueue: (options = {}) => ipcRenderer.invoke('printer-purge-queue', options),
 
+  /**
+   * Modo directo de la tickera (comando remoto `printer_direct_mode`):
+   * { enabled: false } la devuelve al modo normal de Windows, { enabled: true }
+   * la pone en directo. Lo aplica la tarea SYSTEM en su siguiente pasada.
+   * @returns {Promise<{success: boolean, enabled?: boolean, previous?: boolean|null, error?: string}>}
+   */
+  printerDirectModeSet: (options = {}) => ipcRenderer.invoke('printer-direct-mode-set', options),
+
   // ── Pantalla del cliente (segundo monitor, ver customer-display.js) ─────────
   /** La caja publica el resumen de la orden activa; Electron lo reenvía a la pantalla. */
   customerDisplayPublish: (payload) => ipcRenderer.invoke('customer-display:publish', payload),

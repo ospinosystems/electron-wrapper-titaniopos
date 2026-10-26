@@ -189,6 +189,17 @@ function registerPrinterHandlers(app, mainWindow) {
   });
 
   /**
+   * Modo directo de la tickera a pedido (comando remoto `printer_direct_mode`
+   * del bus): escribe printerDirectMode.enabled en el settings. La tarea SYSTEM
+   * aplica el cambio en su siguiente pasada (arranque, inicio de sesión o cada
+   * 2 h); la app no tiene permisos para tocar la impresora. Nunca lanza.
+   */
+  ipcMain.handle('printer-direct-mode-set', async (event, options = {}) => {
+    const { setPrinterDirectMode } = require('./printer-direct-pilot');
+    return setPrinterDirectMode(app, options && options.enabled);
+  });
+
+  /**
    * Imprime una ETIQUETA (HTML) ruteando como printer-print: si esta caja usa
    * la impresora de etiquetas de otra (modo receive + useRemoteLabel), el
    * sticker viaja por HTTP a la anfitriona; si no, se imprime con la impresora
