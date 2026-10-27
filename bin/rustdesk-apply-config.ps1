@@ -388,5 +388,25 @@ try {
   }
 } catch { Write-Output "PRINTER error: $($_.Exception.Message)" }
 
+# 6) Vigilante de la cola de la tickera (ver printer-queue-watchdog.ps1): tarea
+# SYSTEM propia que corre CADA MINUTO y destraba la cola cuando un ticket queda
+# huérfano en modo directo. Esta tarea (cada 2 h) es demasiado lenta para eso.
+# Se re-registra en cada pasada: así apunta siempre a la ruta de la versión
+# instalada y sobrevive a que alguien la borre. Sin directo, el vigilante no hace nada.
+try {
+  $wd = Join-Path $PSScriptRoot 'printer-queue-watchdog.ps1'
+  if (Test-Path $wd) {
+    $wdAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $wd)
+    $wdTrigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(1))
+    $wdTrigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Days 3650)).Repetition
+    $wdBoot = New-ScheduledTaskTrigger -AtStartup
+    $wdSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -DontStopOnIdleEnd -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
+    try { $wdSettings.DisallowStartIfOnBatteries = $false; $wdSettings.StopIfGoingOnBatteries = $false } catch {}
+    $wdPrincipal = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    Register-ScheduledTask -TaskName 'TitanioPOS Tickera' -Action $wdAction -Trigger @($wdTrigger, $wdBoot) -Settings $wdSettings -Principal $wdPrincipal -Force -ErrorAction Stop | Out-Null
+    Write-Output 'PRINTER watchdog: tarea "TitanioPOS Tickera" registrada (cada minuto)'
+  }
+} catch { Write-Output "PRINTER watchdog error: $($_.Exception.Message)" }
+
 Write-Output 'DONE'
 exit 0
