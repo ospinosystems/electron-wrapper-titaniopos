@@ -143,7 +143,7 @@ const { registerPrinterHandlers } = require('./printer-handlers');
 const { registerFiscalHandlers } = require('./fiscal-handlers');
 const { registerPinpadHandlers } = require('./pinpad-handlers');
 const { registerMegaPosHandlers } = require('./mega-pos-handlers');
-const { startMegaPosServer, stopMegaPosServer, restartMegaPosServer, getVposRuntimeDir, setSeqNum } = require('./mega-pos-manager');
+const { startMegaPosServer, stopMegaPosServer, restartMegaPosServer, getVposRuntimeDir, setSeqNum, getMegaPosHealth, repairMegaPos } = require('./mega-pos-manager');
 const { registerCajaConfigHandlers } = require('./caja-config-handlers');
 const { registerPrintShareHandlers, maybeStartPrintShareServer } = require('./print-share');
 const { registerRemoteSupportHandlers, startRemoteSupportIfEnabled } = require('./remote-support-handlers');
@@ -3985,6 +3985,33 @@ app.whenReady().then(() => {
       return r;
     } catch (error) {
       console.error('❌ [MEGA_POS] restart:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Salud del Mega POS (solo lectura): estado del terminal conf/<VTID>/<VTID>.ini
+  // (sano/dañado), último respaldo propio y carpeta de resultados (C:oucher).
+  // Lo lee el chequeo de caja. Ver mega-pos-state-guard.js.
+  ipcMain.handle('mega-pos-health', async () => {
+    try {
+      return getMegaPosHealth(app);
+    } catch (error) {
+      console.error('❌ [MEGA_POS] health:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Reparación en un paso: carpeta de resultados + restaurar el estado del
+  // terminal si está dañado + reiniciar el servicio. La dispara el botón de la
+  // caja y el cobro cuando el VPOS responde un error de configuración
+  // (EB / 99-LA), una vez, antes de dejar al cajero acumulando rechazados.
+  ipcMain.handle('mega-pos-repair', async () => {
+    try {
+      const r = await repairMegaPos(app);
+      console.log('🟣 [MEGA_POS] Reparación:', r && r.steps ? r.steps.map((s) => `${s.key}=${s.ok ? 'ok' : 'x'}`).join(' ') : r);
+      return r;
+    } catch (error) {
+      console.error('❌ [MEGA_POS] repair:', error);
       return { success: false, error: error.message };
     }
   });

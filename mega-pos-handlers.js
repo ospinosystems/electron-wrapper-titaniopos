@@ -22,6 +22,7 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
+const { snapshotMegaPosState } = require('./mega-pos-manager');
 
 // El VPOS RESTService escucha por defecto en 127.0.0.1:8085.
 const DEFAULT_VPOS_HOST = '127.0.0.1';
@@ -208,6 +209,9 @@ function registerMegaPosHandlers() {
       console.log(
         `[MEGA_POS] <- (tx #${nth}) ${response.status} cod=${response.data && response.data.codRespuesta} en ${Date.now() - tStart}ms`
       );
+      // El VPOS acaba de mover el consecutivo del terminal: respaldarlo ya
+      // (ver mega-pos-state-guard.js), sin esperar a la pasada del vigilante.
+      try { snapshotMegaPosState(); } catch (_) { /* best-effort */ }
 
       return {
         success: isApproved(response.data),

@@ -21,6 +21,7 @@ const http = require('http');
 const os = require('os');
 
 const { readSettings, normalizeMegaPos, resolveMegaPosChannels } = require('./titaniopos-settings-file');
+const stateGuard = require('./mega-pos-state-guard');
 
 const LOG_FILE = path.join(os.homedir(), 'titaniopos-mega-pos.log');
 const logToFile = (msg) => {
@@ -36,6 +37,9 @@ const MAIN_CLASS = 've.com.megasoft.vpos.service.VposWebService';
 
 let vposProcess = null;
 let isRunning = false;
+/** Terminal que está corriendo (runtime + vtid) y su vigilante de estado. */
+let activeGuard = null; // { runtime, vtid, watcher }
+let lastStartGuard = null; // resultado de guardStateOnStart / ensureVoucherDirs del último arranque
 
 /** Carpeta origen (empaquetada, posiblemente solo-lectura). */
 const getVposSourceDir = () => {
@@ -577,6 +581,17 @@ const startMegaPosServerUnlocked = async (app) => {
     applyConfigToIni(runtimeDir, cfg);
     applyVposUniversalActivation(runtimeDir);
     applyPinpadVerifone(runtimeDir);
+    // Blindaje contra las dos averías que no se curan solas (ver
+    // mega-pos-state-guard.js): la carpeta de resultados (99/LA) y el archivo
+    // de estado del terminal (EB). Nunca impiden el arranque.
+    const vouchers = stateGuard.ensureVoucherDirs(runtimeDir, log);
+    const guard = stateGuard.guardStateOnStart(runtimeDir, String(cfg.vtid || '').trim(), log);
+    lastStartGuard = { at: new Date().toISOString(), vouchers, guard: { action: guard.action, error: guard.error || null } };
+    if (guard.action !== 'none' && guard.action !== 'snapshot') {
+      log(`[MEGA_POS][estado] arranque: ${guard.action}${guard.error ? ` (${guard.error})` : ''}`);
+    }
+    if (activeGuard && activeGuard.watcher) activeGuard.watcher.stop();
+    activeGuard = { runtime: runtimeDir, vtid: String(cfg.vtid || '').trim(), watcher: null };
   } catch (e) {
     logErr('[MEGA_POS] Preparación falló:', e.message);
     return { success: false, error: e.message };
@@ -615,6 +630,9 @@ const startMegaPosServerUnlocked = async (app) => {
           clearInterval(timer);
           isRunning = true;
           log('[MEGA_POS] VPOS RESTService listo en :8085');
+          if (activeGuard && activeGuard.vtid && !activeGuard.watcher) {
+            activeGuard.watcher = stateGuard.watchState(activeGuard.runtime, activeGuard.vtid, log);
+          }
           resolve({ success: true, message: 'VPOS iniciado' });
         } else if (checks >= maxChecks) {
           clearInterval(timer);
@@ -630,6 +648,11 @@ const startMegaPosServerUnlocked = async (app) => {
 };
 
 const stopMegaPosServer = () => {
+  // Último respaldo del estado del terminal antes de bajar el servicio.
+  if (activeGuard && activeGuard.vtid) {
+    try { stateGuard.snapshotState(activeGuard.runtime, activeGuard.vtid, log); } catch (_) {}
+    if (activeGuard.watcher) { activeGuard.watcher.stop(); activeGuard.watcher = null; }
+  }
   if (!vposProcess) return;
   log('[MEGA_POS] Deteniendo VPOS...');
   try {
@@ -685,6 +708,83 @@ const restartMegaPosServer = (app) =>
     return startMegaPosServerUnlocked(app);
   });
 
+/** Tras cada transacción: el VPOS acaba de mover el consecutivo, respáldalo ya. */
+const snapshotMegaPosState = () => {
+  if (!activeGuard || !activeGuard.vtid) return { saved: false, reason: 'sin terminal activo' };
+  if (activeGuard.watcher) { activeGuard.watcher.poke(); return { saved: true }; }
+  return stateGuard.snapshotState(activeGuard.runtime, activeGuard.vtid, log);
+};
+
+const resolveConfiguredVtid = (app) => {
+  try { return String(normalizeMegaPos(readSettings(app).megaPos).vtid || '').trim(); } catch (_) { return ''; }
+};
+
+/**
+ * Salud del Mega POS para el chequeo de caja: archivo de estado del terminal
+ * (sano / dañado / sin respaldo), último respaldo y carpeta de resultados.
+ * Solo lee; no arranca ni toca nada.
+ */
+const getMegaPosHealth = (app) => {
+  const runtime = getVposRuntimeDir(app);
+  const vtid = resolveConfiguredVtid(app);
+  const state = vtid ? stateGuard.inspectStateFile(runtime, vtid) : null;
+  const snap = vtid ? stateGuard.readSnapshot(runtime, vtid) : null;
+  return {
+    success: true,
+    vtid: vtid || null,
+    running: isRunning,
+    state,
+    snapshot: snap ? { exists: snap.exists, at: snap.at, seqnumber: snap.seqnumber, path: snap.path } : null,
+    voucherDir: stateGuard.inspectVoucherDirs(runtime),
+    lastStart: lastStartGuard,
+  };
+};
+
+/**
+ * Reparación en un paso (botón de la caja y reintento automático del cobro):
+ * carpeta de resultados + restauración del estado si está dañado + reinicio
+ * del servicio. Devuelve qué hizo, paso por paso.
+ */
+const repairMegaPos = (app) =>
+  ops.enqueue(async () => {
+    const runtime = getVposRuntimeDir(app);
+    const vtid = resolveConfiguredVtid(app);
+    const steps = [];
+    // Primero se baja el Java: si se restaurara el archivo con el VPOS vivo,
+    // podría volver a pisarlo con lo que tiene en memoria.
+    stopMegaPosServer();
+    await new Promise((r) => setTimeout(r, 800));
+    const vouchers = stateGuard.ensureVoucherDirs(runtime, log);
+    steps.push({ key: 'voucher_dir', ok: vouchers.ok, detail: vouchers.ok ? `${vouchers.base}${vouchers.created.length ? ' (creada)' : ' OK'}` : `${vouchers.base}: ${vouchers.error}` });
+    if (vtid) {
+      const before = stateGuard.inspectStateFile(runtime, vtid);
+      if (before.healthy) {
+        steps.push({ key: 'state', ok: true, detail: `Estado de ${vtid} sano (seqnumber=${before.seqnumber || 'vacío'})` });
+      } else {
+        const r = stateGuard.restoreState(runtime, vtid, log);
+        // Sin archivo y sin respaldo = terminal nuevo: el VPOS lo crea al
+        // arrancar, no es una falla. Dañado sin respaldo sí lo es.
+        const freshTerminal = !r.restored && !before.exists && r.reason === 'no-snapshot';
+        steps.push({
+          key: 'state',
+          ok: r.restored || freshTerminal,
+          detail: r.restored
+            ? `Estado de ${vtid} restaurado (seqnumber=${r.seqnumber}, respaldo de ${r.at || '?'})`
+            : freshTerminal
+              ? `Estado de ${vtid} aún no existe (terminal nuevo): lo crea el VPOS al arrancar`
+              : `Estado de ${vtid} ${before.reason === 'missing' ? 'no existe' : `dañado (${before.reason})`} y no hay respaldo${r.reason && r.reason !== 'no-snapshot' ? ` (${r.reason})` : ''}`,
+        });
+      }
+    } else {
+      steps.push({ key: 'state', ok: false, detail: 'Sin VTID configurado' });
+    }
+    const restart = await startMegaPosServerUnlocked(app);
+    steps.push({ key: 'restart', ok: Boolean(restart && restart.success), detail: restart && (restart.message || restart.error) });
+    const success = steps.every((s) => s.ok);
+    log(`[MEGA_POS][reparar] ${success ? 'OK' : 'INCOMPLETA'}: ${steps.map((s) => `${s.key}=${s.ok ? 'ok' : 'x'}`).join(' ')}`);
+    return { success, steps, restarted: Boolean(restart && restart.success) };
+  });
+
 module.exports = {
   startMegaPosServer,
   stopMegaPosServer,
@@ -692,6 +792,9 @@ module.exports = {
   pingVpos,
   getVposRuntimeDir,
   setSeqNum,
+  snapshotMegaPosState,
+  getMegaPosHealth,
+  repairMegaPos,
   // Solo para tests.
   _internals: { ensureRuntimeCopy, markerMatches, listVposStateDirs, backupVposState, restoreVposState, createSerializer, applyConfigToIni },
 };

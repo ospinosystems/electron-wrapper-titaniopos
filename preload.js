@@ -319,6 +319,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Fija [SeqNum] seqnum en el vposconf.ini y reinicia el servicio (soporte). */
   megaPosSetSeqnum: (value) => ipcRenderer.invoke('mega-pos-set-seqnum', value),
 
+  /** Salud del Mega POS (solo lectura): { success, vtid, running, state: { exists, size,
+   *  healthy, reason, seqnumber }, snapshot: { exists, at, seqnumber }, voucherDir:
+   *  { base, exists, writable, missing } }. */
+  megaPosHealth: () => ipcRenderer.invoke('mega-pos-health'),
+
+  /** Reparación en un paso (carpeta de resultados + estado del terminal + reinicio):
+   *  { success, steps: [{ key, ok, detail }], restarted }. */
+  megaPosRepair: () => ipcRenderer.invoke('mega-pos-repair'),
+
   /** Instala/desinstala la VPOS como admin (UAC): autoarranque de Windows. */
   megaPosInstallVpos: () => ipcRenderer.invoke('mega-pos-install-vpos'),
   megaPosUninstallVpos: () => ipcRenderer.invoke('mega-pos-uninstall-vpos'),
