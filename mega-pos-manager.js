@@ -340,8 +340,9 @@ const applyConfigToIni = (runtimeDir, cfg) => {
     return line;
   });
 
-  fs.writeFileSync(iniPath, out.join('\n'), 'utf8');
-  log('[MEGA_POS] vposconf.ini actualizado con config de la tienda.');
+  if (stateGuard.writeFileSafe(iniPath, out.join('\n'), 'utf8')) {
+    log('[MEGA_POS] vposconf.ini actualizado con config de la tienda.');
+  }
 };
 
 /**
@@ -385,7 +386,7 @@ const setSeqNum = (runtimeDir, value) => {
     if (!found) {
       return { success: false, error: 'No se encontró la clave seqnum en la sección [SeqNum] del vposconf.ini.' };
     }
-    fs.writeFileSync(iniPath, out.join('\n'), 'utf8');
+    stateGuard.writeFileSafe(iniPath, out.join('\n'), 'utf8');
     log(`[MEGA_POS] vposconf.ini: [SeqNum] seqnum ${previous} -> ${n}`);
     return { success: true, previous, next: n };
   } catch (e) {
@@ -415,7 +416,7 @@ const applyVposUniversalActivation = (runtimeDir) => {
       return line;
     });
     if (changed) {
-      fs.writeFileSync(iniPath, out.join('\n'), 'utf8');
+      stateGuard.writeFileSafe(iniPath, out.join('\n'), 'utf8');
       log('[MEGA_POS] vposuniversal.ini: [COMPRA_MEDIOS_PAGO] activo=1');
     }
   } catch (e) {
@@ -482,8 +483,9 @@ const applyPinpadVerifone = (runtimeDir) => {
     for (const [section, entries] of Object.entries(PINPAD_SECTIONS)) {
       upsertIniSection(lines, section, entries);
     }
-    fs.writeFileSync(iniPath, lines.join('\n'), 'utf8');
-    log('[MEGA_POS] vposconf.ini: [pinpad] + [pinpad-verifone] aplicados (P200 ENGAGE/USB)');
+    if (stateGuard.writeFileSafe(iniPath, lines.join('\n'), 'utf8')) {
+      log('[MEGA_POS] vposconf.ini: [pinpad] + [pinpad-verifone] aplicados (P200 ENGAGE/USB)');
+    }
   } catch (e) {
     logErr('[MEGA_POS] No se pudo aplicar config del pinpad:', e.message);
   }
@@ -578,15 +580,20 @@ const startMegaPosServerUnlocked = async (app) => {
     if (!cfg.id && cajaNum != null && String(cajaNum).trim() !== '') {
       cfg.id = String(cajaNum).trim().padStart(4, '0');
     }
+    // Antes de aplicar la config: si un corte de luz dejó vposconf.ini (u otro
+    // archivo de conf/) en ceros, se repone desde la distro. Sin esto la app
+    // "reescribía" un archivo sin secciones y el VPOS respondía 99 (LA) para
+    // siempre.
+    const config = stateGuard.healConfigFiles(getVposSourceDir(), runtimeDir, log);
     applyConfigToIni(runtimeDir, cfg);
     applyVposUniversalActivation(runtimeDir);
     applyPinpadVerifone(runtimeDir);
-    // Blindaje contra las dos averías que no se curan solas (ver
+    // Blindaje contra las otras dos averías que no se curan solas (ver
     // mega-pos-state-guard.js): la carpeta de resultados (99/LA) y el archivo
     // de estado del terminal (EB). Nunca impiden el arranque.
     const vouchers = stateGuard.ensureVoucherDirs(runtimeDir, log);
     const guard = stateGuard.guardStateOnStart(runtimeDir, String(cfg.vtid || '').trim(), log);
-    lastStartGuard = { at: new Date().toISOString(), vouchers, guard: { action: guard.action, error: guard.error || null } };
+    lastStartGuard = { at: new Date().toISOString(), config, vouchers, guard: { action: guard.action, error: guard.error || null } };
     if (guard.action !== 'none' && guard.action !== 'snapshot') {
       log(`[MEGA_POS][estado] arranque: ${guard.action}${guard.error ? ` (${guard.error})` : ''}`);
     }
@@ -736,6 +743,7 @@ const getMegaPosHealth = (app) => {
     state,
     snapshot: snap ? { exists: snap.exists, at: snap.at, seqnumber: snap.seqnumber, path: snap.path } : null,
     voucherDir: stateGuard.inspectVoucherDirs(runtime),
+    configFiles: stateGuard.inspectConfigFiles(runtime),
     lastStart: lastStartGuard,
   };
 };
@@ -754,6 +762,19 @@ const repairMegaPos = (app) =>
     // podría volver a pisarlo con lo que tiene en memoria.
     stopMegaPosServer();
     await new Promise((r) => setTimeout(r, 800));
+    // Config del VPOS: se informa aquí lo que el arranque de abajo va a
+    // encontrar ya repuesto (un vposconf.ini en ceros es la causa real del
+    // 99-LA con la carpeta intacta).
+    const config = stateGuard.healConfigFiles(getVposSourceDir(), runtime, log);
+    steps.push({
+      key: 'config',
+      ok: config.ok,
+      detail: config.failed.length
+        ? `No se pudo reponer ${config.failed.map((f) => `${f.name} (${f.error})`).join(', ')}`
+        : config.healed.length
+          ? `Configuración repuesta: ${config.healed.map((h) => h.name).join(', ')}`
+          : 'Configuración del VPOS sana',
+    });
     const vouchers = stateGuard.ensureVoucherDirs(runtime, log);
     steps.push({ key: 'voucher_dir', ok: vouchers.ok, detail: vouchers.ok ? `${vouchers.base}${vouchers.created.length ? ' (creada)' : ' OK'}` : `${vouchers.base}: ${vouchers.error}` });
     if (vtid) {

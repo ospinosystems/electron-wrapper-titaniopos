@@ -21,6 +21,18 @@
  *    o no se puede escribir, el módulo no instancia. Antes de arrancar se crea
  *    y se prueba una escritura.
  *
+ * 3. El mismo `99 ... (LA)` con la carpeta intacta: `conf/vposconf.ini` de la
+ *    copia runtime relleno de bytes nulos. Es lo que deja NTFS cuando se va la
+ *    luz con el archivo recién escrito (el tamaño queda, el contenido no), y
+ *    tanto la app como el propio VPOS lo reescriben en cada arranque. El VPOS
+ *    no encuentra `[path]` y aborta ("Constructor LA"); ningún reinicio lo
+ *    cura porque la app solo reescribe las secciones que encuentra. Visto en
+ *    producción en Guacara caja 3 (2026-11-10), Turén caja 3 y Mariara caja 4
+ *    (2026-11-13); reponer el archivo desde la distribución empaquetada lo
+ *    arregla en el acto. Aquí se detecta (nulos, vacío o sin sus secciones) y
+ *    se repone antes de aplicar la config de la caja, y las escrituras de la
+ *    app pasan a ser atómicas y solo cuando el contenido cambia.
+ *
  * Todo es best-effort: nada de aquí lanza ni impide arrancar el VPOS. Lo que
  * falle queda en el log y en el estado que lee el chequeo de caja.
  */
@@ -31,7 +43,19 @@ const path = require('path');
 const SNAPSHOT_SUFFIX = '.state-snapshots';
 const HISTORY_KEEP = 5;
 const DEFAULT_VOUCHER_BASE = 'C:\\voucher';
+const DEFAULT_TIMER_DIR = 'C:\\timer';
 const VOUCHER_SUBDIRS = ['vouchers', 'archivosControl'];
+const DAMAGED_KEEP = 3;
+
+/**
+ * Archivos de `conf/` que el VPOS necesita para instanciar, con las secciones
+ * que deben estar. Cualquier otro archivo de `conf/` que venga en la distro se
+ * revisa solo por "vacío o con bytes nulos".
+ */
+const CONFIG_REQUIRED_SECTIONS = {
+  'vposconf.ini': ['server', 'vtid', 'path', 'SeqNum'],
+  'vposuniversal.ini': ['COMPRA_MEDIOS_PAGO'],
+};
 
 const noop = () => {};
 
@@ -230,6 +254,119 @@ const watchState = (runtime, vtid, log = noop, intervalMs = 15000) => {
   return { stop: () => clearInterval(timer), poke: pass };
 };
 
+// ─── Archivos de configuración del VPOS (conf/*.ini) ────────────────────────
+
+/**
+ * Escritura segura de un archivo de config: no toca el disco si el contenido
+ * no cambió (el arranque reescribía vposconf.ini dos veces cada vez, y cada
+ * escritura es una ventana para que un corte de luz lo deje en ceros) y, si
+ * cambió, escribe a un temporal, lo baja a disco (fsync) y lo renombra encima.
+ * @returns {boolean} true si escribió.
+ */
+const writeFileSafe = (file, content, encoding = 'utf8') => {
+  try {
+    if (fs.readFileSync(file, encoding) === content) return false;
+  } catch (_) { /* no existe o ilegible: se escribe */ }
+  const tmp = `${file}.tmp-${process.pid}`;
+  const fd = fs.openSync(tmp, 'w');
+  try {
+    fs.writeFileSync(fd, content, encoding);
+    try { fs.fsyncSync(fd); } catch (_) { /* FS sin fsync: se sigue */ }
+  } finally {
+    fs.closeSync(fd);
+  }
+  fs.renameSync(tmp, file);
+  return true;
+};
+
+/**
+ * Diagnóstico de un archivo de config: sano = existe, tiene bytes, no tiene
+ * bytes nulos y trae las secciones exigidas.
+ */
+const inspectConfigFile = (file, requiredSections = []) => {
+  const out = { path: file, exists: false, size: 0, nulls: 0, missingSections: [], healthy: false, reason: 'missing' };
+  let buf;
+  try { buf = fs.readFileSync(file); } catch (_) { return out; }
+  out.exists = true;
+  out.size = buf.length;
+  if (!buf.length) return { ...out, reason: 'empty' };
+  for (let i = 0; i < buf.length; i++) if (buf[i] === 0) out.nulls++;
+  if (out.nulls) return { ...out, reason: 'nulls' };
+  if (requiredSections.length) {
+    const text = buf.toString('latin1');
+    out.missingSections = requiredSections.filter(
+      (s) => !new RegExp(`^\\s*\\[${s.replace(/[-[\]]/g, '\\$&')}\\]\\s*$`, 'im').test(text),
+    );
+    if (out.missingSections.length) return { ...out, reason: 'no-sections' };
+  }
+  return { ...out, healthy: true, reason: null };
+};
+
+/** Archivos regulares directamente en `conf/` de la distro (ini, xml, properties…). */
+const listDistroConfFiles = (source) => {
+  try {
+    return fs.readdirSync(path.join(source, 'conf'), { withFileTypes: true })
+      .filter((e) => e.isFile())
+      .map((e) => e.name);
+  } catch (_) { return []; }
+};
+
+const pruneDamaged = (dir, name) => {
+  try {
+    const old = fs.readdirSync(dir).filter((n) => n.startsWith(`${name}.corrupto-`)).sort();
+    for (const n of old.slice(0, Math.max(0, old.length - DAMAGED_KEEP))) {
+      try { fs.unlinkSync(path.join(dir, n)); } catch (_) {}
+    }
+  } catch (_) {}
+};
+
+/**
+ * Repone desde la distribución empaquetada cada archivo de `conf/` que esté
+ * dañado en la copia runtime. El dañado se conserva como `.corrupto-<fecha>`
+ * (los últimos DAMAGED_KEEP). No toca subcarpetas (`conf/<VTID>/` es estado
+ * del terminal, lo cuida guardStateOnStart). Tras reponer vposconf.ini la app
+ * vuelve a aplicar servidor / VTID / pinpad como en cualquier arranque.
+ * @returns {{ok: boolean, healed: {name: string, reason: string}[], failed: {name: string, reason: string, error: string}[]}}
+ */
+const healConfigFiles = (source, runtime, log = noop) => {
+  const healed = [];
+  const failed = [];
+  const confDir = path.join(runtime, 'conf');
+  for (const name of listDistroConfFiles(source)) {
+    const file = path.join(confDir, name);
+    const state = inspectConfigFile(file, CONFIG_REQUIRED_SECTIONS[name] || []);
+    if (state.healthy) continue;
+    const from = path.join(source, 'conf', name);
+    // La distro es la referencia: si su copia tampoco pasa la revisión (una
+    // versión futura sin esa sección, p. ej.), no se pisa nada.
+    if (!inspectConfigFile(from, CONFIG_REQUIRED_SECTIONS[name] || []).healthy) continue;
+    try {
+      fs.mkdirSync(confDir, { recursive: true });
+      if (state.exists) {
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        try { fs.renameSync(file, `${file}.corrupto-${stamp}`); } catch (_) { fs.rmSync(file, { force: true }); }
+        pruneDamaged(confDir, name);
+      }
+      const tmp = `${file}.tmp-${process.pid}`;
+      fs.copyFileSync(from, tmp);
+      fs.renameSync(tmp, file);
+      healed.push({ name, reason: state.reason });
+      log(`[MEGA_POS][config] ${name} estaba dañado (${state.reason}${state.nulls ? `, ${state.nulls} bytes nulos de ${state.size}` : ''}): repuesto desde la distribución`);
+    } catch (e) {
+      failed.push({ name, reason: state.reason, error: e.message });
+      log(`[MEGA_POS][config] no se pudo reponer ${name} (${state.reason}): ${e.message}`);
+    }
+  }
+  return { ok: failed.length === 0, healed, failed };
+};
+
+/** Solo diagnóstico de los archivos con secciones exigidas (para el chequeo de caja). */
+const inspectConfigFiles = (runtime) =>
+  Object.entries(CONFIG_REQUIRED_SECTIONS).map(([name, sections]) => {
+    const s = inspectConfigFile(path.join(runtime, 'conf', name), sections);
+    return { name, exists: s.exists, size: s.size, nulls: s.nulls, missingSections: s.missingSections, healthy: s.healthy, reason: s.reason };
+  });
+
 // ─── Carpeta de resultados (vouchers / archivos de control) ─────────────────
 
 /** `[path] path=` del vposconf.ini runtime; si no, C:\voucher (o la variable de entorno). */
@@ -243,6 +380,17 @@ const resolveVoucherBase = (runtime) => {
     if (p) return p.replace(/[\\/]+$/, '');
   } catch (_) {}
   return DEFAULT_VOUCHER_BASE;
+};
+
+/** `[path] pathtimer=` del vposconf.ini runtime; si no, C:\\timer. El VPOS la exige igual que `path`. */
+const resolveTimerDir = (runtime) => {
+  try {
+    const ini = fs.readFileSync(path.join(runtime, 'conf', 'vposconf.ini'), 'latin1');
+    const m = ini.match(/\[path\][^[]*?^\s*pathtimer\s*=\s*([^\r\n]+)/im);
+    const p = m ? m[1].trim() : '';
+    if (p) return p.replace(/[\\/]+$/, '');
+  } catch (_) {}
+  return DEFAULT_TIMER_DIR;
 };
 
 const probeWritable = (dir) => {
@@ -263,6 +411,16 @@ const ensureVoucherDirs = (runtime, log = noop, baseOverride) => {
       if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }); created.push(dir); }
     }
     probeWritable(base);
+    // `pathtimer` va aparte y nunca tumba el resultado: con una base de prueba
+    // (baseOverride) no se toca.
+    if (!baseOverride) {
+      try {
+        const timer = resolveTimerDir(runtime);
+        if (!fs.existsSync(timer)) { fs.mkdirSync(timer, { recursive: true }); created.push(timer); }
+      } catch (e) {
+        log(`[MEGA_POS][vouchers] no se pudo crear la carpeta de timers: ${e.message}`);
+      }
+    }
     if (created.length) log(`[MEGA_POS][vouchers] carpetas creadas: ${created.join(', ')}`);
     return { ok: true, base, created };
   } catch (e) {
@@ -294,6 +452,12 @@ module.exports = {
   guardStateOnStart,
   watchState,
   resolveVoucherBase,
+  resolveTimerDir,
   ensureVoucherDirs,
   inspectVoucherDirs,
+  writeFileSafe,
+  inspectConfigFile,
+  inspectConfigFiles,
+  healConfigFiles,
+  CONFIG_REQUIRED_SECTIONS,
 };
