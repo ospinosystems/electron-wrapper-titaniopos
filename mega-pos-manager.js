@@ -779,7 +779,8 @@ const repairMegaPos = (app) =>
     steps.push({ key: 'voucher_dir', ok: vouchers.ok, detail: vouchers.ok ? `${vouchers.base}${vouchers.created.length ? ' (creada)' : ' OK'}` : `${vouchers.base}: ${vouchers.error}` });
     if (vtid) {
       const before = stateGuard.inspectStateFile(runtime, vtid);
-      if (before.healthy) {
+      // Sano Y con su consecutivo: no se toca. Un seqnumber vacío con respaldo real se repone.
+      if (!stateGuard.stateNeedsRestore(before, stateGuard.readSnapshot(runtime, vtid))) {
         steps.push({ key: 'state', ok: true, detail: `Estado de ${vtid} sano (seqnumber=${before.seqnumber || 'vacío'})` });
       } else {
         const r = stateGuard.restoreState(runtime, vtid, log);

@@ -120,6 +120,28 @@ test('un estado sano NUNCA se pisa con el respaldo (aunque el respaldo sea más 
   assert.equal(guard.readSnapshot(runtime, VTID).seqnumber, '250');
 });
 
+test('un estado que el VPOS rehízo con seqnumber vacío se repone desde el respaldo (EB de Guacara caja 2)', () => {
+  const { runtime } = fixture({ stateContent: state('11689') });
+  guard.snapshotState(runtime, VTID);
+  // Corte o cierre brusco: el VPOS se fabrica un archivo de terminal nuevo, sano en forma pero sin consecutivo.
+  fs.writeFileSync(guard.vtidStatePath(runtime, VTID), state(''), 'latin1');
+  assert.equal(guard.inspectStateFile(runtime, VTID).healthy, true);
+  assert.equal(guard.stateNeedsRestore(guard.inspectStateFile(runtime, VTID), guard.readSnapshot(runtime, VTID)), true);
+
+  const r = guard.guardStateOnStart(runtime, VTID);
+  assert.equal(r.action, 'restored');
+  assert.equal(r.state.seqnumber, '11689');
+});
+
+test('stateNeedsRestore: roto sí; con consecutivo real nunca; terminal nuevo sin respaldo no', () => {
+  const snap = (seq) => ({ exists: true, seqnumber: seq });
+  assert.equal(guard.stateNeedsRestore({ healthy: false }, snap('5')), true);
+  assert.equal(guard.stateNeedsRestore({ healthy: true, seqnumber: '7' }, snap('900')), false);
+  assert.equal(guard.stateNeedsRestore({ healthy: true, seqnumber: '' }, { exists: false }), false);
+  assert.equal(guard.stateNeedsRestore({ healthy: true, seqnumber: '' }, snap('')), false);
+  assert.equal(guard.stateNeedsRestore({ healthy: true, seqnumber: '' }, snap('42')), true);
+});
+
 test('watchState respalda al cambiar el archivo y con poke()', async () => {
   const { runtime } = fixture({ stateContent: state('1') });
   const w = guard.watchState(runtime, VTID, () => {}, 60000);

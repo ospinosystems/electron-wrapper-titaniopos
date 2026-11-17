@@ -119,6 +119,20 @@ const inspectStateFile = (runtime, vtid) => {
 /** Solo vale la pena respaldar un estado con consecutivo real (dígitos). */
 const isSnapshotWorthy = (state) => Boolean(state && state.healthy && /^\d+$/.test(String(state.seqnumber || '')));
 
+/**
+ * ¿Hay que reponer el estado desde el respaldo? Si está roto, sí. Y también si
+ * quedó con `seqnumber` VACÍO mientras el respaldo tiene un consecutivo real:
+ * es el VPOS que, sin su archivo, se fabricó uno de terminal nuevo; para el
+ * Merchant ese terminal ya transaccionó, así que cada cobro responde
+ * `EB - FALTA ARCHIVO DE CONFIGURACION (SEQNUM)` (Guacara caja 2, 16/11/2026).
+ * Un estado con consecutivo real nunca se pisa.
+ */
+const stateNeedsRestore = (state, snapshot) => {
+  if (!state || !state.healthy) return true;
+  const digits = (v) => /^\d+$/.test(String(v || ''));
+  return Boolean(snapshot && snapshot.exists && digits(snapshot.seqnumber) && !digits(state.seqnumber));
+};
+
 const readSnapshot = (runtime, vtid) => {
   const file = snapshotFile(runtime, vtid);
   const out = { path: file, exists: false, content: null, at: null, seqnumber: null };
@@ -215,7 +229,7 @@ const restoreState = (runtime, vtid, log = noop) => {
 const guardStateOnStart = (runtime, vtid, log = noop) => {
   if (!vtid) return { action: 'none', state: null, snapshot: null };
   const state = inspectStateFile(runtime, vtid);
-  if (state.healthy) {
+  if (!stateNeedsRestore(state, readSnapshot(runtime, vtid))) {
     const snap = snapshotState(runtime, vtid, log);
     return { action: snap.saved ? 'snapshot' : 'none', state, snapshot: readSnapshot(runtime, vtid) };
   }
@@ -446,6 +460,7 @@ module.exports = {
   parseState,
   inspectStateFile,
   isSnapshotWorthy,
+  stateNeedsRestore,
   readSnapshot,
   snapshotState,
   restoreState,
