@@ -123,21 +123,21 @@ const seqOf = (value) => (/^\d+$/.test(String(value ?? '').trim()) ? parseInt(St
 const isSnapshotWorthy = (state) => Boolean(state && state.healthy && seqOf(state.seqnumber) !== null);
 
 /**
- * ¿Hay que reponer el estado desde el respaldo? Si está roto, sí. Y también si
- * quedó con `seqnumber` VACÍO mientras el respaldo tiene un consecutivo real:
- * es el VPOS que, sin su archivo, se fabricó uno de terminal nuevo; para el
- * Merchant ese terminal ya transaccionó, así que cada cobro responde
- * `EB - FALTA ARCHIVO DE CONFIGURACION (SEQNUM)` (Guacara caja 2, 16/11/2026).
- * Un estado con consecutivo real nunca se pisa al arrancar: el consecutivo
+ * ¿Hay que reponer el estado desde el respaldo al arrancar? Solo si está ROTO
+ * (vacío, ilegible, sin sección o sin la clave). Un `seqnumber` vacío pero con
+ * el archivo sano NO se repone (1.0.266 lo hacía, d64dae5): desde ese release
+ * los X5 «ya existe en Batch» pasaron de ~0 a 15-117 por día en hasta 37
+ * cajas (20-23/11/2026), con el contador volviendo una y otra vez al mismo
+ * número viejo (Mariara caja 3: 6953/6954 repetidos). Un EB por consecutivo
+ * vacío lo cura planSequenceHeal, que solo corre tras un EB / X5.
+ * Un estado con consecutivo real tampoco se pisa al arrancar: el consecutivo
  * también BAJA en operación normal (prod 15-23/11/2026: 179 bajadas en 33.280
  * cobros aprobados, de 1 a 9 dentro del lote y de cientos entre lotes) y el
  * Merchant las aprueba. Un consecutivo atrasado lo corrige solo la cura
  * (planSequenceHeal), y únicamente cuando el VPOS responde EB / X5.
  */
-const stateNeedsRestore = (state, snapshot) => {
-  if (!state || !state.healthy) return true;
-  return Boolean(snapshot && snapshot.exists && seqOf(snapshot.seqnumber) !== null && seqOf(state.seqnumber) === null);
-};
+// eslint-disable-next-line no-unused-vars
+const stateNeedsRestore = (state, _snapshot) => !state || !state.healthy;
 
 const readSnapshot = (runtime, vtid) => {
   const file = snapshotFile(runtime, vtid);

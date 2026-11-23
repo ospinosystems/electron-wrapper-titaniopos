@@ -120,17 +120,20 @@ test('un estado sano NUNCA se pisa con el respaldo (aunque el respaldo sea más 
   assert.equal(guard.readSnapshot(runtime, VTID).seqnumber, '250');
 });
 
-test('un estado que el VPOS rehízo con seqnumber vacío se repone desde el respaldo (EB de Guacara caja 2)', () => {
+test('un seqnumber vacío con el archivo sano NO se repone al arrancar (X5 desde 1.0.266); lo cura planSequenceHeal', () => {
   const { runtime } = fixture({ stateContent: state('11689') });
   guard.snapshotState(runtime, VTID);
-  // Corte o cierre brusco: el VPOS se fabrica un archivo de terminal nuevo, sano en forma pero sin consecutivo.
   fs.writeFileSync(guard.vtidStatePath(runtime, VTID), state(''), 'latin1');
   assert.equal(guard.inspectStateFile(runtime, VTID).healthy, true);
-  assert.equal(guard.stateNeedsRestore(guard.inspectStateFile(runtime, VTID), guard.readSnapshot(runtime, VTID)), true);
+  assert.equal(guard.stateNeedsRestore(guard.inspectStateFile(runtime, VTID), guard.readSnapshot(runtime, VTID)), false);
 
   const r = guard.guardStateOnStart(runtime, VTID);
-  assert.equal(r.action, 'restored');
-  assert.equal(r.state.seqnumber, '11689');
+  assert.notEqual(r.action, 'restored');
+  assert.equal(guard.inspectStateFile(runtime, VTID).seqnumber, '');
+  // Si el VPOS responde EB / X5, la cura lo sube por encima del mayor conocido.
+  const p = guard.planSequenceHeal(runtime, VTID, null);
+  assert.equal(p.raise, true);
+  assert.equal(p.floor, 11691);
 });
 
 test('stateNeedsRestore: roto sí; con consecutivo real nunca (también si bajó); terminal nuevo sin respaldo no', () => {
@@ -141,7 +144,7 @@ test('stateNeedsRestore: roto sí; con consecutivo real nunca (también si bajó
   assert.equal(guard.stateNeedsRestore({ healthy: true, seqnumber: '901' }, snap('900')), false);
   assert.equal(guard.stateNeedsRestore({ healthy: true, seqnumber: '' }, { exists: false }), false);
   assert.equal(guard.stateNeedsRestore({ healthy: true, seqnumber: '' }, snap('')), false);
-  assert.equal(guard.stateNeedsRestore({ healthy: true, seqnumber: '' }, snap('42')), true);
+  assert.equal(guard.stateNeedsRestore({ healthy: true, seqnumber: '' }, snap('42')), false);
 });
 
 test('watchState respalda al cambiar el archivo y con poke()', async () => {
