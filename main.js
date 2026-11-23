@@ -4007,7 +4007,7 @@ app.whenReady().then(() => {
   // (EB / 99-LA), una vez, antes de dejar al cajero acumulando rechazados.
   ipcMain.handle('mega-pos-repair', async (_e, opts = {}) => {
     try {
-      // opts.minSeqnumber: el último consecutivo que el Merchant ya tiene (ver repairMegaPos).
+      // opts.raiseSequence / opts.lastSequence: cura del consecutivo tras EB / X5 (ver repairMegaPos).
       const r = await repairMegaPos(app, opts && typeof opts === 'object' ? opts : {});
       console.log('🟣 [MEGA_POS] Reparación:', r && r.steps ? r.steps.map((s) => `${s.key}=${s.ok ? 'ok' : 'x'}`).join(' ') : r);
       return r;

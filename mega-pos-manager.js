@@ -755,12 +755,27 @@ const getMegaPosHealth = (app) => {
  */
 const repairMegaPos = (app, opts = {}) =>
   ops.enqueue(async () => {
-    // El último consecutivo que el Merchant ya tiene (la caja lo pide al servidor: respuestas aprobadas del
-    // terminal). Si ni el archivo ni el respaldo llegan, el estado se lleva por encima (EB / X5 «ya existe»).
-    const minSeqnumber = Number.isInteger(opts && opts.minSeqnumber) && opts.minSeqnumber > 0 ? opts.minSeqnumber : null;
+    // Cura del consecutivo (solo la pide el front tras un EB / X5, con la bandera remota encendida):
+    // opts.lastSequence = última aprobada del servidor (null si no hay red o el terminal es compartido).
+    const raiseSequence = Boolean(opts && opts.raiseSequence);
+    const lastSequence = Number.isInteger(opts && opts.lastSequence) && opts.lastSequence > 0 ? opts.lastSequence : null;
     const runtime = getVposRuntimeDir(app);
     const vtid = resolveConfiguredVtid(app);
     const steps = [];
+    let plan = null;
+    if (raiseSequence && vtid) {
+      plan = stateGuard.planSequenceHeal(runtime, vtid, lastSequence);
+      if (!plan.needed) {
+        // Nada local que arreglar: no se baja el VPOS (un pico de X5 del Merchant reiniciaría la flota).
+        log(`[MEGA_POS][reparar] consecutivo al día (${plan.current} >= piso ${plan.floor ?? '-'}): sin reinicio`);
+        return {
+          success: true,
+          changed: false,
+          restarted: false,
+          steps: [{ key: 'sequence', ok: true, detail: `Consecutivo de ${vtid} al día (${plan.current ?? 'vacío'}${plan.floor ? `, piso ${plan.floor}` : ''})` }],
+        };
+      }
+    }
     // Primero se baja el Java: si se restaurara el archivo con el VPOS vivo,
     // podría volver a pisarlo con lo que tiene en memoria.
     stopMegaPosServer();
@@ -800,11 +815,13 @@ const repairMegaPos = (app, opts = {}) =>
               : `Estado de ${vtid} ${before.reason === 'missing' ? 'no existe' : `dañado (${before.reason})`} y no hay respaldo${r.reason && r.reason !== 'no-snapshot' ? ` (${r.reason})` : ''}`,
         });
       }
-      if (minSeqnumber) {
+      const floor = plan && plan.raise ? plan.floor : null;
+      if (floor) {
+        // Después de restaurar: si el archivo sigue por debajo del piso, solo se sube la clave seqnumber.
         const now = stateGuard.inspectStateFile(runtime, vtid);
         const current = stateGuard.seqOf(now.seqnumber);
-        if (now.exists && (current === null || current < minSeqnumber)) {
-          const r = stateGuard.setStateSeqnumber(runtime, vtid, minSeqnumber, log);
+        if (now.exists && (current === null || current < floor)) {
+          const r = stateGuard.setStateSeqnumber(runtime, vtid, floor, log);
           steps.push({ key: 'sequence', ok: r.ok, detail: r.ok ? `Consecutivo de ${vtid}: ${r.previous ?? 'vacío'} -> ${r.seqnumber}` : `No se pudo fijar el consecutivo (${r.error})` });
           if (r.ok) stateGuard.snapshotState(runtime, vtid, log);
         }
@@ -816,7 +833,7 @@ const repairMegaPos = (app, opts = {}) =>
     steps.push({ key: 'restart', ok: Boolean(restart && restart.success), detail: restart && (restart.message || restart.error) });
     const success = steps.every((s) => s.ok);
     log(`[MEGA_POS][reparar] ${success ? 'OK' : 'INCOMPLETA'}: ${steps.map((s) => `${s.key}=${s.ok ? 'ok' : 'x'}`).join(' ')}`);
-    return { success, steps, restarted: Boolean(restart && restart.success) };
+    return { success, changed: true, steps, restarted: Boolean(restart && restart.success) };
   });
 
 module.exports = {

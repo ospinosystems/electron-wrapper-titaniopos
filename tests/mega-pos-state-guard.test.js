@@ -133,10 +133,10 @@ test('un estado que el VPOS rehízo con seqnumber vacío se repone desde el resp
   assert.equal(r.state.seqnumber, '11689');
 });
 
-test('stateNeedsRestore: roto sí; consecutivo igual o mayor nunca; menor que el respaldo sí; terminal nuevo sin respaldo no', () => {
+test('stateNeedsRestore: roto sí; con consecutivo real nunca (también si bajó); terminal nuevo sin respaldo no', () => {
   const snap = (seq) => ({ exists: true, seqnumber: seq });
   assert.equal(guard.stateNeedsRestore({ healthy: false }, snap('5')), true);
-  assert.equal(guard.stateNeedsRestore({ healthy: true, seqnumber: '7' }, snap('900')), true);
+  assert.equal(guard.stateNeedsRestore({ healthy: true, seqnumber: '7' }, snap('900')), false);
   assert.equal(guard.stateNeedsRestore({ healthy: true, seqnumber: '900' }, snap('900')), false);
   assert.equal(guard.stateNeedsRestore({ healthy: true, seqnumber: '901' }, snap('900')), false);
   assert.equal(guard.stateNeedsRestore({ healthy: true, seqnumber: '' }, { exists: false }), false);
@@ -330,41 +330,66 @@ test('integración: un vposconf.ini en ceros queda repuesto Y con la config de l
   assert.equal(guard.inspectConfigFile(conf('vposconf.ini'), guard.CONFIG_REQUIRED_SECTIONS['vposconf.ini']).healthy, true);
 });
 
-// ─── Consecutivo que retrocede (Guacara caja 4, 23/11/2026: 421 -> 0 -> 2) ───
+// ─── Cura del consecutivo (Guacara caja 4, 23/11/2026: 421 -> 0 -> 2) ───
+// En operación normal el consecutivo también baja (prod 15-23/11: 179 bajadas en 33.280 aprobados) y el
+// Merchant aprueba: el arranque y el respaldo no lo tocan; solo la cura, tras un EB / X5, lo sube.
 
-test('un consecutivo que retrocedió (0) no pisa el respaldo bueno y se restaura', () => {
+test('un consecutivo que baja NO se restaura al arrancar y el respaldo lo sigue, pero el mayor queda guardado', () => {
   const { runtime } = fixture({ stateContent: state('421') });
-  assert.equal(guard.snapshotState(runtime, VTID).saved, true);
-
-  // El VPOS se rehízo: seqnumber=0. Son dígitos, pero es menor que el respaldo.
-  fs.writeFileSync(guard.vtidStatePath(runtime, VTID), state('0'), 'latin1');
-  const r = guard.snapshotState(runtime, VTID);
-  assert.equal(r.saved, false);
-  assert.equal(r.reason, 'regressed');
-  assert.equal(guard.readSnapshot(runtime, VTID).seqnumber, '421');
-
-  const s = guard.inspectStateFile(runtime, VTID);
-  assert.equal(guard.stateNeedsRestore(s, guard.readSnapshot(runtime, VTID)), true);
-  const g = guard.guardStateOnStart(runtime, VTID);
-  assert.equal(g.action, 'restored');
-  assert.equal(guard.inspectStateFile(runtime, VTID).seqnumber, '421');
+  guard.snapshotState(runtime, VTID);
+  fs.writeFileSync(guard.vtidStatePath(runtime, VTID), state('4'), 'latin1');
+  assert.equal(guard.guardStateOnStart(runtime, VTID).action === 'restored', false);
+  assert.equal(guard.inspectStateFile(runtime, VTID).seqnumber, '4');
+  guard.snapshotState(runtime, VTID);
+  assert.equal(guard.readSnapshot(runtime, VTID).seqnumber, '4');
+  assert.equal(guard.readHighWater(runtime, VTID), 421);
 });
 
-test('también con un consecutivo chico de terminal nuevo (2) después de 421', () => {
+test('el mayor consecutivo sobrevive aunque el historial ya no tenga el 421', () => {
+  const { runtime } = fixture({ stateContent: state('421') });
+  guard.snapshotState(runtime, VTID);
+  for (const n of ['0', '2', '4', '6', '8', '10', '12']) {
+    fs.writeFileSync(guard.vtidStatePath(runtime, VTID), state(n), 'latin1');
+    guard.snapshotState(runtime, VTID);
+  }
+  assert.equal(guard.readHighWater(runtime, VTID), 421);
+});
+
+test('planSequenceHeal: atrasado respecto al mayor local -> subir a mayor+2', () => {
   const { runtime } = fixture({ stateContent: state('421') });
   guard.snapshotState(runtime, VTID);
   fs.writeFileSync(guard.vtidStatePath(runtime, VTID), state('2'), 'latin1');
-  assert.equal(guard.guardStateOnStart(runtime, VTID).action, 'restored');
-  assert.equal(guard.inspectStateFile(runtime, VTID).seqnumber, '421');
+  const p = guard.planSequenceHeal(runtime, VTID, null);
+  assert.equal(p.needed, true);
+  assert.equal(p.raise, true);
+  assert.equal(p.floor, 423);
 });
 
-test('un consecutivo que avanza se respalda como siempre', () => {
+test('planSequenceHeal: la última del servidor gana si es mayor', () => {
+  const { runtime } = fixture({ stateContent: state('100') });
+  guard.snapshotState(runtime, VTID);
+  const p = guard.planSequenceHeal(runtime, VTID, 500);
+  assert.equal(p.floor, 502);
+  assert.equal(p.raise, true);
+});
+
+test('planSequenceHeal: al día -> nada que hacer (pico de X5 del Merchant: no se reinicia el VPOS)', () => {
   const { runtime } = fixture({ stateContent: state('421') });
   guard.snapshotState(runtime, VTID);
-  fs.writeFileSync(guard.vtidStatePath(runtime, VTID), state('423'), 'latin1');
-  assert.equal(guard.snapshotState(runtime, VTID).saved, true);
-  assert.equal(guard.readSnapshot(runtime, VTID).seqnumber, '423');
-  assert.equal(guard.stateNeedsRestore(guard.inspectStateFile(runtime, VTID), guard.readSnapshot(runtime, VTID)), false);
+  // El archivo es igual a su mayor (lo normal): no se toca aunque el servidor diga algo menor.
+  assert.equal(guard.planSequenceHeal(runtime, VTID, 300).needed, false);
+  assert.equal(guard.planSequenceHeal(runtime, VTID, 421).needed, false);
+  assert.equal(guard.planSequenceHeal(runtime, VTID, null).needed, false);
+  // Avanzó y aún no se respaldó: tampoco.
+  fs.writeFileSync(guard.vtidStatePath(runtime, VTID), state('425'), 'latin1');
+  assert.equal(guard.planSequenceHeal(runtime, VTID, 300).needed, false);
+});
+
+test('planSequenceHeal: archivo roto con respaldo -> restaurar', () => {
+  const { runtime } = fixture({ stateContent: state('421') });
+  guard.snapshotState(runtime, VTID);
+  fs.writeFileSync(guard.vtidStatePath(runtime, VTID), '\0\0\0', 'latin1');
+  assert.equal(guard.planSequenceHeal(runtime, VTID, null).restore, true);
 });
 
 test('setStateSeqnumber lleva el consecutivo por encima conservando el resto del archivo', () => {

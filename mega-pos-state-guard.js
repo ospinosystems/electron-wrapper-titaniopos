@@ -128,20 +128,15 @@ const isSnapshotWorthy = (state) => Boolean(state && state.healthy && seqOf(stat
  * es el VPOS que, sin su archivo, se fabricó uno de terminal nuevo; para el
  * Merchant ese terminal ya transaccionó, así que cada cobro responde
  * `EB - FALTA ARCHIVO DE CONFIGURACION (SEQNUM)` (Guacara caja 2, 16/11/2026).
- *
- * Y si el consecutivo RETROCEDIÓ respecto al respaldo (`0`, `2`… después de
- * 421): también son dígitos, pero el VPOS se rehízo como terminal nuevo y el
- * Merchant ya tiene esos números en el lote. Responde EB o «Número de
- * secuencia ya existe en Batch» (X5) en cada intento (Guacara caja 4,
- * 23/11/2026: de 421 a 0 y luego a 2; X5 en 42 cajas esa semana). Antes un `0`
- * contaba como sano y además se respaldaba encima del bueno.
+ * Un estado con consecutivo real nunca se pisa al arrancar: el consecutivo
+ * también BAJA en operación normal (prod 15-23/11/2026: 179 bajadas en 33.280
+ * cobros aprobados, de 1 a 9 dentro del lote y de cientos entre lotes) y el
+ * Merchant las aprueba. Un consecutivo atrasado lo corrige solo la cura
+ * (planSequenceHeal), y únicamente cuando el VPOS responde EB / X5.
  */
 const stateNeedsRestore = (state, snapshot) => {
   if (!state || !state.healthy) return true;
-  const snap = snapshot && snapshot.exists ? seqOf(snapshot.seqnumber) : null;
-  if (snap === null) return false;
-  const current = seqOf(state.seqnumber);
-  return current === null || current < snap;
+  return Boolean(snapshot && snapshot.exists && seqOf(snapshot.seqnumber) !== null && seqOf(state.seqnumber) === null);
 };
 
 const readSnapshot = (runtime, vtid) => {
@@ -162,6 +157,50 @@ const readSnapshot = (runtime, vtid) => {
   return out;
 };
 
+/**
+ * El mayor consecutivo conocido de este VPOS: `maxSeqnumber` del meta, el respaldo y el historial.
+ * Es de ESTA máquina (no se mezcla con otras cajas que compartan terminal).
+ */
+const readHighWater = (runtime, vtid) => {
+  if (!vtid) return null;
+  let best = null;
+  const take = (v) => { const n = seqOf(v); if (n !== null && (best === null || n > best)) best = n; };
+  try { take(JSON.parse(fs.readFileSync(snapshotMeta(runtime, vtid), 'utf8')).maxSeqnumber); } catch (_) {}
+  const snap = readSnapshot(runtime, vtid);
+  if (snap.exists) take(parseState(snap.content, vtid).seqnumber);
+  try {
+    const hist = snapshotHistoryDir(runtime, vtid);
+    for (const n of fs.readdirSync(hist).filter((x) => x.endsWith('.ini'))) {
+      try { take(parseState(fs.readFileSync(path.join(hist, n), 'latin1'), vtid).seqnumber); } catch (_) {}
+    }
+  } catch (_) {}
+  return best;
+};
+
+/** Margen sobre el piso: el VPOS avanza de a 2 por cobro. */
+const SEQUENCE_MARGIN = 2;
+
+/**
+ * ¿Qué haría la cura del consecutivo (solo tras un EB / X5)? Sin tocar nada:
+ *   known   = el mayor entre la última aprobada del servidor y el mayor consecutivo local
+ *   restore = el archivo está roto o vacío y hay respaldo
+ *   raise   = el consecutivo está POR DEBAJO de `known` (un archivo al día es igual a su mayor: no se toca)
+ *   floor   = known + 2, a donde se sube
+ * Si no hay nada que hacer (needed=false) el problema no es de esta caja (p. ej. un pico de X5 del lado
+ * del Merchant en todas las tiendas): no se reinicia el VPOS.
+ */
+const planSequenceHeal = (runtime, vtid, lastSequence = null) => {
+  const state = inspectStateFile(runtime, vtid);
+  const restore = stateNeedsRestore(state, readSnapshot(runtime, vtid));
+  const local = readHighWater(runtime, vtid);
+  const server = Number.isInteger(lastSequence) && lastSequence > 0 ? lastSequence : null;
+  const known = Math.max(server || 0, local || 0) || null;
+  const floor = known ? known + SEQUENCE_MARGIN : null;
+  const current = seqOf(state.seqnumber);
+  const raise = Boolean(known && state.exists && (current === null || current < known));
+  return { needed: restore || raise, restore, raise, floor, current, local, server };
+};
+
 const writeFileAtomic = (file, content) => {
   const tmp = `${file}.tmp`;
   fs.writeFileSync(tmp, content, 'latin1');
@@ -180,13 +219,9 @@ const snapshotState = (runtime, vtid, log = noop) => {
   try { content = fs.readFileSync(state.path, 'latin1'); } catch (e) { return { saved: false, reason: e.message }; }
   const prev = readSnapshot(runtime, vtid);
   if (prev.exists && prev.content === content) return { saved: false, reason: 'unchanged', seqnumber: state.seqnumber };
-  // Nunca se respalda un consecutivo MENOR que el del respaldo: es el VPOS que se rehízo como terminal nuevo
-  // (ver stateNeedsRestore). El bueno se queda; el arranque o la reparación lo reponen.
-  const prevSeq = prev.exists ? seqOf(prev.seqnumber) : null;
-  if (prevSeq !== null && seqOf(state.seqnumber) < prevSeq) {
-    log(`[MEGA_POS][estado] ${vtid}: seqnumber ${state.seqnumber} es menor que el respaldo (${prevSeq}); no se respalda`);
-    return { saved: false, reason: 'regressed', seqnumber: state.seqnumber, snapshotSeqnumber: prevSeq };
-  }
+  // El mayor consecutivo que este VPOS llegó a tener: si se rehace en 0 y el respaldo se pisa, la cura
+  // todavía sabe hasta dónde llegó (Guacara caja 4, 23/11/2026: 421 -> 0; el 421 se había perdido).
+  const maxSeqnumber = Math.max(readHighWater(runtime, vtid) || 0, seqOf(state.seqnumber) || 0) || null;
   try {
     const dir = path.dirname(snapshotFile(runtime, vtid));
     fs.mkdirSync(dir, { recursive: true });
@@ -201,7 +236,7 @@ const snapshotState = (runtime, vtid, log = noop) => {
       }
     }
     writeFileAtomic(snapshotFile(runtime, vtid), content);
-    writeFileAtomic(snapshotMeta(runtime, vtid), JSON.stringify({ at: new Date().toISOString(), seqnumber: state.seqnumber, size: state.size }));
+    writeFileAtomic(snapshotMeta(runtime, vtid), JSON.stringify({ at: new Date().toISOString(), seqnumber: state.seqnumber, size: state.size, maxSeqnumber }));
     log(`[MEGA_POS][estado] respaldo de ${vtid} guardado (seqnumber=${state.seqnumber})`);
     return { saved: true, seqnumber: state.seqnumber };
   } catch (e) {
@@ -514,6 +549,8 @@ const inspectVoucherDirs = (runtime, baseOverride) => {
 
 module.exports = {
   seqOf,
+  readHighWater,
+  planSequenceHeal,
   setStateSeqnumber,
   vtidStatePath,
   snapshotRoot,
