@@ -753,8 +753,11 @@ const getMegaPosHealth = (app) => {
  * carpeta de resultados + restauración del estado si está dañado + reinicio
  * del servicio. Devuelve qué hizo, paso por paso.
  */
-const repairMegaPos = (app) =>
+const repairMegaPos = (app, opts = {}) =>
   ops.enqueue(async () => {
+    // El último consecutivo que el Merchant ya tiene (la caja lo pide al servidor: respuestas aprobadas del
+    // terminal). Si ni el archivo ni el respaldo llegan, el estado se lleva por encima (EB / X5 «ya existe»).
+    const minSeqnumber = Number.isInteger(opts && opts.minSeqnumber) && opts.minSeqnumber > 0 ? opts.minSeqnumber : null;
     const runtime = getVposRuntimeDir(app);
     const vtid = resolveConfiguredVtid(app);
     const steps = [];
@@ -796,6 +799,15 @@ const repairMegaPos = (app) =>
               ? `Estado de ${vtid} aún no existe (terminal nuevo): lo crea el VPOS al arrancar`
               : `Estado de ${vtid} ${before.reason === 'missing' ? 'no existe' : `dañado (${before.reason})`} y no hay respaldo${r.reason && r.reason !== 'no-snapshot' ? ` (${r.reason})` : ''}`,
         });
+      }
+      if (minSeqnumber) {
+        const now = stateGuard.inspectStateFile(runtime, vtid);
+        const current = stateGuard.seqOf(now.seqnumber);
+        if (now.exists && (current === null || current < minSeqnumber)) {
+          const r = stateGuard.setStateSeqnumber(runtime, vtid, minSeqnumber, log);
+          steps.push({ key: 'sequence', ok: r.ok, detail: r.ok ? `Consecutivo de ${vtid}: ${r.previous ?? 'vacío'} -> ${r.seqnumber}` : `No se pudo fijar el consecutivo (${r.error})` });
+          if (r.ok) stateGuard.snapshotState(runtime, vtid, log);
+        }
       }
     } else {
       steps.push({ key: 'state', ok: false, detail: 'Sin VTID configurado' });

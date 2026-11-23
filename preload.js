@@ -326,7 +326,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   /** Reparación en un paso (carpeta de resultados + estado del terminal + reinicio):
    *  { success, steps: [{ key, ok, detail }], restarted }. */
-  megaPosRepair: () => ipcRenderer.invoke('mega-pos-repair'),
+  megaPosRepair: (opts) => ipcRenderer.invoke('mega-pos-repair', opts || {}),
 
   /** Instala/desinstala la VPOS como admin (UAC): autoarranque de Windows. */
   megaPosInstallVpos: () => ipcRenderer.invoke('mega-pos-install-vpos'),

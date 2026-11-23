@@ -133,10 +133,12 @@ test('un estado que el VPOS rehízo con seqnumber vacío se repone desde el resp
   assert.equal(r.state.seqnumber, '11689');
 });
 
-test('stateNeedsRestore: roto sí; con consecutivo real nunca; terminal nuevo sin respaldo no', () => {
+test('stateNeedsRestore: roto sí; consecutivo igual o mayor nunca; menor que el respaldo sí; terminal nuevo sin respaldo no', () => {
   const snap = (seq) => ({ exists: true, seqnumber: seq });
   assert.equal(guard.stateNeedsRestore({ healthy: false }, snap('5')), true);
-  assert.equal(guard.stateNeedsRestore({ healthy: true, seqnumber: '7' }, snap('900')), false);
+  assert.equal(guard.stateNeedsRestore({ healthy: true, seqnumber: '7' }, snap('900')), true);
+  assert.equal(guard.stateNeedsRestore({ healthy: true, seqnumber: '900' }, snap('900')), false);
+  assert.equal(guard.stateNeedsRestore({ healthy: true, seqnumber: '901' }, snap('900')), false);
   assert.equal(guard.stateNeedsRestore({ healthy: true, seqnumber: '' }, { exists: false }), false);
   assert.equal(guard.stateNeedsRestore({ healthy: true, seqnumber: '' }, snap('')), false);
   assert.equal(guard.stateNeedsRestore({ healthy: true, seqnumber: '' }, snap('42')), true);
@@ -326,4 +328,60 @@ test('integración: un vposconf.ini en ceros queda repuesto Y con la config de l
   assert.match(txt, /vtid=GTGUARA03/);
   assert.match(txt, /id=0003/);
   assert.equal(guard.inspectConfigFile(conf('vposconf.ini'), guard.CONFIG_REQUIRED_SECTIONS['vposconf.ini']).healthy, true);
+});
+
+// ─── Consecutivo que retrocede (Guacara caja 4, 23/11/2026: 421 -> 0 -> 2) ───
+
+test('un consecutivo que retrocedió (0) no pisa el respaldo bueno y se restaura', () => {
+  const { runtime } = fixture({ stateContent: state('421') });
+  assert.equal(guard.snapshotState(runtime, VTID).saved, true);
+
+  // El VPOS se rehízo: seqnumber=0. Son dígitos, pero es menor que el respaldo.
+  fs.writeFileSync(guard.vtidStatePath(runtime, VTID), state('0'), 'latin1');
+  const r = guard.snapshotState(runtime, VTID);
+  assert.equal(r.saved, false);
+  assert.equal(r.reason, 'regressed');
+  assert.equal(guard.readSnapshot(runtime, VTID).seqnumber, '421');
+
+  const s = guard.inspectStateFile(runtime, VTID);
+  assert.equal(guard.stateNeedsRestore(s, guard.readSnapshot(runtime, VTID)), true);
+  const g = guard.guardStateOnStart(runtime, VTID);
+  assert.equal(g.action, 'restored');
+  assert.equal(guard.inspectStateFile(runtime, VTID).seqnumber, '421');
+});
+
+test('también con un consecutivo chico de terminal nuevo (2) después de 421', () => {
+  const { runtime } = fixture({ stateContent: state('421') });
+  guard.snapshotState(runtime, VTID);
+  fs.writeFileSync(guard.vtidStatePath(runtime, VTID), state('2'), 'latin1');
+  assert.equal(guard.guardStateOnStart(runtime, VTID).action, 'restored');
+  assert.equal(guard.inspectStateFile(runtime, VTID).seqnumber, '421');
+});
+
+test('un consecutivo que avanza se respalda como siempre', () => {
+  const { runtime } = fixture({ stateContent: state('421') });
+  guard.snapshotState(runtime, VTID);
+  fs.writeFileSync(guard.vtidStatePath(runtime, VTID), state('423'), 'latin1');
+  assert.equal(guard.snapshotState(runtime, VTID).saved, true);
+  assert.equal(guard.readSnapshot(runtime, VTID).seqnumber, '423');
+  assert.equal(guard.stateNeedsRestore(guard.inspectStateFile(runtime, VTID), guard.readSnapshot(runtime, VTID)), false);
+});
+
+test('setStateSeqnumber lleva el consecutivo por encima conservando el resto del archivo', () => {
+  const { runtime } = fixture({ stateContent: state('2') });
+  const r = guard.setStateSeqnumber(runtime, VTID, 423);
+  assert.equal(r.ok, true);
+  assert.equal(r.previous, '2');
+  const text = fs.readFileSync(guard.vtidStatePath(runtime, VTID), 'latin1');
+  assert.match(text, /seqnumber=423\r\n/);
+  assert.match(text, /\[multiempresa\]\r\n/);
+  assert.match(text, /pendingAdvice=/);
+  assert.equal(guard.inspectStateFile(runtime, VTID).seqnumber, '423');
+});
+
+test('setStateSeqnumber rechaza valores inválidos y archivos sin la sección', () => {
+  const { runtime } = fixture({ stateContent: '[otra]\r\nx=1\r\n' });
+  assert.equal(guard.setStateSeqnumber(runtime, VTID, 0).ok, false);
+  assert.equal(guard.setStateSeqnumber(runtime, VTID, 'abc').ok, false);
+  assert.equal(guard.setStateSeqnumber(runtime, VTID, 10).ok, false);
 });

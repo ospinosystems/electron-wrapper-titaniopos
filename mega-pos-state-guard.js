@@ -116,8 +116,11 @@ const inspectStateFile = (runtime, vtid) => {
   return { ...out, healthy: true, reason: null };
 };
 
+/** El consecutivo como número, o null si no tiene dígitos (vacío en un terminal nuevo). */
+const seqOf = (value) => (/^\d+$/.test(String(value ?? '').trim()) ? parseInt(String(value).trim(), 10) : null);
+
 /** Solo vale la pena respaldar un estado con consecutivo real (dígitos). */
-const isSnapshotWorthy = (state) => Boolean(state && state.healthy && /^\d+$/.test(String(state.seqnumber || '')));
+const isSnapshotWorthy = (state) => Boolean(state && state.healthy && seqOf(state.seqnumber) !== null);
 
 /**
  * ¿Hay que reponer el estado desde el respaldo? Si está roto, sí. Y también si
@@ -125,12 +128,20 @@ const isSnapshotWorthy = (state) => Boolean(state && state.healthy && /^\d+$/.te
  * es el VPOS que, sin su archivo, se fabricó uno de terminal nuevo; para el
  * Merchant ese terminal ya transaccionó, así que cada cobro responde
  * `EB - FALTA ARCHIVO DE CONFIGURACION (SEQNUM)` (Guacara caja 2, 16/11/2026).
- * Un estado con consecutivo real nunca se pisa.
+ *
+ * Y si el consecutivo RETROCEDIÓ respecto al respaldo (`0`, `2`… después de
+ * 421): también son dígitos, pero el VPOS se rehízo como terminal nuevo y el
+ * Merchant ya tiene esos números en el lote. Responde EB o «Número de
+ * secuencia ya existe en Batch» (X5) en cada intento (Guacara caja 4,
+ * 23/11/2026: de 421 a 0 y luego a 2; X5 en 42 cajas esa semana). Antes un `0`
+ * contaba como sano y además se respaldaba encima del bueno.
  */
 const stateNeedsRestore = (state, snapshot) => {
   if (!state || !state.healthy) return true;
-  const digits = (v) => /^\d+$/.test(String(v || ''));
-  return Boolean(snapshot && snapshot.exists && digits(snapshot.seqnumber) && !digits(state.seqnumber));
+  const snap = snapshot && snapshot.exists ? seqOf(snapshot.seqnumber) : null;
+  if (snap === null) return false;
+  const current = seqOf(state.seqnumber);
+  return current === null || current < snap;
 };
 
 const readSnapshot = (runtime, vtid) => {
@@ -169,6 +180,13 @@ const snapshotState = (runtime, vtid, log = noop) => {
   try { content = fs.readFileSync(state.path, 'latin1'); } catch (e) { return { saved: false, reason: e.message }; }
   const prev = readSnapshot(runtime, vtid);
   if (prev.exists && prev.content === content) return { saved: false, reason: 'unchanged', seqnumber: state.seqnumber };
+  // Nunca se respalda un consecutivo MENOR que el del respaldo: es el VPOS que se rehízo como terminal nuevo
+  // (ver stateNeedsRestore). El bueno se queda; el arranque o la reparación lo reponen.
+  const prevSeq = prev.exists ? seqOf(prev.seqnumber) : null;
+  if (prevSeq !== null && seqOf(state.seqnumber) < prevSeq) {
+    log(`[MEGA_POS][estado] ${vtid}: seqnumber ${state.seqnumber} es menor que el respaldo (${prevSeq}); no se respalda`);
+    return { saved: false, reason: 'regressed', seqnumber: state.seqnumber, snapshotSeqnumber: prevSeq };
+  }
   try {
     const dir = path.dirname(snapshotFile(runtime, vtid));
     fs.mkdirSync(dir, { recursive: true });
@@ -183,7 +201,7 @@ const snapshotState = (runtime, vtid, log = noop) => {
       }
     }
     writeFileAtomic(snapshotFile(runtime, vtid), content);
-    fs.writeFileSync(snapshotMeta(runtime, vtid), JSON.stringify({ at: new Date().toISOString(), seqnumber: state.seqnumber, size: state.size }), 'utf8');
+    writeFileAtomic(snapshotMeta(runtime, vtid), JSON.stringify({ at: new Date().toISOString(), seqnumber: state.seqnumber, size: state.size }));
     log(`[MEGA_POS][estado] respaldo de ${vtid} guardado (seqnumber=${state.seqnumber})`);
     return { saved: true, seqnumber: state.seqnumber };
   } catch (e) {
@@ -217,6 +235,46 @@ const restoreState = (runtime, vtid, log = noop) => {
   } catch (e) {
     log(`[MEGA_POS][estado] no se pudo restaurar ${vtid}: ${e.message}`);
     return { restored: false, reason: e.message };
+  }
+};
+
+/**
+ * Lleva `seqnumber` de `conf/<VTID>/<VTID>.ini` a `value` (escritura atómica), conservando el resto del archivo.
+ * Lo usa la reparación cuando ni el archivo ni el respaldo llegan al último consecutivo que el Merchant ya
+ * tiene (el servidor lo sabe por las respuestas aprobadas). Solo con el VPOS detenido.
+ * @returns {{ ok: boolean, previous?: string|null, seqnumber?: number, error?: string }}
+ */
+const setStateSeqnumber = (runtime, vtid, value, log = noop) => {
+  const n = Number(value);
+  if (!vtid || !Number.isInteger(n) || n < 1) return { ok: false, error: 'valor inválido' };
+  const file = vtidStatePath(runtime, vtid);
+  let text = '';
+  try { text = fs.readFileSync(file, 'latin1'); } catch (_) { return { ok: false, error: 'no existe el archivo de estado' }; }
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const lines = text.split(/\r?\n/);
+  let section = null;
+  let previous = null;
+  let done = false;
+  let sectionEnd = -1;
+  for (let i = 0; i < lines.length; i += 1) {
+    const sec = lines[i].match(/^\s*\[([^\]]+)\]\s*$/);
+    if (sec) { section = sec[1].trim(); continue; }
+    if (section && section.toLowerCase() === String(vtid).toLowerCase()) {
+      sectionEnd = i;
+      const kv = lines[i].match(/^(\s*)seqnumber\s*=\s*(.*)$/i);
+      if (kv && !done) { previous = kv[2].trim(); lines[i] = `${kv[1]}seqnumber=${n}`; done = true; }
+    }
+  }
+  if (!done) {
+    if (sectionEnd < 0) return { ok: false, error: `el archivo no tiene la sección [${vtid}]` };
+    lines.splice(sectionEnd + 1, 0, `seqnumber=${n}`);
+  }
+  try {
+    writeFileAtomic(file, lines.join(eol));
+    log(`[MEGA_POS][estado] ${vtid}: seqnumber ${previous ?? '(sin clave)'} -> ${n}`);
+    return { ok: true, previous, seqnumber: n };
+  } catch (e) {
+    return { ok: false, error: e.message };
   }
 };
 
@@ -455,6 +513,8 @@ const inspectVoucherDirs = (runtime, baseOverride) => {
 };
 
 module.exports = {
+  seqOf,
+  setStateSeqnumber,
   vtidStatePath,
   snapshotRoot,
   parseState,

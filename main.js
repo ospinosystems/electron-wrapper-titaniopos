@@ -4005,9 +4005,10 @@ app.whenReady().then(() => {
   // terminal si está dañado + reiniciar el servicio. La dispara el botón de la
   // caja y el cobro cuando el VPOS responde un error de configuración
   // (EB / 99-LA), una vez, antes de dejar al cajero acumulando rechazados.
-  ipcMain.handle('mega-pos-repair', async () => {
+  ipcMain.handle('mega-pos-repair', async (_e, opts = {}) => {
     try {
-      const r = await repairMegaPos(app);
+      // opts.minSeqnumber: el último consecutivo que el Merchant ya tiene (ver repairMegaPos).
+      const r = await repairMegaPos(app, opts && typeof opts === 'object' ? opts : {});
       console.log('🟣 [MEGA_POS] Reparación:', r && r.steps ? r.steps.map((s) => `${s.key}=${s.ok ? 'ok' : 'x'}`).join(' ') : r);
       return r;
     } catch (error) {
