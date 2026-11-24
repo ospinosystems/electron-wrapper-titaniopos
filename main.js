@@ -4022,7 +4022,7 @@ app.whenReady().then(() => {
   // Merchant). No se persiste en el settings: es un ajuste puntual.
   ipcMain.handle('mega-pos-set-seqnum', async (_e, value) => {
     try {
-      const r = setSeqNum(getVposRuntimeDir(app), value);
+      const r = await setSeqNum(getVposRuntimeDir(app), value);
       if (!r.success) return r;
       // Reiniciar para que el VPOS relea el ini con la nueva secuencia.
       const restart = await restartMegaPosServer(app);

@@ -36,10 +36,25 @@ const os = require('os');
 const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
-const { execFileSync } = require('child_process');
+const { execFile } = require('child_process');
 
 const DEFAULT_UPDATE_URL = 'https://updates.titanio-pos.com';
 const KEEP_BUILDS = 3; // cuántas builds descargadas conservar (rollback/switch)
+const EXTRACT_TIMEOUT_MS = 120000;
+
+function execFileAsync(cmd, args, opts = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      cmd,
+      args,
+      { windowsHide: true, maxBuffer: 10 * 1024 * 1024, ...opts },
+      (err, stdout, stderr) => {
+        if (err) return reject(err);
+        resolve({ stdout, stderr });
+      },
+    );
+  });
+}
 
 function viewsRoot() { return path.join(app.getPath('userData'), 'views'); }
 function buildDir(n) { return path.join(viewsRoot(), String(n)); }
@@ -53,7 +68,7 @@ function hasServer(dir) {
     return fs.existsSync(path.join(dir, 'server.js')) || fs.existsSync(path.join(dir, 'index.html'));
   } catch { return false; }
 }
-function rmrf(p) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
+async function rmrf(p) { try { await fs.promises.rm(p, { recursive: true, force: true }); } catch (_) {} }
 
 function readState() {
   try {
@@ -162,7 +177,7 @@ function applyPendingView(log = () => {}) {
 
 /** Conserva las KEEP_BUILDS más nuevas + la activa + la pendiente + la que se
  *  está SIRVIENDO; borra el resto. */
-function pruneOldBuilds(log = () => {}) {
+async function pruneOldBuilds(log = () => {}) {
   const st = readState();
   const protect = new Set([st.active, st.next].filter(Boolean));
   // La build servida en esta sesión se protege POR DIRECTORIO aunque state.json
@@ -175,13 +190,14 @@ function pruneOldBuilds(log = () => {}) {
   const keep = new Set(builds.slice(0, KEEP_BUILDS));
   for (const n of builds) {
     if (keep.has(n) || protect.has(n)) continue;
-    rmrf(buildDir(n));
+    await rmrf(buildDir(n));
     log(`[VIEW] build ${n} eliminada (prune, conservo ${KEEP_BUILDS})`);
   }
   // Staging interrumpido: directorios <n>.tmp huérfanos de una copia a medias.
   try {
-    for (const d of fs.readdirSync(viewsRoot())) {
-      if (d.endsWith('.tmp')) rmrf(path.join(viewsRoot(), d));
+    const entries = await fs.promises.readdir(viewsRoot());
+    for (const d of entries) {
+      if (d.endsWith('.tmp')) await rmrf(path.join(viewsRoot(), d));
     }
   } catch (_) {}
 }
@@ -276,7 +292,7 @@ function downloadToFile(url, destPath, timeoutMs = 180000, onProgress = null, de
       try { req && req.destroy(); } catch (_) {}
       // Cerrar el WriteStream ANTES de borrar: en Windows un archivo abierto
       // no se puede borrar y el temp quedaba acumulándose por cada fallo.
-      file.close(() => { try { fs.unlinkSync(destPath); } catch (_) {} });
+      file.close(() => { fs.promises.unlink(destPath).catch(() => {}); });
       reject(e);
     };
     try {
@@ -308,16 +324,21 @@ function downloadToFile(url, destPath, timeoutMs = 180000, onProgress = null, de
   });
 }
 
-/** Extrae un .zip a targetDir. Win10+/macOS: bsdtar (`tar -xf`). Linux: unzip. */
-function extractZip(zipPath, targetDir) {
-  fs.mkdirSync(targetDir, { recursive: true });
-  try { execFileSync('tar', ['-xf', zipPath, '-C', targetDir], { stdio: 'ignore' }); return; }
-  catch (_) { /* sin bsdtar → fallback por plataforma */ }
+/** Extrae un .zip a targetDir sin bloquear el hilo principal. Win10+/macOS: bsdtar (`tar -xf`). Linux: unzip. */
+async function extractZip(zipPath, targetDir, { execFileFn = execFileAsync, timeoutMs = EXTRACT_TIMEOUT_MS } = {}) {
+  await fs.promises.mkdir(targetDir, { recursive: true });
+  try {
+    await execFileFn('tar', ['-xf', zipPath, '-C', targetDir], { windowsHide: true, timeout: timeoutMs });
+    return;
+  } catch (_) { /* sin bsdtar → fallback por plataforma */ }
   if (process.platform === 'win32') {
-    execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
-      `Expand-Archive -LiteralPath "${zipPath}" -DestinationPath "${targetDir}" -Force`], { stdio: 'ignore' });
+    await execFileFn(
+      'powershell',
+      ['-NoProfile', '-NonInteractive', '-Command', `Expand-Archive -LiteralPath "${zipPath}" -DestinationPath "${targetDir}" -Force`],
+      { windowsHide: true, timeout: timeoutMs },
+    );
   } else {
-    execFileSync('unzip', ['-q', '-o', zipPath, '-d', targetDir], { stdio: 'ignore' });
+    await execFileFn('unzip', ['-q', '-o', zipPath, '-d', targetDir], { windowsHide: true, timeout: timeoutMs });
   }
 }
 
@@ -414,7 +435,7 @@ async function checkAndStageUpdate(updateUrl, log = () => {}, notify = null) {
   }
   if (!meta.url) return { staged: false, reason: 'latest.json sin url' };
 
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tpos-view-'));
+  const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'tpos-view-'));
   const zipPath = path.join(tmp, 'bundle.zip');
   const stage = path.join(tmp, 'stage');
   try {
@@ -422,7 +443,9 @@ async function checkAndStageUpdate(updateUrl, log = () => {}, notify = null) {
     // ANTES de descargar evita la copia parcial en disco lleno.
     const needBytes = 3 * (parseInt(meta.size, 10) || 50 * 1024 * 1024);
     try {
-      const sfs = fs.statfsSync(app.getPath('userData'));
+      const sfs = typeof fs.promises.statfs === 'function'
+        ? await fs.promises.statfs(app.getPath('userData'))
+        : fs.statfsSync(app.getPath('userData'));
       if (sfs.bavail * sfs.bsize < needBytes) {
         throw new Error(`espacio en disco insuficiente (necesita ~${Math.round(needBytes / 1e6)} MB libres)`);
       }
@@ -437,7 +460,7 @@ async function checkAndStageUpdate(updateUrl, log = () => {}, notify = null) {
       emit('progress', { buildNumber: remote, got, total }));
 
     if (meta.size) {
-      const got = fs.statSync(zipPath).size;
+      const got = (await fs.promises.stat(zipPath)).size;
       if (got !== parseInt(meta.size, 10)) throw new Error(`size no coincide (esperado ${meta.size}, got ${got})`);
     }
     if (meta.sha256) {
@@ -446,12 +469,12 @@ async function checkAndStageUpdate(updateUrl, log = () => {}, notify = null) {
       log('[VIEW] sha256 + size OK');
     }
 
-    extractZip(zipPath, stage);
+    await extractZip(zipPath, stage);
     // El zip trae server.js (standalone legacy) o index.html (export estático)
     // en la raíz. Por las dudas, si viniera anidado, lo buscamos un nivel.
     let serverDir = stage;
     if (!hasServer(serverDir)) {
-      const sub = fs.readdirSync(stage).map((n) => path.join(stage, n)).find((p) => hasServer(p));
+      const sub = (await fs.promises.readdir(stage)).map((n) => path.join(stage, n)).find((p) => hasServer(p));
       if (sub) serverDir = sub; else throw new Error('el zip no tiene server.js ni index.html');
     }
 
@@ -460,10 +483,10 @@ async function checkAndStageUpdate(updateUrl, log = () => {}, notify = null) {
 
     // Staging ATÓMICO en dos saltos: primero a views/<n>.tmp (si esta copia
     // desde %TEMP% se corta, el .tmp nunca parece una build válida y el prune
-    // lo limpia), y al final UN renameSync mismo-volumen a views/<n>. El
+    // lo limpia), y al final UN rename mismo-volumen a views/<n>. El
     // view-version.json se escribe como ÚLTIMO paso del .tmp: una copia a
     // medias jamás queda activable.
-    fs.mkdirSync(viewsRoot(), { recursive: true });
+    await fs.promises.mkdir(viewsRoot(), { recursive: true });
     const dest = buildDir(remote);
     const destTmp = dest + '.tmp';
     // Jamás borrar el directorio que Next está sirviendo en vivo (posible si el
@@ -471,16 +494,16 @@ async function checkAndStageUpdate(updateUrl, log = () => {}, notify = null) {
     if (runningServerDir && path.resolve(dest) === path.resolve(runningServerDir)) {
       throw new Error(`views/${remote} es la build en uso; no se pisa en caliente`);
     }
-    rmrf(destTmp);
-    try { fs.renameSync(serverDir, destTmp); }
-    catch (_) { fs.cpSync(serverDir, destTmp, { recursive: true }); }
-    fs.writeFileSync(path.join(destTmp, 'view-version.json'), JSON.stringify({ buildNumber: remote, version: meta.version || String(remote) }));
-    rmrf(dest);
-    fs.renameSync(destTmp, dest);
+    await rmrf(destTmp);
+    try { await fs.promises.rename(serverDir, destTmp); }
+    catch (_) { await fs.promises.cp(serverDir, destTmp, { recursive: true }); }
+    await fs.promises.writeFile(path.join(destTmp, 'view-version.json'), JSON.stringify({ buildNumber: remote, version: meta.version || String(remote) }));
+    await rmrf(dest);
+    await fs.promises.rename(destTmp, dest);
 
     const st = readState();
     writeState({ active: st.active, next: remote, skip: st.skip });
-    pruneOldBuilds(log);
+    await pruneOldBuilds(log);
 
     log(`[VIEW] build ${remote} lista → se aplica en el próximo arranque. instaladas=[${listBuilds().join(',')}]`);
     emit('staged', { buildNumber: remote });
@@ -490,7 +513,7 @@ async function checkAndStageUpdate(updateUrl, log = () => {}, notify = null) {
     emit('error', { message: e && e.message });
     return { staged: false, reason: e && e.message };
   } finally {
-    rmrf(tmp);
+    await rmrf(tmp);
   }
 }
 
@@ -507,4 +530,6 @@ module.exports = {
   readState,
   DEFAULT_UPDATE_URL,
   KEEP_BUILDS,
+  // Solo para tests.
+  _internals: { extractZip, rmrf, execFileAsync, EXTRACT_TIMEOUT_MS },
 };
