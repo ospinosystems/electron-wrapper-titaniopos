@@ -519,10 +519,10 @@ test('setStateSeqnumber rechaza valores inválidos', () => {
   assert.equal(guard.setStateSeqnumber(runtime, '', 10).ok, false);
 });
 
-test('setSeqNum (herramienta soporte) actualiza vposconf.ini + [multiempresa] <VTID>=N + <VTID>.ini_copia', () => {
+test('setSeqNum (herramienta soporte) actualiza vposconf.ini + [multiempresa] <VTID>=N + <VTID>.ini_copia', async () => {
   const { runtime } = fixture({ stateContent: state('14', '') });
   const { setSeqNum } = require('../mega-pos-manager');
-  const r = setSeqNum(runtime, 700);
+  const r = await setSeqNum(runtime, 700);
   assert.equal(r.success, true);
   assert.equal(r.next, 700);
   assert.equal(r.previous, '14');
@@ -547,11 +547,40 @@ test('stopMegaPosServer mata VPOS externo y espera a que suelte :8085 (mock, sin
       if (killedExternal > 0 && pingCalls >= 3) alive = false;
       return alive;
     },
-    killExternal: () => { killedExternal += 1; },
+    killExternal: async () => { killedExternal += 1; },
     maxAttempts: 5,
     intervalMs: 10,
   });
   assert.equal(killedExternal, 1);
   assert.equal(res.stopped, true);
   assert.ok(pingCalls >= 3);
+});
+
+test('killExternalVpos y killAllJava usan execFile asíncrono con windowsHide sin bloquear el event loop', async () => {
+  const { _internals: { killExternalVpos, killAllJava } } = require('../mega-pos-manager');
+  if (process.platform !== 'win32') return;
+  const calls = [];
+  let timerFiredDuringExec = false;
+  const fakeExec = (cmd, args, opts) =>
+    new Promise((resolve) => {
+      calls.push({ cmd, args, opts });
+      setTimeout(() => resolve({ stdout: 'killed 1234', stderr: '' }), 25);
+    });
+
+  const p = killExternalVpos(fakeExec);
+  setTimeout(() => { timerFiredDuringExec = true; }, 5);
+  await p;
+  assert.equal(timerFiredDuringExec, true, 'el event loop debe seguir respondiendo durante killExternalVpos');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].cmd, 'powershell');
+  assert.equal(calls[0].opts.windowsHide, true);
+
+  calls.length = 0;
+  await killAllJava(fakeExec);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map((c) => [c.cmd, c.args]), [
+    ['taskkill', ['/F', '/IM', 'javaw.exe']],
+    ['taskkill', ['/F', '/IM', 'java.exe']],
+  ]);
+  assert.ok(calls.every((c) => c.opts.windowsHide === true));
 });

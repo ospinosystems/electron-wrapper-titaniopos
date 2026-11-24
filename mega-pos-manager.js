@@ -14,11 +14,24 @@
  * Toda la operación es desde Electron: no hay .bat ni instalación manual.
  */
 
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
+
+const execFileAsync = (cmd, args, opts = {}) =>
+  new Promise((resolve, reject) => {
+    execFile(
+      cmd,
+      args,
+      { windowsHide: true, maxBuffer: 4 * 1024 * 1024, ...opts },
+      (err, stdout, stderr) => {
+        if (err) return reject(err);
+        resolve({ stdout: String(stdout || ''), stderr: String(stderr || '') });
+      },
+    );
+  });
 
 const { readSettings, normalizeMegaPos, resolveMegaPosChannels } = require('./titaniopos-settings-file');
 const stateGuard = require('./mega-pos-state-guard');
@@ -360,7 +373,7 @@ const applyConfigToIni = (runtimeDir, cfg) => {
  * @returns {{success: boolean, previous?: string|null, next?: number, error?: string}}
  */
 const MAX_SEQNUM = 99999999; // [SeqNum] limite (manual MAIO-VPOSJ)
-const setSeqNum = (runtimeDir, value, vtidOverride = null) => {
+const setSeqNum = async (runtimeDir, value, vtidOverride = null) => {
   const n = Number(value);
   if (!Number.isInteger(n) || n < 1 || n > MAX_SEQNUM) {
     return { success: false, error: `El número de secuencia debe ser un entero entre 1 y ${MAX_SEQNUM}.` };
@@ -396,7 +409,8 @@ const setSeqNum = (runtimeDir, value, vtidOverride = null) => {
     // En VPOS 3.16.0 las transacciones con tarjeta leen `[multiempresa] <VTID>=`
     // en `conf/<VTID>/<VTID>.ini` (y validan MD5 contra `<VTID>.ini_copia`), no
     // `[SeqNum] seqnum` de vposconf.ini. Si hay VTID, actualizamos ambos archivos
-    // del terminal deteniendo primero el proceso propio si está activo.
+    // del terminal deteniendo primero el proceso propio si está activo (async,
+    // sin bloquear el hilo principal de Electron).
     const vtid = String(vtidOverride || iniVtid || '').trim();
     let statePrevious = null;
     if (vtid) {
@@ -410,8 +424,7 @@ const setSeqNum = (runtimeDir, value, vtidOverride = null) => {
         isRunning = false;
         try {
           if (process.platform === 'win32') {
-            const { execFileSync } = require('child_process');
-            execFileSync('taskkill', ['/pid', String(pid), '/f', '/t'], { stdio: 'ignore', windowsHide: true, timeout: 5000 });
+            await execFileAsync('taskkill', ['/pid', String(pid), '/f', '/t'], { windowsHide: true, timeout: 5000 });
           } else {
             process.kill(pid, 'SIGTERM');
           }
@@ -548,27 +561,26 @@ const pingVpos = () =>
  * máquina: antes `taskkill /IM java.exe` se llevaba por delante cualquier otra
  * app Java instalada en la caja.
  */
-const killExternalVpos = () => {
+const killExternalVpos = async (execFn = execFileAsync) => {
   if (process.platform !== 'win32') return;
   try {
-    const { execFileSync } = require('child_process');
     const ps = [
       "Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^javaw?\\.exe$' -and $_.CommandLine -match 'VposWebService|vposrestservice|vpos-rest' }",
       '| ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; "killed " + $_.ProcessId }',
     ].join(' ');
-    const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, timeout: 15000 }).toString().trim();
+    const { stdout } = await execFn('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true, timeout: 15000 });
+    const out = String(stdout || '').trim();
     log('[MEGA_POS] Java del VPOS terminados:', out || '(ninguno encontrado)');
   } catch (e) {
     logErr('[MEGA_POS] No se pudo listar/terminar el VPOS externo:', e.message);
   }
 };
 
-const killAllJava = () => {
+const killAllJava = async (execFn = execFileAsync) => {
   if (process.platform !== 'win32') return;
   try {
-    const { execSync } = require('child_process');
-    try { execSync('taskkill /F /IM javaw.exe', { stdio: 'ignore' }); } catch (_) {}
-    try { execSync('taskkill /F /IM java.exe', { stdio: 'ignore' }); } catch (_) {}
+    try { await execFn('taskkill', ['/F', '/IM', 'javaw.exe'], { windowsHide: true, timeout: 10000 }); } catch (_) {}
+    try { await execFn('taskkill', ['/F', '/IM', 'java.exe'], { windowsHide: true, timeout: 10000 }); } catch (_) {}
   } catch (_) { /* noop */ }
 };
 
@@ -583,7 +595,7 @@ const startMegaPosServerUnlocked = async (app) => {
   // (Antes lo reusábamos a ciegas, lo que provocaba "FALTA VTID".)
   if (await pingVpos()) {
     log('[MEGA_POS] VPOS externo detectado en :8085; se termina para arrancar el de la app.');
-    killExternalVpos();
+    await killExternalVpos();
     // Esperar a que libere el puerto.
     for (let i = 0; i < 10 && (await pingVpos()); i++) {
       await new Promise((r) => setTimeout(r, 400));
@@ -593,7 +605,7 @@ const startMegaPosServerUnlocked = async (app) => {
     // único camino conocido para evitar el "FALTA VTID" de una instancia ajena.
     if (await pingVpos()) {
       logErr('[MEGA_POS] El VPOS externo no soltó :8085; se matan todos los java.exe/javaw.exe.');
-      killAllJava();
+      await killAllJava();
       for (let i = 0; i < 10 && (await pingVpos()); i++) {
         await new Promise((r) => setTimeout(r, 400));
       }
@@ -752,7 +764,7 @@ const stopMegaPosServer = async (opts = {}) => {
   try {
     if (await ping()) {
       log('[MEGA_POS] VPOS sigue activo en :8085 tras detener; terminando Java del VPOS...');
-      killExt();
+      await killExt();
       const down = await waitForVposDown({ ping, maxAttempts, intervalMs });
       if (!down) logErr('[MEGA_POS] VPOS no soltó :8085 dentro del tiempo de espera.');
       return { stopped: down };
@@ -936,5 +948,5 @@ module.exports = {
   getMegaPosHealth,
   repairMegaPos,
   // Solo para tests.
-  _internals: { ensureRuntimeCopy, markerMatches, listVposStateDirs, backupVposState, restoreVposState, createSerializer, applyConfigToIni, waitForVposDown },
+  _internals: { ensureRuntimeCopy, markerMatches, listVposStateDirs, backupVposState, restoreVposState, createSerializer, applyConfigToIni, waitForVposDown, killExternalVpos, killAllJava },
 };
