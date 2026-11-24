@@ -3,46 +3,79 @@
 // carpeta de resultados: respaldo propio, restauración al arrancar, reparación.
 const { test, after } = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
 const guard = require('../mega-pos-state-guard');
 
+const md5 = (buf) => crypto.createHash('md5').update(buf).digest('hex');
+
 const roots = [];
 after(() => { for (const r of roots) fs.rmSync(r, { recursive: true, force: true }); });
 
 const VTID = 'GTGUARA07';
-const state = (seq) => `[vigenciaVersion]\r\nfecha=23/10/2026 10:07\r\n\r\n[multiempresa]\r\n${VTID}=4\r\n\r\n[${VTID}]\r\ncodigo=0\r\nseqnumber=${seq}\r\nseqnumberoriginal=\r\npendingAdvice=\r\n`;
+// Formato real de VPOS 3.16.0: el consecutivo vive en [multiempresa] <VTID>=N;
+// [<VTID>] seqnumber= queda vacío en operación normal (marca de reverso pendiente).
+const state = (seq, pendingSeq = '') =>
+  `[vigenciaVersion]\r\nfecha=23/10/2026 10:07\r\n\r\n[multiempresa]\r\n${VTID}=${seq}\r\nnombreEmpresa=\r\nlocalidad=\r\nrif=\r\nMarcaCargaLLaves=0\r\n\r\n[${VTID}]\r\ncodigo=0\r\nseqnumber=${pendingSeq}\r\nseqnumberoriginal=\r\npendingAdvice=\r\npendingTrxExterna=\r\n`;
 
 const fixture = ({ stateContent } = {}) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vpos-guard-'));
   roots.push(root);
   const runtime = path.join(root, 'userData', 'vpos-rest');
   fs.mkdirSync(path.join(runtime, 'conf', VTID), { recursive: true });
-  fs.writeFileSync(path.join(runtime, 'conf', 'vposconf.ini'), `[path]\r\npath=${path.join(root, 'voucher')}\\\r\n`);
+  fs.writeFileSync(path.join(runtime, 'conf', 'vposconf.ini'), `[path]\r\npath=${path.join(root, 'voucher')}\\\r\n[SeqNum]\r\nseqnum=1\r\n[vtid]\r\nvtid=${VTID}\r\nid=0007\r\n`);
   if (stateContent !== undefined) fs.writeFileSync(guard.vtidStatePath(runtime, VTID), stateContent, 'latin1');
   return { root, runtime };
 };
 
-test('inspectStateFile: sano, vacío, truncado y ausente', () => {
-  const { runtime } = fixture({ stateContent: state('42') });
+test('inspectStateFile: lee [multiempresa] <VTID>=N con [<VTID>] seqnumber vacío y detecta rotos', () => {
+  const { runtime } = fixture({ stateContent: state('42', '') });
   let s = guard.inspectStateFile(runtime, VTID);
   assert.equal(s.healthy, true);
   assert.equal(s.seqnumber, '42');
+  assert.equal(s.pendingSeqnumber, '');
+
+  // Aunque [<VTID>] seqnumber tenga un valor viejo, el consecutivo real es [multiempresa] <VTID>=.
+  fs.writeFileSync(guard.vtidStatePath(runtime, VTID), state('88', '12'), 'latin1');
+  s = guard.inspectStateFile(runtime, VTID);
+  assert.equal(s.healthy, true);
+  assert.equal(s.seqnumber, '88');
 
   fs.writeFileSync(guard.vtidStatePath(runtime, VTID), '');
   s = guard.inspectStateFile(runtime, VTID);
   assert.equal(s.healthy, false);
   assert.equal(s.reason, 'empty');
 
+  fs.writeFileSync(guard.vtidStatePath(runtime, VTID), Buffer.alloc(64));
+  s = guard.inspectStateFile(runtime, VTID);
+  assert.equal(s.healthy, false);
+  assert.equal(s.reason, 'nulls');
+
   fs.writeFileSync(guard.vtidStatePath(runtime, VTID), '[vigenciaVersion]\r\nfecha=x\r\n');
+  s = guard.inspectStateFile(runtime, VTID);
+  assert.equal(s.reason, 'no-multiempresa');
+
+  fs.writeFileSync(guard.vtidStatePath(runtime, VTID), `[multiempresa]\r\nnombreEmpresa=\r\n[${VTID}]\r\ncodigo=0\r\n`);
+  s = guard.inspectStateFile(runtime, VTID);
+  assert.equal(s.reason, 'no-counter');
+
+  fs.writeFileSync(guard.vtidStatePath(runtime, VTID), `[multiempresa]\r\n${VTID}=5\r\n`);
   s = guard.inspectStateFile(runtime, VTID);
   assert.equal(s.reason, 'no-section');
 
-  fs.writeFileSync(guard.vtidStatePath(runtime, VTID), `[${VTID}]\r\ncodigo=0\r\n`);
+  // Contador en 0 o vacío provoca EB en VposUniversal.jar ("obtenerSecuencia: secuencia en cero").
+  fs.writeFileSync(guard.vtidStatePath(runtime, VTID), state('0'), 'latin1');
   s = guard.inspectStateFile(runtime, VTID);
-  assert.equal(s.reason, 'no-seqnumber');
+  assert.equal(s.healthy, false);
+  assert.equal(s.reason, 'zero-seqnum');
+
+  fs.writeFileSync(guard.vtidStatePath(runtime, VTID), state(''), 'latin1');
+  s = guard.inspectStateFile(runtime, VTID);
+  assert.equal(s.healthy, false);
+  assert.equal(s.reason, 'empty-seqnum');
 
   fs.rmSync(guard.vtidStatePath(runtime, VTID));
   s = guard.inspectStateFile(runtime, VTID);
@@ -50,14 +83,18 @@ test('inspectStateFile: sano, vacío, truncado y ausente', () => {
   assert.equal(s.reason, 'missing');
 });
 
-test('un terminal nuevo (seqnumber vacío) es sano pero no se respalda', () => {
-  const { runtime } = fixture({ stateContent: state('') });
-  const s = guard.inspectStateFile(runtime, VTID);
-  assert.equal(s.healthy, true);
+test('un contador vacío o en 0 no es respaldable; con [multiempresa] <VTID>=N (>0) sí se respalda aunque seqnumber esté vacío', () => {
+  const { runtime } = fixture({ stateContent: state('0') });
+  let s = guard.inspectStateFile(runtime, VTID);
   assert.equal(guard.isSnapshotWorthy(s), false);
-  const r = guard.snapshotState(runtime, VTID);
-  assert.equal(r.saved, false);
+  assert.equal(guard.snapshotState(runtime, VTID).saved, false);
   assert.equal(guard.readSnapshot(runtime, VTID).exists, false);
+
+  fs.writeFileSync(guard.vtidStatePath(runtime, VTID), state('15', ''), 'latin1');
+  s = guard.inspectStateFile(runtime, VTID);
+  assert.equal(guard.isSnapshotWorthy(s), true);
+  assert.equal(guard.snapshotState(runtime, VTID).saved, true);
+  assert.equal(guard.readSnapshot(runtime, VTID).seqnumber, '15');
 });
 
 test('snapshotState guarda fuera del runtime, solo si cambió, con historial acotado', () => {
@@ -80,26 +117,32 @@ test('snapshotState guarda fuera del runtime, solo si cambió, con historial aco
   assert.equal(hist.length, 5);
 });
 
-test('guardStateOnStart restaura el respaldo cuando el archivo quedó en 0 bytes', () => {
+test('guardStateOnStart restaura el respaldo cuando el archivo quedó en 0 bytes y sincroniza _copia (MD5)', () => {
   const { runtime } = fixture({ stateContent: state('77') });
   assert.equal(guard.guardStateOnStart(runtime, VTID).action, 'snapshot');
-  // Corte de luz a mitad de escritura: el VPOS deja el archivo vacío.
+  // Corte de luz a mitad de escritura: el VPOS deja el archivo vacío y _copia viejo.
   fs.writeFileSync(guard.vtidStatePath(runtime, VTID), '');
+  fs.writeFileSync(guard.vtidStateCopyPath(runtime, VTID), state('1'), 'latin1');
   const r = guard.guardStateOnStart(runtime, VTID);
   assert.equal(r.action, 'restored');
   assert.equal(r.state.healthy, true);
   assert.equal(r.state.seqnumber, '77');
+  const iniBuf = fs.readFileSync(guard.vtidStatePath(runtime, VTID));
+  const copyBuf = fs.readFileSync(guard.vtidStateCopyPath(runtime, VTID));
+  assert.deepEqual(iniBuf, copyBuf, '<VTID>.ini_copia debe ser byte-a-byte idéntico');
+  assert.equal(md5(iniBuf), md5(copyBuf), 'MD5 de <VTID>.ini y <VTID>.ini_copia deben coincidir');
   const damaged = fs.readdirSync(path.join(runtime, 'conf', VTID)).filter((n) => n.includes('.damaged-'));
   assert.equal(damaged.length, 1, 'el archivo dañado se conserva al lado');
 });
 
-test('guardStateOnStart restaura también cuando la carpeta del terminal desapareció', () => {
+test('guardStateOnStart restaura también cuando la carpeta del terminal desapareció y crea _copia idéntico', () => {
   const { runtime } = fixture({ stateContent: state('5') });
   guard.snapshotState(runtime, VTID);
   fs.rmSync(path.join(runtime, 'conf', VTID), { recursive: true, force: true });
   const r = guard.guardStateOnStart(runtime, VTID);
   assert.equal(r.action, 'restored');
   assert.equal(fs.readFileSync(guard.vtidStatePath(runtime, VTID), 'latin1'), state('5'));
+  assert.equal(fs.readFileSync(guard.vtidStateCopyPath(runtime, VTID), 'latin1'), state('5'));
 });
 
 test('sin respaldo: un archivo dañado se deja al VPOS y uno ausente es un terminal nuevo', () => {
@@ -120,20 +163,25 @@ test('un estado sano NUNCA se pisa con el respaldo (aunque el respaldo sea más 
   assert.equal(guard.readSnapshot(runtime, VTID).seqnumber, '250');
 });
 
-test('un seqnumber vacío con el archivo sano NO se repone al arrancar (X5 desde 1.0.266); lo cura planSequenceHeal', () => {
+test('un contador vacío en [multiempresa] (EB) se restaura desde el respaldo y sincroniza _copia; planSequenceHeal también lo sube', () => {
   const { runtime } = fixture({ stateContent: state('11689') });
   guard.snapshotState(runtime, VTID);
   fs.writeFileSync(guard.vtidStatePath(runtime, VTID), state(''), 'latin1');
-  assert.equal(guard.inspectStateFile(runtime, VTID).healthy, true);
-  assert.equal(guard.stateNeedsRestore(guard.inspectStateFile(runtime, VTID), guard.readSnapshot(runtime, VTID)), false);
-
-  const r = guard.guardStateOnStart(runtime, VTID);
-  assert.notEqual(r.action, 'restored');
-  assert.equal(guard.inspectStateFile(runtime, VTID).seqnumber, '');
-  // Si el VPOS responde EB / X5, la cura lo sube por encima del mayor conocido.
+  assert.equal(guard.inspectStateFile(runtime, VTID).healthy, false);
+  assert.equal(guard.inspectStateFile(runtime, VTID).reason, 'empty-seqnum');
+  // Antes de arrancar, planSequenceHeal también detecta que debe restaurar y subir por encima de 11689.
   const p = guard.planSequenceHeal(runtime, VTID, null);
+  assert.equal(p.restore, true);
   assert.equal(p.raise, true);
   assert.equal(p.floor, 11691);
+
+  const r = guard.guardStateOnStart(runtime, VTID);
+  assert.equal(r.action, 'restored');
+  assert.equal(guard.inspectStateFile(runtime, VTID).seqnumber, '11689');
+  assert.equal(
+    md5(fs.readFileSync(guard.vtidStatePath(runtime, VTID))),
+    md5(fs.readFileSync(guard.vtidStateCopyPath(runtime, VTID))),
+  );
 });
 
 test('stateNeedsRestore: roto sí; con consecutivo real nunca (también si bajó); terminal nuevo sin respaldo no', () => {
@@ -376,16 +424,39 @@ test('planSequenceHeal: la última del servidor gana si es mayor', () => {
   assert.equal(p.raise, true);
 });
 
-test('planSequenceHeal: al día -> nada que hacer (pico de X5 del Merchant: no se reinicia el VPOS)', () => {
+test('planSequenceHeal: current === known debe subir (X5 con consecutivo empatado en el lote)', () => {
   const { runtime } = fixture({ stateContent: state('421') });
   guard.snapshotState(runtime, VTID);
-  // El archivo es igual a su mayor (lo normal): no se toca aunque el servidor diga algo menor.
+  const pServer = guard.planSequenceHeal(runtime, VTID, 421);
+  assert.equal(pServer.needed, true);
+  assert.equal(pServer.raise, true);
+  assert.ok(pServer.floor > 421);
+  assert.equal(pServer.floor, 423);
+
+  const pLocalOnly = guard.planSequenceHeal(runtime, VTID, null);
+  assert.equal(pLocalOnly.needed, true);
+  assert.equal(pLocalOnly.raise, true);
+  assert.equal(pLocalOnly.floor, 423);
+});
+
+test('planSequenceHeal: estrictamente por encima de known (current > known) -> nada que hacer', () => {
+  const { runtime } = fixture({ stateContent: state('421') });
+  guard.snapshotState(runtime, VTID);
+  // El archivo avanzó por encima tanto del respaldo local (421) como del servidor (300).
+  fs.writeFileSync(guard.vtidStatePath(runtime, VTID), state('425'), 'latin1');
   assert.equal(guard.planSequenceHeal(runtime, VTID, 300).needed, false);
   assert.equal(guard.planSequenceHeal(runtime, VTID, 421).needed, false);
   assert.equal(guard.planSequenceHeal(runtime, VTID, null).needed, false);
-  // Avanzó y aún no se respaldó: tampoco.
-  fs.writeFileSync(guard.vtidStatePath(runtime, VTID), state('425'), 'latin1');
-  assert.equal(guard.planSequenceHeal(runtime, VTID, 300).needed, false);
+});
+
+test('planSequenceHeal: archivo ausente (state.exists === false) pero con lastSequence del servidor -> sube', () => {
+  const { runtime } = fixture(); // no crea <VTID>.ini ni hay snapshot
+  const p = guard.planSequenceHeal(runtime, VTID, 510);
+  assert.equal(p.needed, true);
+  assert.equal(p.restore, true);
+  assert.equal(p.raise, true);
+  assert.equal(p.current, null);
+  assert.equal(p.floor, 512);
 });
 
 test('planSequenceHeal: archivo roto con respaldo -> restaurar', () => {
@@ -395,21 +466,92 @@ test('planSequenceHeal: archivo roto con respaldo -> restaurar', () => {
   assert.equal(guard.planSequenceHeal(runtime, VTID, null).restore, true);
 });
 
-test('setStateSeqnumber lleva el consecutivo por encima conservando el resto del archivo', () => {
-  const { runtime } = fixture({ stateContent: state('2') });
+test('setStateSeqnumber actualiza [multiempresa] <VTID>=N sin tocar [<VTID>] seqnumber= y sincroniza _copia (MD5)', () => {
+  const { runtime } = fixture({ stateContent: state('2', '') });
+  // _copia viejo con otro valor para comprobar que queda sobrescrito idéntico.
+  fs.writeFileSync(guard.vtidStateCopyPath(runtime, VTID), state('2', ''), 'latin1');
   const r = guard.setStateSeqnumber(runtime, VTID, 423);
   assert.equal(r.ok, true);
   assert.equal(r.previous, '2');
-  const text = fs.readFileSync(guard.vtidStatePath(runtime, VTID), 'latin1');
-  assert.match(text, /seqnumber=423\r\n/);
-  assert.match(text, /\[multiempresa\]\r\n/);
+  const iniBuf = fs.readFileSync(guard.vtidStatePath(runtime, VTID));
+  const copyBuf = fs.readFileSync(guard.vtidStateCopyPath(runtime, VTID));
+  assert.deepEqual(iniBuf, copyBuf, '<VTID>.ini y <VTID>.ini_copia deben ser byte-a-byte idénticos');
+  assert.equal(md5(iniBuf), md5(copyBuf));
+  const text = iniBuf.toString('latin1');
+  assert.match(text, new RegExp(`\\[multiempresa\\]\\r\\n${VTID}=423\\r\\n`));
+  // [<VTID>] seqnumber= (marca de reverso pendiente) NO se altera.
+  assert.match(text, /seqnumber=\r\n/);
   assert.match(text, /pendingAdvice=/);
   assert.equal(guard.inspectStateFile(runtime, VTID).seqnumber, '423');
 });
 
-test('setStateSeqnumber rechaza valores inválidos y archivos sin la sección', () => {
-  const { runtime } = fixture({ stateContent: '[otra]\r\nx=1\r\n' });
+test('setStateSeqnumber crea <VTID>.ini + <VTID>.ini_copia válidos cuando el archivo faltaba o estaba corrupto', () => {
+  const { runtime } = fixture(); // archivo ausente
+  const r1 = guard.setStateSeqnumber(runtime, VTID, 512);
+  assert.equal(r1.ok, true);
+  assert.equal(r1.created, true);
+  assert.equal(guard.inspectStateFile(runtime, VTID).healthy, true);
+  assert.equal(guard.inspectStateFile(runtime, VTID).seqnumber, '512');
+  assert.equal(
+    md5(fs.readFileSync(guard.vtidStatePath(runtime, VTID))),
+    md5(fs.readFileSync(guard.vtidStateCopyPath(runtime, VTID))),
+  );
+
+  // Archivo sin secciones / corrupto: se respalda como .damaged y se crea limpio.
+  fs.writeFileSync(guard.vtidStatePath(runtime, VTID), '[otra]\r\nx=1\r\n', 'latin1');
+  const r2 = guard.setStateSeqnumber(runtime, VTID, 600);
+  assert.equal(r2.ok, true);
+  assert.equal(r2.created, true);
+  assert.equal(guard.inspectStateFile(runtime, VTID).seqnumber, '600');
+  assert.equal(
+    md5(fs.readFileSync(guard.vtidStatePath(runtime, VTID))),
+    md5(fs.readFileSync(guard.vtidStateCopyPath(runtime, VTID))),
+  );
+  const damaged = fs.readdirSync(path.join(runtime, 'conf', VTID)).filter((n) => n.includes('.damaged-'));
+  assert.equal(damaged.length, 1);
+});
+
+test('setStateSeqnumber rechaza valores inválidos', () => {
+  const { runtime } = fixture({ stateContent: state('10') });
   assert.equal(guard.setStateSeqnumber(runtime, VTID, 0).ok, false);
+  assert.equal(guard.setStateSeqnumber(runtime, VTID, -5).ok, false);
   assert.equal(guard.setStateSeqnumber(runtime, VTID, 'abc').ok, false);
-  assert.equal(guard.setStateSeqnumber(runtime, VTID, 10).ok, false);
+  assert.equal(guard.setStateSeqnumber(runtime, '', 10).ok, false);
+});
+
+test('setSeqNum (herramienta soporte) actualiza vposconf.ini + [multiempresa] <VTID>=N + <VTID>.ini_copia', () => {
+  const { runtime } = fixture({ stateContent: state('14', '') });
+  const { setSeqNum } = require('../mega-pos-manager');
+  const r = setSeqNum(runtime, 700);
+  assert.equal(r.success, true);
+  assert.equal(r.next, 700);
+  assert.equal(r.previous, '14');
+  assert.equal(r.vtid, VTID);
+  assert.match(fs.readFileSync(path.join(runtime, 'conf', 'vposconf.ini'), 'utf8'), /seqnum=700/);
+  assert.equal(guard.inspectStateFile(runtime, VTID).seqnumber, '700');
+  assert.equal(
+    md5(fs.readFileSync(guard.vtidStatePath(runtime, VTID))),
+    md5(fs.readFileSync(guard.vtidStateCopyPath(runtime, VTID))),
+  );
+  assert.equal(guard.readSnapshot(runtime, VTID).seqnumber, '700');
+});
+
+test('stopMegaPosServer mata VPOS externo y espera a que suelte :8085 (mock, sin tocar puertos reales)', async () => {
+  const { stopMegaPosServer } = require('../mega-pos-manager');
+  let alive = true;
+  let pingCalls = 0;
+  let killedExternal = 0;
+  const res = await stopMegaPosServer({
+    ping: async () => {
+      pingCalls += 1;
+      if (killedExternal > 0 && pingCalls >= 3) alive = false;
+      return alive;
+    },
+    killExternal: () => { killedExternal += 1; },
+    maxAttempts: 5,
+    intervalMs: 10,
+  });
+  assert.equal(killedExternal, 1);
+  assert.equal(res.stopped, true);
+  assert.ok(pingCalls >= 3);
 });

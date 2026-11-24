@@ -360,7 +360,7 @@ const applyConfigToIni = (runtimeDir, cfg) => {
  * @returns {{success: boolean, previous?: string|null, next?: number, error?: string}}
  */
 const MAX_SEQNUM = 99999999; // [SeqNum] limite (manual MAIO-VPOSJ)
-const setSeqNum = (runtimeDir, value) => {
+const setSeqNum = (runtimeDir, value, vtidOverride = null) => {
   const n = Number(value);
   if (!Number.isInteger(n) || n < 1 || n > MAX_SEQNUM) {
     return { success: false, error: `El número de secuencia debe ser un entero entre 1 y ${MAX_SEQNUM}.` };
@@ -374,12 +374,16 @@ const setSeqNum = (runtimeDir, value) => {
     let section = null;
     let found = false;
     let previous = null;
+    let iniVtid = '';
     const out = lines.map((line) => {
       const sec = line.match(/^\s*\[([^\]]+)\]\s*$/);
       if (sec) { section = sec[1].trim().toLowerCase(); return line; }
       if (section === 'seqnum') {
         const kv = line.match(/^(\s*)seqnum\s*=\s*(.*)$/i);
         if (kv) { previous = kv[2].trim(); found = true; return `${kv[1]}seqnum=${n}`; }
+      } else if (section === 'vtid') {
+        const kv = line.match(/^\s*vtid\s*=\s*(.*)$/i);
+        if (kv) iniVtid = kv[1].trim();
       }
       return line;
     });
@@ -388,7 +392,40 @@ const setSeqNum = (runtimeDir, value) => {
     }
     stateGuard.writeFileSafe(iniPath, out.join('\n'), 'utf8');
     log(`[MEGA_POS] vposconf.ini: [SeqNum] seqnum ${previous} -> ${n}`);
-    return { success: true, previous, next: n };
+
+    // En VPOS 3.16.0 las transacciones con tarjeta leen `[multiempresa] <VTID>=`
+    // en `conf/<VTID>/<VTID>.ini` (y validan MD5 contra `<VTID>.ini_copia`), no
+    // `[SeqNum] seqnum` de vposconf.ini. Si hay VTID, actualizamos ambos archivos
+    // del terminal deteniendo primero el proceso propio si está activo.
+    const vtid = String(vtidOverride || iniVtid || '').trim();
+    let statePrevious = null;
+    if (vtid) {
+      if (activeGuard && activeGuard.watcher) {
+        activeGuard.watcher.stop();
+        activeGuard.watcher = null;
+      }
+      if (vposProcess) {
+        const pid = vposProcess.pid;
+        vposProcess = null;
+        isRunning = false;
+        try {
+          if (process.platform === 'win32') {
+            const { execFileSync } = require('child_process');
+            execFileSync('taskkill', ['/pid', String(pid), '/f', '/t'], { stdio: 'ignore', windowsHide: true, timeout: 5000 });
+          } else {
+            process.kill(pid, 'SIGTERM');
+          }
+        } catch (_) { /* ya terminó */ }
+      }
+      const rState = stateGuard.setStateSeqnumber(runtimeDir, vtid, n, log);
+      if (!rState.ok) {
+        return { success: false, error: rState.error || `No se pudo actualizar ${vtid}.ini` };
+      }
+      statePrevious = rState.previous ?? null;
+      stateGuard.snapshotState(runtimeDir, vtid, log);
+    }
+
+    return { success: true, previous: statePrevious ?? previous, next: n, vtid: vtid || null };
   } catch (e) {
     logErr('[MEGA_POS] No se pudo fijar seqnum:', e.message);
     return { success: false, error: e.message };
@@ -654,25 +691,76 @@ const startMegaPosServerUnlocked = async (app) => {
   });
 };
 
-const stopMegaPosServer = () => {
+const waitForVposDown = async ({ ping = pingVpos, maxAttempts = 12, intervalMs = 400 } = {}) => {
+  for (let i = 0; i < maxAttempts; i++) {
+    if (!(await ping())) return true;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return !(await ping());
+};
+
+const stopMegaPosServer = async (opts = {}) => {
+  const ping = opts.ping || pingVpos;
+  const killExt = opts.killExternal || killExternalVpos;
+  const maxAttempts = opts.maxAttempts ?? 12; // ~4.8s
+  const intervalMs = opts.intervalMs ?? 400;
+
   // Último respaldo del estado del terminal antes de bajar el servicio.
   if (activeGuard && activeGuard.vtid) {
     try { stateGuard.snapshotState(activeGuard.runtime, activeGuard.vtid, log); } catch (_) {}
     if (activeGuard.watcher) { activeGuard.watcher.stop(); activeGuard.watcher = null; }
   }
-  if (!vposProcess) return;
-  log('[MEGA_POS] Deteniendo VPOS...');
-  try {
-    if (process.platform === 'win32') {
-      spawn('taskkill', ['/pid', vposProcess.pid, '/f', '/t'], { shell: true });
-    } else {
-      vposProcess.kill('SIGTERM');
-    }
-  } catch (e) {
-    logErr('[MEGA_POS] Error al detener:', e.message);
-  }
+
+  // La terminación del proceso propio se dispara SINCRÓNICAMENTE antes del
+  // primer await para que llamadores síncronos en main.js (before-quit) no
+  // dependan de la resolución de la promesa.
+  const proc = vposProcess;
   vposProcess = null;
   isRunning = false;
+  let exitPromise = null;
+  if (proc) {
+    log('[MEGA_POS] Deteniendo VPOS...');
+    exitPromise = new Promise((resolve) => {
+      let done = false;
+      const finish = () => { if (!done) { done = true; resolve(); } };
+      try {
+        if (typeof proc.once === 'function') {
+          proc.once('close', finish);
+          proc.once('exit', finish);
+        } else {
+          finish();
+        }
+      } catch (_) { finish(); }
+      const t = setTimeout(finish, opts.exitTimeoutMs ?? 3000);
+      if (typeof t.unref === 'function') t.unref();
+    });
+    try {
+      if (process.platform === 'win32') {
+        spawn('taskkill', ['/pid', String(proc.pid), '/f', '/t'], { shell: true, windowsHide: true });
+      } else {
+        proc.kill('SIGTERM');
+      }
+    } catch (e) {
+      logErr('[MEGA_POS] Error al detener:', e.message);
+    }
+  }
+
+  if (exitPromise) await exitPromise;
+
+  // Confirmar que :8085 quedó libre (también cubre un VPOS externo/huérfano
+  // cuando vposProcess era null, evitando tocar conf/<VTID>/ con Java vivo).
+  try {
+    if (await ping()) {
+      log('[MEGA_POS] VPOS sigue activo en :8085 tras detener; terminando Java del VPOS...');
+      killExt();
+      const down = await waitForVposDown({ ping, maxAttempts, intervalMs });
+      if (!down) logErr('[MEGA_POS] VPOS no soltó :8085 dentro del tiempo de espera.');
+      return { stopped: down };
+    }
+  } catch (e) {
+    logErr('[MEGA_POS] Error verificando cierre del VPOS:', e.message);
+  }
+  return { stopped: true };
 };
 
 /**
@@ -709,9 +797,7 @@ const startMegaPosServer = (app) => ops.join(() => startMegaPosServerUnlocked(ap
 /** Reaplica config y reinicia el servicio (tras guardar config en la UI). */
 const restartMegaPosServer = (app) =>
   ops.enqueue(async () => {
-    stopMegaPosServer();
-    // pequeño respiro para que el puerto libere
-    await new Promise((r) => setTimeout(r, 800));
+    await stopMegaPosServer();
     return startMegaPosServerUnlocked(app);
   });
 
@@ -776,10 +862,9 @@ const repairMegaPos = (app, opts = {}) =>
         };
       }
     }
-    // Primero se baja el Java: si se restaurara el archivo con el VPOS vivo,
-    // podría volver a pisarlo con lo que tiene en memoria.
-    stopMegaPosServer();
-    await new Promise((r) => setTimeout(r, 800));
+    // Primero se baja el Java y se confirma que soltó :8085: si se editara
+    // conf/<VTID>/ con el VPOS vivo, podría pisarlo con lo que tiene en memoria.
+    await stopMegaPosServer();
     // Config del VPOS: se informa aquí lo que el arranque de abajo va a
     // encontrar ya repuesto (un vposconf.ini en ceros es la causa real del
     // 99-LA con la carpeta intacta).
@@ -796,31 +881,35 @@ const repairMegaPos = (app, opts = {}) =>
     const vouchers = stateGuard.ensureVoucherDirs(runtime, log);
     steps.push({ key: 'voucher_dir', ok: vouchers.ok, detail: vouchers.ok ? `${vouchers.base}${vouchers.created.length ? ' (creada)' : ' OK'}` : `${vouchers.base}: ${vouchers.error}` });
     if (vtid) {
+      const floor = plan && plan.raise ? plan.floor : null;
       const before = stateGuard.inspectStateFile(runtime, vtid);
-      // Sano Y con su consecutivo: no se toca. Un seqnumber vacío con respaldo real se repone.
+      // Sano Y con su consecutivo real (> 0): no se toca. Roto/ausente se repone desde snapshot.
       if (!stateGuard.stateNeedsRestore(before, stateGuard.readSnapshot(runtime, vtid))) {
         steps.push({ key: 'state', ok: true, detail: `Estado de ${vtid} sano (seqnumber=${before.seqnumber || 'vacío'})` });
       } else {
         const r = stateGuard.restoreState(runtime, vtid, log);
         // Sin archivo y sin respaldo = terminal nuevo: el VPOS lo crea al
-        // arrancar, no es una falla. Dañado sin respaldo sí lo es.
+        // arrancar (o se crea abajo con `floor`), no es una falla. Dañado sin
+        // respaldo tampoco falla si `floor` del servidor permite reconstruirlo.
         const freshTerminal = !r.restored && !before.exists && r.reason === 'no-snapshot';
+        const willRebuildWithFloor = !r.restored && Boolean(floor) && r.reason === 'no-snapshot';
         steps.push({
           key: 'state',
-          ok: r.restored || freshTerminal,
+          ok: r.restored || freshTerminal || willRebuildWithFloor,
           detail: r.restored
             ? `Estado de ${vtid} restaurado (seqnumber=${r.seqnumber}, respaldo de ${r.at || '?'})`
-            : freshTerminal
-              ? `Estado de ${vtid} aún no existe (terminal nuevo): lo crea el VPOS al arrancar`
-              : `Estado de ${vtid} ${before.reason === 'missing' ? 'no existe' : `dañado (${before.reason})`} y no hay respaldo${r.reason && r.reason !== 'no-snapshot' ? ` (${r.reason})` : ''}`,
+            : willRebuildWithFloor
+              ? `Estado de ${vtid} sin respaldo local: se reconstruye con consecutivo ${floor}`
+              : freshTerminal
+                ? `Estado de ${vtid} aún no existe (terminal nuevo): lo crea el VPOS al arrancar`
+                : `Estado de ${vtid} ${before.reason === 'missing' ? 'no existe' : `dañado (${before.reason})`} y no hay respaldo${r.reason && r.reason !== 'no-snapshot' ? ` (${r.reason})` : ''}`,
         });
       }
-      const floor = plan && plan.raise ? plan.floor : null;
       if (floor) {
-        // Después de restaurar: si el archivo sigue por debajo del piso, solo se sube la clave seqnumber.
+        // Después de restaurar (o si faltaba): llevar [multiempresa] <VTID>= al piso y sincronizar _copia.
         const now = stateGuard.inspectStateFile(runtime, vtid);
         const current = stateGuard.seqOf(now.seqnumber);
-        if (now.exists && (current === null || current < floor)) {
+        if (!now.exists || !now.healthy || current === null || current < floor) {
           const r = stateGuard.setStateSeqnumber(runtime, vtid, floor, log);
           steps.push({ key: 'sequence', ok: r.ok, detail: r.ok ? `Consecutivo de ${vtid}: ${r.previous ?? 'vacío'} -> ${r.seqnumber}` : `No se pudo fijar el consecutivo (${r.error})` });
           if (r.ok) stateGuard.snapshotState(runtime, vtid, log);
@@ -847,5 +936,5 @@ module.exports = {
   getMegaPosHealth,
   repairMegaPos,
   // Solo para tests.
-  _internals: { ensureRuntimeCopy, markerMatches, listVposStateDirs, backupVposState, restoreVposState, createSerializer, applyConfigToIni },
+  _internals: { ensureRuntimeCopy, markerMatches, listVposStateDirs, backupVposState, restoreVposState, createSerializer, applyConfigToIni, waitForVposDown },
 };
