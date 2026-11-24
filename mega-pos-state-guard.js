@@ -62,44 +62,109 @@ const noop = () => {};
 // ─── Estado por terminal ────────────────────────────────────────────────────
 
 const vtidStatePath = (runtime, vtid) => path.join(runtime, 'conf', vtid, `${vtid}.ini`);
+const vtidStateCopyPath = (runtime, vtid) => `${vtidStatePath(runtime, vtid)}_copia`;
 const snapshotRoot = (runtime) => `${runtime}${SNAPSHOT_SUFFIX}`;
 const snapshotFile = (runtime, vtid) => path.join(snapshotRoot(runtime), vtid, `${vtid}.ini`);
 const snapshotMeta = (runtime, vtid) => path.join(snapshotRoot(runtime), vtid, `${vtid}.json`);
 const snapshotHistoryDir = (runtime, vtid) => path.join(snapshotRoot(runtime), vtid, 'history');
 
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /**
- * Lee lo que importa del `<VTID>.ini`: que exista la sección del terminal y
- * la clave `seqnumber` (vacía en un terminal que nunca transaccionó; con
- * dígitos después del primer logon).
+ * Plantilla mínima de `conf/<VTID>/<VTID>.ini` idéntica a la que genera
+ * `VposMap.generarArchivoIni` en VPOS 3.16.0: `[multiempresa] <VTID>=<seq>`
+ * es el consecutivo real de transacciones y `[<VTID>]` guarda solo la marca
+ * temporal de reverso/advice pendiente.
+ */
+const buildDefaultStateIni = (vtid, seq) => [
+  '[multiempresa]',
+  `${vtid}=${seq}`,
+  'nombreEmpresa=',
+  'localidad=',
+  'rif=',
+  'MarcaCargaLLaves=0',
+  '',
+  `[${vtid}]`,
+  'codigo=0',
+  'seqnumber=',
+  'seqnumberoriginal=',
+  'pendingAdvice=',
+  'pendingTrxExterna=',
+  '',
+].join('\r\n');
+
+/**
+ * Lee lo que importa del `<VTID>.ini` (verificado en VposUniversal.jar 3.16.0):
+ *   - El consecutivo REAL de transacciones (`ConfiguracionVP.getSeqnum(vtid)` /
+ *     `Transaccion.obtenerSecuencia`) vive en `[multiempresa] <VTID>=<N>`.
+ *   - `[<VTID>] seqnumber=` es solo la marca temporal de reverso pendiente
+ *     (`crearMarca`/`eliminarMarca`, vacía en operación normal).
+ *
+ * `seqnumber` en el objeto devuelto expone el consecutivo REAL (`[multiempresa]
+ * <VTID>=`) para mantener compatibilidad con la UI de salud y los snapshots.
  */
 const parseState = (text, vtid) => {
   const lines = String(text || '').split(/\r?\n/);
+  const vtidLower = String(vtid || '').toLowerCase();
+  const vtidKeyRe = vtid ? new RegExp(`^\\s*${escapeRegex(vtid)}\\s*=\\s*(.*)$`, 'i') : null;
   let section = null;
+  let hasMultiempresa = false;
+  let hasCounterKey = false;
+  let counter = null;
   let hasSection = false;
   let hasSeqKey = false;
-  let seqnumber = null;
+  let pendingSeqnumber = null;
   for (const line of lines) {
     const sec = line.match(/^\s*\[([^\]]+)\]\s*$/);
     if (sec) {
-      section = sec[1].trim();
-      if (section.toLowerCase() === String(vtid).toLowerCase()) hasSection = true;
+      section = sec[1].trim().toLowerCase();
+      if (section === 'multiempresa') hasMultiempresa = true;
+      if (vtidLower && section === vtidLower) hasSection = true;
       continue;
     }
-    if (section && section.toLowerCase() === String(vtid).toLowerCase()) {
+    if (section === 'multiempresa' && vtidKeyRe) {
+      const kv = line.match(vtidKeyRe);
+      if (kv) { hasCounterKey = true; counter = kv[1].trim(); }
+    } else if (vtidLower && section === vtidLower) {
       const kv = line.match(/^\s*seqnumber\s*=\s*(.*)$/i);
-      if (kv) { hasSeqKey = true; seqnumber = kv[1].trim(); }
+      if (kv) { hasSeqKey = true; pendingSeqnumber = kv[1].trim(); }
     }
   }
-  return { hasSection, hasSeqKey, seqnumber };
+  return {
+    hasMultiempresa,
+    hasCounterKey,
+    hasSection,
+    hasSeqKey,
+    seqnumber: counter,
+    pendingSeqnumber,
+  };
 };
 
+/** El consecutivo como entero >= 0, o null si no tiene dígitos. */
+const seqOf = (value) => (/^\d+$/.test(String(value ?? '').trim()) ? parseInt(String(value).trim(), 10) : null);
+
 /**
- * Diagnóstico del archivo de estado: sano = existe, tiene bytes, tiene la
- * sección del terminal y la clave `seqnumber`. `reason` dice qué falta.
+ * Diagnóstico del archivo de estado: sano = existe, tiene bytes (sin nulos),
+ * tiene `[multiempresa]` con `<VTID>=<entero >= 1>` y tiene la sección
+ * `[<VTID>]`. Si el contador en `[multiempresa]` falta, está vacío o vale 0,
+ * el VPOS lanza `EB` ("obtenerSecuencia: secuencia en cero").
  */
 const inspectStateFile = (runtime, vtid) => {
   const file = vtidStatePath(runtime, vtid);
-  const out = { path: file, exists: false, size: 0, hasSection: false, hasSeqKey: false, seqnumber: null, healthy: false, reason: 'missing', mtime: null };
+  const out = {
+    path: file,
+    exists: false,
+    size: 0,
+    hasMultiempresa: false,
+    hasCounterKey: false,
+    hasSection: false,
+    hasSeqKey: false,
+    seqnumber: null,
+    pendingSeqnumber: null,
+    healthy: false,
+    reason: 'missing',
+    mtime: null,
+  };
   if (!vtid) return { ...out, reason: 'no-vtid' };
   let stat;
   try { stat = fs.statSync(file); } catch (_) { return out; }
@@ -107,34 +172,35 @@ const inspectStateFile = (runtime, vtid) => {
   out.size = stat.size;
   out.mtime = stat.mtimeMs;
   if (!stat.size) return { ...out, reason: 'empty' };
-  let text = '';
-  try { text = fs.readFileSync(file, 'latin1'); } catch (e) { return { ...out, reason: `unreadable: ${e.message}` }; }
-  const parsed = parseState(text, vtid);
+  let buf;
+  try { buf = fs.readFileSync(file); } catch (e) { return { ...out, reason: `unreadable: ${e.message}` }; }
+  if (buf.includes(0)) return { ...out, reason: 'nulls' };
+  const parsed = parseState(buf.toString('latin1'), vtid);
   Object.assign(out, parsed);
+  if (!parsed.hasMultiempresa) return { ...out, reason: 'no-multiempresa' };
+  if (!parsed.hasCounterKey) return { ...out, reason: 'no-counter' };
   if (!parsed.hasSection) return { ...out, reason: 'no-section' };
-  if (!parsed.hasSeqKey) return { ...out, reason: 'no-seqnumber' };
+  const n = seqOf(parsed.seqnumber);
+  if (n === null) return { ...out, reason: 'empty-seqnum' };
+  if (n < 1) return { ...out, reason: 'zero-seqnum' };
   return { ...out, healthy: true, reason: null };
 };
 
-/** El consecutivo como número, o null si no tiene dígitos (vacío en un terminal nuevo). */
-const seqOf = (value) => (/^\d+$/.test(String(value ?? '').trim()) ? parseInt(String(value).trim(), 10) : null);
-
-/** Solo vale la pena respaldar un estado con consecutivo real (dígitos). */
-const isSnapshotWorthy = (state) => Boolean(state && state.healthy && seqOf(state.seqnumber) !== null);
+/** Solo vale la pena respaldar un estado sano con consecutivo real (> 0) en `[multiempresa] <VTID>=`. */
+const isSnapshotWorthy = (state) => {
+  if (!state || !state.healthy) return false;
+  const n = seqOf(state.seqnumber);
+  return n !== null && n > 0;
+};
 
 /**
  * ¿Hay que reponer el estado desde el respaldo al arrancar? Solo si está ROTO
- * (vacío, ilegible, sin sección o sin la clave). Un `seqnumber` vacío pero con
- * el archivo sano NO se repone (1.0.266 lo hacía, d64dae5): desde ese release
- * los X5 «ya existe en Batch» pasaron de ~0 a 15-117 por día en hasta 37
- * cajas (20-23/11/2026), con el contador volviendo una y otra vez al mismo
- * número viejo (Mariara caja 3: 6953/6954 repetidos). Un EB por consecutivo
- * vacío lo cura planSequenceHeal, que solo corre tras un EB / X5.
- * Un estado con consecutivo real tampoco se pisa al arrancar: el consecutivo
- * también BAJA en operación normal (prod 15-23/11/2026: 179 bajadas en 33.280
- * cobros aprobados, de 1 a 9 dentro del lote y de cientos entre lotes) y el
- * Merchant las aprueba. Un consecutivo atrasado lo corrige solo la cura
- * (planSequenceHeal), y únicamente cuando el VPOS responde EB / X5.
+ * (ausente, vacío, con nulos, sin `[multiempresa] <VTID>=`, sin `[<VTID>]`,
+ * o contador vacío / en 0 que provoca EB). Un estado sano con consecutivo real
+ * (>= 1) NO se pisa al arrancar aunque haya bajado respecto al respaldo: en
+ * operación normal el consecutivo también baja entre lotes y el Merchant lo
+ * aprueba. Un consecutivo atrasado lo corrige solo `planSequenceHeal`, y
+ * únicamente tras un EB / X5.
  */
 // eslint-disable-next-line no-unused-vars
 const stateNeedsRestore = (state, _snapshot) => !state || !state.healthy;
@@ -147,12 +213,13 @@ const readSnapshot = (runtime, vtid) => {
     out.content = fs.readFileSync(file, 'latin1');
     out.exists = out.content.length > 0;
   } catch (_) { return out; }
+  const parsedSeq = parseState(out.content, vtid).seqnumber;
   try {
     const meta = JSON.parse(fs.readFileSync(snapshotMeta(runtime, vtid), 'utf8'));
     out.at = meta.at || null;
-    out.seqnumber = meta.seqnumber ?? null;
+    out.seqnumber = parsedSeq ?? meta.seqnumber ?? null;
   } catch (_) {
-    out.seqnumber = parseState(out.content, vtid).seqnumber;
+    out.seqnumber = parsedSeq;
   }
   return out;
 };
@@ -164,7 +231,7 @@ const readSnapshot = (runtime, vtid) => {
 const readHighWater = (runtime, vtid) => {
   if (!vtid) return null;
   let best = null;
-  const take = (v) => { const n = seqOf(v); if (n !== null && (best === null || n > best)) best = n; };
+  const take = (v) => { const n = seqOf(v); if (n !== null && n > 0 && (best === null || n > best)) best = n; };
   try { take(JSON.parse(fs.readFileSync(snapshotMeta(runtime, vtid), 'utf8')).maxSeqnumber); } catch (_) {}
   const snap = readSnapshot(runtime, vtid);
   if (snap.exists) take(parseState(snap.content, vtid).seqnumber);
@@ -182,12 +249,16 @@ const SEQUENCE_MARGIN = 2;
 
 /**
  * ¿Qué haría la cura del consecutivo (solo tras un EB / X5)? Sin tocar nada:
- *   known   = el mayor entre la última aprobada del servidor y el mayor consecutivo local
- *   restore = el archivo está roto o vacío y hay respaldo
- *   raise   = el consecutivo está POR DEBAJO de `known` (un archivo al día es igual a su mayor: no se toca)
- *   floor   = known + 2, a donde se sube
- * Si no hay nada que hacer (needed=false) el problema no es de esta caja (p. ej. un pico de X5 del lado
- * del Merchant en todas las tiendas): no se reinicia el VPOS.
+ *   known   = el mayor entre la última del servidor y el mayor consecutivo local
+ *   restore = el archivo está ausente, roto o con contador 0/vacío
+ *   raise   = hay `known > 0` y el consecutivo actual falta, vale 0 o está `<= known`
+ *             (incluye `current === known`, porque `obtenerSecuencia` usa el valor
+ *             actual y luego incrementa: si `current === known` ese número ya chocó
+ *             en el lote del Merchant; también aplica cuando el archivo no existe).
+ *   floor   = max(current, known) + 2, garantizando estrictamente `floor > current`
+ *             y `floor > known`.
+ * Si el archivo está sano y `current > known` (o no hay `known` y el archivo es sano),
+ * devuelve `needed: false` y no se reinicia el VPOS.
  */
 const planSequenceHeal = (runtime, vtid, lastSequence = null) => {
   const state = inspectStateFile(runtime, vtid);
@@ -195,16 +266,36 @@ const planSequenceHeal = (runtime, vtid, lastSequence = null) => {
   const local = readHighWater(runtime, vtid);
   const server = Number.isInteger(lastSequence) && lastSequence > 0 ? lastSequence : null;
   const known = Math.max(server || 0, local || 0) || null;
-  const floor = known ? known + SEQUENCE_MARGIN : null;
   const current = seqOf(state.seqnumber);
-  const raise = Boolean(known && state.exists && (current === null || current < known));
+  const floor = known ? Math.max(current || 0, known) + SEQUENCE_MARGIN : null;
+  const raise = Boolean(known && (current === null || current <= 0 || current <= known));
   return { needed: restore || raise, restore, raise, floor, current, local, server };
 };
 
 const writeFileAtomic = (file, content) => {
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, content, 'latin1');
+  const tmp = `${file}.tmp-${process.pid}`;
+  const fd = fs.openSync(tmp, 'w');
+  try {
+    fs.writeFileSync(fd, content, 'latin1');
+    try { fs.fsyncSync(fd); } catch (_) { /* FS sin fsync: se sigue */ }
+  } finally {
+    fs.closeSync(fd);
+  }
   fs.renameSync(tmp, file);
+};
+
+/**
+ * Escribe atómicamente `conf/<VTID>/<VTID>.ini` y su espejo `<VTID>.ini_copia`
+ * con los mismos bytes exactos. Al arrancar, `VposMap.crearArchivoConf` compara
+ * el MD5 de ambos archivos y, si difieren, sobrescribe `<VTID>.ini` con el
+ * `_copia` viejo ("Archivo no concuerda con la copia. Restaurado por copia").
+ */
+const writeStatePairAtomic = (runtime, vtid, content) => {
+  const target = vtidStatePath(runtime, vtid);
+  const copy = vtidStateCopyPath(runtime, vtid);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  writeFileAtomic(target, content);
+  writeFileAtomic(copy, content);
 };
 
 /**
@@ -246,8 +337,9 @@ const snapshotState = (runtime, vtid, log = noop) => {
 };
 
 /**
- * Restaura el último respaldo sobre `conf/<VTID>/<VTID>.ini`. El archivo
- * dañado (si existe) se conserva al lado como `.ini.damaged-<fecha>`.
+ * Restaura el último respaldo sobre `conf/<VTID>/<VTID>.ini` y sincroniza
+ * `<VTID>.ini_copia` con los mismos bytes exactos (chequeo MD5 de Megasoft).
+ * El archivo dañado (si existe) se conserva al lado como `.ini.damaged-<fecha>`.
  */
 const restoreState = (runtime, vtid, log = noop) => {
   const snap = readSnapshot(runtime, vtid);
@@ -259,13 +351,13 @@ const restoreState = (runtime, vtid, log = noop) => {
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       try { fs.renameSync(target, `${target}.damaged-${stamp}`); } catch (_) { fs.rmSync(target, { force: true }); }
     }
-    writeFileAtomic(target, snap.content);
+    writeStatePairAtomic(runtime, vtid, snap.content);
     try {
       const meta = JSON.parse(fs.readFileSync(snapshotMeta(runtime, vtid), 'utf8'));
       meta.restoredAt = new Date().toISOString();
       fs.writeFileSync(snapshotMeta(runtime, vtid), JSON.stringify(meta), 'utf8');
     } catch (_) {}
-    log(`[MEGA_POS][estado] ${vtid} restaurado desde el respaldo (seqnumber=${snap.seqnumber}, de ${snap.at || '?'})`);
+    log(`[MEGA_POS][estado] ${vtid} restaurado desde el respaldo (seqnumber=${snap.seqnumber}, de ${snap.at || '?'}) + _copia`);
     return { restored: true, seqnumber: snap.seqnumber, at: snap.at };
   } catch (e) {
     log(`[MEGA_POS][estado] no se pudo restaurar ${vtid}: ${e.message}`);
@@ -274,40 +366,74 @@ const restoreState = (runtime, vtid, log = noop) => {
 };
 
 /**
- * Lleva `seqnumber` de `conf/<VTID>/<VTID>.ini` a `value` (escritura atómica), conservando el resto del archivo.
- * Lo usa la reparación cuando ni el archivo ni el respaldo llegan al último consecutivo que el Merchant ya
- * tiene (el servidor lo sabe por las respuestas aprobadas). Solo con el VPOS detenido.
- * @returns {{ ok: boolean, previous?: string|null, seqnumber?: number, error?: string }}
+ * Lleva el consecutivo real `[multiempresa] <VTID>=` de `conf/<VTID>/<VTID>.ini`
+ * a `value` (escritura atómica) y sincroniza `<VTID>.ini_copia` con los mismos
+ * bytes exactos, conservando el resto del archivo intacto (incluida la sección
+ * `[<VTID>]`). Si `<VTID>.ini` no existe o está vacío/corrupto, crea un archivo
+ * mínimo válido con la plantilla de VPOS 3.16.0. Solo con el VPOS detenido.
+ * @returns {{ ok: boolean, previous?: string|null, seqnumber?: number, created?: boolean, error?: string }}
  */
 const setStateSeqnumber = (runtime, vtid, value, log = noop) => {
   const n = Number(value);
-  if (!vtid || !Number.isInteger(n) || n < 1) return { ok: false, error: 'valor inválido' };
+  if (!vtid || !Number.isInteger(n) || n < 1 || n > 99999999) return { ok: false, error: 'valor inválido' };
   const file = vtidStatePath(runtime, vtid);
-  let text = '';
-  try { text = fs.readFileSync(file, 'latin1'); } catch (_) { return { ok: false, error: 'no existe el archivo de estado' }; }
-  const eol = text.includes('\r\n') ? '\r\n' : '\n';
-  const lines = text.split(/\r?\n/);
-  let section = null;
-  let previous = null;
-  let done = false;
-  let sectionEnd = -1;
-  for (let i = 0; i < lines.length; i += 1) {
-    const sec = lines[i].match(/^\s*\[([^\]]+)\]\s*$/);
-    if (sec) { section = sec[1].trim(); continue; }
-    if (section && section.toLowerCase() === String(vtid).toLowerCase()) {
-      sectionEnd = i;
-      const kv = lines[i].match(/^(\s*)seqnumber\s*=\s*(.*)$/i);
-      if (kv && !done) { previous = kv[2].trim(); lines[i] = `${kv[1]}seqnumber=${n}`; done = true; }
+  let buf = null;
+  try { buf = fs.readFileSync(file); } catch (_) { buf = null; }
+
+  const usable = buf && buf.length > 0 && !buf.includes(0);
+  if (usable) {
+    const text = buf.toString('latin1');
+    const parsed = parseState(text, vtid);
+    if (parsed.hasMultiempresa && parsed.hasSection) {
+      const eol = text.includes('\r\n') ? '\r\n' : '\n';
+      const lines = text.split(/\r?\n/);
+      const vtidKeyRe = new RegExp(`^(\\s*)(${escapeRegex(vtid)})\\s*=\\s*(.*)$`, 'i');
+      let section = null;
+      let previous = null;
+      let done = false;
+      let multiempresaHeader = -1;
+      for (let i = 0; i < lines.length; i += 1) {
+        const sec = lines[i].match(/^\s*\[([^\]]+)\]\s*$/);
+        if (sec) {
+          section = sec[1].trim().toLowerCase();
+          if (section === 'multiempresa' && multiempresaHeader < 0) multiempresaHeader = i;
+          continue;
+        }
+        if (section === 'multiempresa') {
+          const kv = lines[i].match(vtidKeyRe);
+          if (kv && !done) {
+            previous = kv[3].trim();
+            lines[i] = `${kv[1]}${kv[2]}=${n}`;
+            done = true;
+          }
+        }
+      }
+      if (!done && multiempresaHeader >= 0) {
+        lines.splice(multiempresaHeader + 1, 0, `${vtid}=${n}`);
+        done = true;
+      }
+      if (done) {
+        try {
+          writeStatePairAtomic(runtime, vtid, lines.join(eol));
+          log(`[MEGA_POS][estado] ${vtid}: [multiempresa] ${vtid} ${previous ?? '(sin clave)'} -> ${n} (+ _copia)`);
+          return { ok: true, previous, seqnumber: n };
+        } catch (e) {
+          return { ok: false, error: e.message };
+        }
+      }
     }
   }
-  if (!done) {
-    if (sectionEnd < 0) return { ok: false, error: `el archivo no tiene la sección [${vtid}]` };
-    lines.splice(sectionEnd + 1, 0, `seqnumber=${n}`);
-  }
+
+  // Archivo ausente, vacío, con bytes nulos o sin las secciones requeridas:
+  // conservar el dañado si existía y crear el par `<VTID>.ini` + `<VTID>.ini_copia`.
   try {
-    writeFileAtomic(file, lines.join(eol));
-    log(`[MEGA_POS][estado] ${vtid}: seqnumber ${previous ?? '(sin clave)'} -> ${n}`);
-    return { ok: true, previous, seqnumber: n };
+    if (buf !== null && fs.existsSync(file)) {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      try { fs.renameSync(file, `${file}.damaged-${stamp}`); } catch (_) { fs.rmSync(file, { force: true }); }
+    }
+    writeStatePairAtomic(runtime, vtid, buildDefaultStateIni(vtid, n));
+    log(`[MEGA_POS][estado] ${vtid}: archivo de estado creado con [multiempresa] ${vtid}=${n} (+ _copia)`);
+    return { ok: true, previous: null, seqnumber: n, created: true };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -553,6 +679,8 @@ module.exports = {
   planSequenceHeal,
   setStateSeqnumber,
   vtidStatePath,
+  vtidStateCopyPath,
+  buildDefaultStateIni,
   snapshotRoot,
   parseState,
   inspectStateFile,
