@@ -28,6 +28,7 @@ const os = require('os');
 const {
   readSettings,
   writeSettings,
+  normalizeLabelPrinter,
   normalizePrintShare,
   normalizePrintShareHost,
   PRINT_SHARE_KINDS,
@@ -255,6 +256,9 @@ function pickHostLabelParams(label) {
   if (!label || typeof label !== 'object') return null;
   return {
     configured: label.configured === true,
+    method: label.method || 'native',
+    variant: label.variant || 'n1',
+    tsplReady: label.tsplReady === true,
     widthMm: label.widthMm,
     heightMm: label.heightMm,
     layout: label.layout,
@@ -264,7 +268,7 @@ function pickHostLabelParams(label) {
 function buildHealthPayload(app) {
   const settings = readSettings(app);
   const thermal = settings.thermalPrinter || {};
-  const label = settings.labelPrinter || {};
+  const label = normalizeLabelPrinter(settings.labelPrinter);
   const fiscal = settings.fiscal || {};
   const share = normalizePrintShare(settings.printShare);
   return {
@@ -289,10 +293,13 @@ function buildHealthPayload(app) {
       paperWidth: thermal.paperWidth || '80mm',
     },
     // La caja cliente renderiza el sticker con las dimensiones/estilo de ESTA
-    // impresora antes de mandarlo a /print-label.
+    // impresora antes de mandarlo a /print-label (o manda payload TSPL directo).
     label: {
       configured: Boolean(label.printerName),
       printerName: label.printerName || '',
+      method: label.method,
+      variant: label.variant,
+      tsplReady: Boolean(label.printerName && label.method === 'tspl'),
       widthMm: label.widthMm,
       heightMm: label.heightMm,
       layout: label.layout,
@@ -520,6 +527,115 @@ function describeTried(target, e) {
 
 // ==================== SERVIDOR (modo 'share') ====================
 
+async function handlePrintLabelBody(app, body, deps = {}) {
+  const labelCfg = normalizeLabelPrinter(readSettings(app).labelPrinter);
+  if (!labelCfg.printerName) {
+    return { status: 500, body: { success: false, error: 'La caja anfitriona no tiene impresora de etiquetas configurada.' } };
+  }
+  const isTsplBody = body && body.format === 'tspl';
+  if (isTsplBody) {
+    const renderer = deps.renderer || require('./tspl-label-renderer');
+    const sendRaw = deps.printRawBufferDirect || require('./printer-direct').printRawBufferDirect;
+    const buffers = await renderer.renderDispatchTsplBuffers(body.payload, { variant: labelCfg.variant });
+    for (const buf of buffers) {
+      await sendRaw(app, labelCfg.printerName, buf);
+    }
+    return {
+      status: 200,
+      body: { success: true, method: 'TSPL RAW (winspool)', variant: labelCfg.variant, printed: buffers.length },
+    };
+  }
+  if (labelCfg.method === 'tspl') {
+    const renderer = deps.renderer || require('./tspl-label-renderer');
+    const sendRaw = deps.printRawBufferDirect || require('./printer-direct').printRawBufferDirect;
+    const buf = await renderer.renderHtmlToTsplBuffer(body.content);
+    await sendRaw(app, labelCfg.printerName, buf);
+    return { status: 200, body: { success: true, method: 'TSPL RAW (winspool)', printed: 1 } };
+  }
+  const printerMethods = deps.printerMethods || require('./printer-methods');
+  const result = await printerMethods.printWithNativeAPI(
+    app,
+    labelCfg.printerName,
+    body.content,
+    `${labelCfg.widthMm}mm`,
+    { widthMm: labelCfg.widthMm, heightMm: labelCfg.heightMm }
+  );
+  return { status: result.success ? 200 : 500, body: result };
+}
+
+function handleShareHttpRequest(app, req, res, deps = {}) {
+  const respond = (status, obj) => {
+    try {
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(obj));
+    } catch (e) {
+      console.warn('[PRINT-SHARE] respond error:', e.message);
+    }
+  };
+  if (req.method === 'GET' && req.url === '/health') {
+    try {
+      respond(200, buildHealthPayload(app));
+    } catch (e) {
+      respond(500, { ok: false, error: e.message });
+    }
+    return;
+  }
+  if (req.method === 'POST' && (req.url === '/print' || req.url === '/print-label')) {
+    const isLabel = req.url === '/print-label';
+    let raw = '';
+    let overflow = false;
+    req.on('data', (chunk) => {
+      raw += chunk;
+      if (raw.length > MAX_PRINT_BODY) {
+        overflow = true;
+        req.destroy();
+      }
+    });
+    req.on('end', async () => {
+      if (overflow) return;
+      try {
+        const body = JSON.parse(raw || '{}');
+        const isTsplBody = isLabel && body && body.format === 'tspl';
+        if (isTsplBody) {
+          if (!body.payload || typeof body.payload !== 'object') {
+            respond(400, { success: false, error: 'Falta payload para formato tspl' });
+            return;
+          }
+        } else if (typeof body.content !== 'string' || !body.content) {
+          respond(400, { success: false, error: 'Falta content' });
+          return;
+        }
+        // Respeta lo que ESTA caja decidió compartir (modelo flex).
+        const shareCfg = loadPrintShareConfig(app);
+        if (isLabel ? !shareCfg.shareLabel : !shareCfg.shareTicket) {
+          respond(403, {
+            success: false,
+            error: isLabel
+              ? 'La caja anfitriona no comparte su impresora de etiquetas.'
+              : 'La caja anfitriona no comparte su impresora de tickets.',
+          });
+          return;
+        }
+        if (isLabel) {
+          const outcome = await handlePrintLabelBody(app, body, deps);
+          console.log('🖨️ [PRINT-SHARE] Job remoto (etiqueta) de', req.socket && req.socket.remoteAddress, '->', outcome.body.success ? 'OK' : outcome.body.error);
+          respond(outcome.status, outcome.body);
+        } else {
+          // Lazy require: printer-handlers también requiere este módulo.
+          const { printWithConfiguredPrinter } = deps.printerHandlers || require('./printer-handlers');
+          const result = await printWithConfiguredPrinter(app, body.content);
+          console.log('🖨️ [PRINT-SHARE] Job remoto de', req.socket && req.socket.remoteAddress, '->', result.success ? 'OK' : result.error);
+          respond(result.success ? 200 : 500, result);
+        }
+      } catch (e) {
+        respond(500, { success: false, error: e.message });
+      }
+    });
+    return;
+  }
+  respond(404, { success: false, error: 'Not found' });
+}
+
 function startShareServer(app, port) {
   return new Promise((resolve) => {
     if (shareServer && shareServerPort === port) {
@@ -532,84 +648,7 @@ function startShareServer(app, port) {
         // POST emite 'error' sin listener y TUMBA el proceso main.
         req.on('error', (e) => console.warn('[PRINT-SHARE] request error:', e.message));
         res.on('error', (e) => console.warn('[PRINT-SHARE] response error:', e.message));
-        const respond = (status, obj) => {
-          try {
-            res.writeHead(status, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(obj));
-          } catch (e) {
-            console.warn('[PRINT-SHARE] respond error:', e.message);
-          }
-        };
-        if (req.method === 'GET' && req.url === '/health') {
-          try {
-            respond(200, buildHealthPayload(app));
-          } catch (e) {
-            respond(500, { ok: false, error: e.message });
-          }
-          return;
-        }
-        if (req.method === 'POST' && (req.url === '/print' || req.url === '/print-label')) {
-          const isLabel = req.url === '/print-label';
-          let raw = '';
-          let overflow = false;
-          req.on('data', (chunk) => {
-            raw += chunk;
-            if (raw.length > MAX_PRINT_BODY) {
-              overflow = true;
-              req.destroy();
-            }
-          });
-          req.on('end', async () => {
-            if (overflow) return;
-            try {
-              const body = JSON.parse(raw || '{}');
-              if (typeof body.content !== 'string' || !body.content) {
-                respond(400, { success: false, error: 'Falta content' });
-                return;
-              }
-              // Respeta lo que ESTA caja decidió compartir (modelo flex).
-              const shareCfg = loadPrintShareConfig(app);
-              if (isLabel ? !shareCfg.shareLabel : !shareCfg.shareTicket) {
-                respond(403, {
-                  success: false,
-                  error: isLabel
-                    ? 'La caja anfitriona no comparte su impresora de etiquetas.'
-                    : 'La caja anfitriona no comparte su impresora de tickets.',
-                });
-                return;
-              }
-              let result;
-              if (isLabel) {
-                // Etiqueta: HTML renderizado por el cliente con las dims de ESTA
-                // impresora (las publica /health). Va por el método nativo con
-                // tamaño de página exacto = sticker, igual que la impresión local.
-                const labelCfg = readSettings(app).labelPrinter || {};
-                if (!labelCfg.printerName) {
-                  respond(500, { success: false, error: 'La caja anfitriona no tiene impresora de etiquetas configurada.' });
-                  return;
-                }
-                const printerMethods = require('./printer-methods');
-                result = await printerMethods.printWithNativeAPI(
-                  app,
-                  labelCfg.printerName,
-                  body.content,
-                  `${labelCfg.widthMm}mm`,
-                  { widthMm: labelCfg.widthMm, heightMm: labelCfg.heightMm }
-                );
-              } else {
-                // Lazy require: printer-handlers también requiere este módulo.
-                const { printWithConfiguredPrinter } = require('./printer-handlers');
-                result = await printWithConfiguredPrinter(app, body.content);
-              }
-              console.log(`🖨️ [PRINT-SHARE] Job remoto${isLabel ? ' (etiqueta)' : ''} de`, req.socket.remoteAddress, '->', result.success ? 'OK' : result.error);
-              respond(result.success ? 200 : 500, result);
-            } catch (e) {
-              respond(500, { success: false, error: e.message });
-            }
-          });
-          return;
-        }
-        respond(404, { success: false, error: 'Not found' });
+        handleShareHttpRequest(app, req, res);
       });
       server.on('error', (err) => {
         console.error('❌ [PRINT-SHARE] Server error:', err.message);
@@ -847,7 +886,7 @@ function getRemoteLabelTarget(app) {
   return host ? { hostIp: host.hostIp, hostPort: host.hostPort, cfg: host } : null;
 }
 
-async function sendRemoteLabelPrint(target, content) {
+async function sendRemoteLabelPrint(target, contentOrBody) {
   if (Date.now() - lastRemoteLabelFailAt < REMOTE_PRINT_COOLDOWN_MS) {
     return {
       success: false,
@@ -856,11 +895,17 @@ async function sendRemoteLabelPrint(target, content) {
     };
   }
   const cfg = target.cfg || { hostIp: target.hostIp, hostPort: target.hostPort, hostIps: [] };
+  const requestBody =
+    contentOrBody && typeof contentOrBody === 'object'
+      ? (contentOrBody.format === 'tspl'
+        ? { format: 'tspl', payload: contentOrBody.payload }
+        : { format: 'tspl', payload: contentOrBody })
+      : { content: contentOrBody };
   try {
     const { statusCode, data } = await requestHost(cfg, {
       path: '/print-label',
       method: 'POST',
-      body: { content },
+      body: requestBody,
       timeoutMs: REMOTE_PRINT_TIMEOUT_MS,
     });
     if (statusCode >= 200 && statusCode < 300 && data && data.success) {
@@ -1200,6 +1245,9 @@ module.exports = {
   registerPrintShareHandlers,
   maybeStartPrintShareServer,
   loadPrintShareConfig,
+  buildHealthPayload,
+  handleShareHttpRequest,
+  handlePrintLabelBody,
   getRemoteTicketTarget,
   sendRemotePrint,
   getRemoteLabelTarget,

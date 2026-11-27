@@ -235,23 +235,19 @@ def extraer_id_caja(parametros):
             try:
                 parametros = json.loads(parametros)
             except Exception:
-                m = re.search(r'i05Caja:([^,\]\s]+)', parametros)
+                m = re.search(r'i05Caja:([^\r\n,\]]+)', parametros)
                 if m:
-                    return {"id_caja": m.group(1), "linea_completa": m.group(0)}
+                    val = m.group(1).strip()
+                    if val:
+                        return {"id_caja": val, "linea_completa": m.group(0).strip()}
                 return {"id_caja": None, "linea_completa": None}
         if isinstance(parametros, list):
             for item in parametros:
                 if isinstance(item, str) and "i05Caja:" in item:
-                    if item.startswith("i05Caja:"):
-                        # .strip(): la linea real es 'i05Caja: 2 - X' (espacio tras los
-                        # dos puntos). Guardar el id CON espacio rompia el dedup tras un
-                        # reinicio: cargar_ids_ejecutados hace line.strip() al leer el
-                        # archivo y el id re-extraido (' 2 - X') nunca coincidia -> el
-                        # reenvio de un documento YA IMPRESO se imprimia de nuevo.
-                        return {"id_caja": item.replace("i05Caja:", "").strip(), "linea_completa": item}
-                    m = re.search(r'i05Caja:([^,\]\s]+)', item)
-                    if m:
-                        return {"id_caja": m.group(1).strip(), "linea_completa": item}
+                    idx = item.find("i05Caja:")
+                    val = item[idx + len("i05Caja:"):].strip()
+                    if val:
+                        return {"id_caja": val, "linea_completa": item[idx:]}
         return {"id_caja": None, "linea_completa": None}
     except Exception as e:
         print(f"Error extrayendo ID de caja: {e}")

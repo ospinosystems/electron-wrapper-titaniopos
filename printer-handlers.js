@@ -8,8 +8,51 @@
 const { ipcMain } = require('electron');
 const printerConfig = require('./printer-config');
 const printerMethods = require('./printer-methods');
-const { printWithDirect, ensureHelper } = require('./printer-direct');
+const { printWithDirect, printRawBufferDirect, ensureHelper } = require('./printer-direct');
 const { readSettings, writeSettings, normalizeLabelPrinter } = require('./titaniopos-settings-file');
+
+function buildSampleDispatchLabelPayload(now = new Date()) {
+  const dd = String(now.getDate()).padStart(2, '0');
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const yyyy = now.getFullYear();
+  return {
+    kind: 'dispatch_order_label',
+    order_uuid: '00000000-0000-4000-8000-000000000001',
+    order_code: '#PRUEBA01',
+    verify_url: 'https://ecommerce.titanio-pos.com/v/00000000-0000-4000-8000-000000000001',
+    shipping_mode: 'DELIVERY',
+    date: `${dd}/${mm}/${yyyy}`,
+    customer_name: 'Prueba Etiqueta Titanio Store',
+    customer_phone: '0414-000-0000',
+    address_line: 'Av. Principal · Etiqueta 58x44 mm TSPL',
+    store_name: 'Guacara',
+    items_count: 1,
+    paid_label: 'PRUEBA · TSPL',
+    package_total: 1,
+    package_index: 1,
+  };
+}
+
+async function printTsplDispatchLabel(app, payload, overrides = {}, deps = {}) {
+  const labelCfg = normalizeLabelPrinter(readSettings(app).labelPrinter);
+  const printerName = String(overrides.printerName || labelCfg.printerName || '').trim();
+  if (!printerName) {
+    return { success: false, error: 'Impresora de etiquetas no configurada.' };
+  }
+  const variant = overrides.variant || labelCfg.variant || 'n1';
+  const renderer = deps.renderer || require('./tspl-label-renderer');
+  const sendRaw = deps.printRawBufferDirect || printRawBufferDirect;
+  const buffers = await renderer.renderDispatchTsplBuffers(payload, { variant });
+  for (const buf of buffers) {
+    await sendRaw(app, printerName, buf);
+  }
+  return {
+    success: true,
+    method: 'TSPL RAW (winspool)',
+    variant,
+    printed: buffers.length,
+  };
+}
 
 /**
  * Imprime en la térmica LOCAL con la config guardada (impresora/método).
@@ -200,24 +243,44 @@ function registerPrinterHandlers(app, mainWindow) {
   });
 
   /**
-   * Imprime una ETIQUETA (HTML) ruteando como printer-print: si esta caja usa
-   * la impresora de etiquetas de otra (modo receive + useRemoteLabel), el
-   * sticker viaja por HTTP a la anfitriona; si no, se imprime con la impresora
-   * de etiquetas guardada en el settings (espejo de la config del front).
+   * Imprime una ETIQUETA (HTML o payload TSPL) ruteando como printer-print: si
+   * esta caja usa la impresora de etiquetas de otra (modo receive +
+   * useRemoteLabel), viaja por HTTP a la anfitriona; si no, imprime local
+   * (TSPL RAW cuando labelPrinter.method === 'tspl' o llega payload TSPL).
    */
   ipcMain.handle('printer-print-label', async (event, content) => {
     try {
+      const isObj = Boolean(content && typeof content === 'object');
+      const tsplPayload = isObj
+        ? (content.format === 'tspl' && content.payload ? content.payload : content)
+        : null;
+
       const printShare = require('./print-share');
       const remote = printShare.getRemoteLabelTarget(app);
       if (remote) {
         console.log(`🏷️ [PRINT] Etiqueta a caja anfitriona ${remote.hostIp}:${remote.hostPort}`);
-        return await printShare.sendRemoteLabelPrint(remote, content);
+        return await printShare.sendRemoteLabelPrint(
+          remote,
+          tsplPayload ? { format: 'tspl', payload: tsplPayload } : content
+        );
       }
 
-      const labelCfg = readSettings(app).labelPrinter || {};
+      const labelCfg = normalizeLabelPrinter(readSettings(app).labelPrinter);
       if (!labelCfg.printerName) {
         return { success: false, error: 'Impresora de etiquetas no configurada.' };
       }
+
+      if (tsplPayload) {
+        return await printTsplDispatchLabel(app, tsplPayload);
+      }
+
+      if (labelCfg.method === 'tspl') {
+        const { renderHtmlToTsplBuffer } = require('./tspl-label-renderer');
+        const buf = await renderHtmlToTsplBuffer(String(content || ''));
+        await printRawBufferDirect(app, labelCfg.printerName, buf);
+        return { success: true, method: 'TSPL RAW (winspool)', printed: 1 };
+      }
+
       return await printerMethods.printWithNativeAPI(
         app,
         labelCfg.printerName,
@@ -227,6 +290,28 @@ function registerPrinterHandlers(app, mainWindow) {
       );
     } catch (error) {
       console.error('❌ [PRINT] Etiqueta:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  /**
+   * Imprime etiqueta(s) de despacho 58×44 mm por TSPL RAW usando la impresora y
+   * variante configuradas en labelPrinter (o la anfitriona si usa remota).
+   */
+  ipcMain.handle('printer-print-tspl-label', async (event, payload) => {
+    try {
+      if (!payload || typeof payload !== 'object') {
+        return { success: false, error: 'Payload de etiqueta TSPL inválido.' };
+      }
+      const printShare = require('./print-share');
+      const remote = printShare.getRemoteLabelTarget(app);
+      if (remote) {
+        console.log(`🏷️ [PRINT-TSPL] Etiqueta a caja anfitriona ${remote.hostIp}:${remote.hostPort}`);
+        return await printShare.sendRemoteLabelPrint(remote, { format: 'tspl', payload });
+      }
+      return await printTsplDispatchLabel(app, payload);
+    } catch (error) {
+      console.error('❌ [PRINT-TSPL] Error:', error);
       return { success: false, error: error.message };
     }
   });
@@ -288,6 +373,20 @@ function registerPrinterHandlers(app, mainWindow) {
         } catch (directErr) {
           return { success: false, error: `Direct method failed: ${directErr.message}` };
         }
+      } else if (method === 'tspl') {
+        const labelCfg = normalizeLabelPrinter(readSettings(app).labelPrinter);
+        const targetPrinter = String(printerName || labelCfg.printerName || '').trim();
+        if (!targetPrinter) {
+          return { success: false, error: 'Impresora de etiquetas no configurada.' };
+        }
+        const payload =
+          options && options.payload && typeof options.payload === 'object'
+            ? options.payload
+            : content && typeof content === 'object'
+              ? (content.format === 'tspl' && content.payload ? content.payload : content)
+              : buildSampleDispatchLabelPayload();
+        const variant = (options && options.variant) || labelCfg.variant || 'n1';
+        result = await printTsplDispatchLabel(app, payload, { printerName: targetPrinter, variant });
       } else {
         return {
           success: false,
@@ -307,5 +406,7 @@ function registerPrinterHandlers(app, mainWindow) {
 
 module.exports = {
   registerPrinterHandlers,
-  printWithConfiguredPrinter
+  printWithConfiguredPrinter,
+  printTsplDispatchLabel,
+  buildSampleDispatchLabelPayload,
 };

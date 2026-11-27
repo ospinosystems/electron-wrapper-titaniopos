@@ -15,6 +15,7 @@
 
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 
@@ -209,4 +210,173 @@ async function printWithDirect(app, printerName, textContent) {
   });
 }
 
-module.exports = { printWithDirect, ensureHelper };
+/**
+ * Valida un buffer crudo antes de enviarlo al spooler RAW (sin envoltorio ESC/POS).
+ * @param {unknown} rawBuffer
+ * @returns {{ valid: boolean, buffer?: Buffer, bytes?: number, error?: string }}
+ */
+function validateRawBuffer(rawBuffer) {
+  if (rawBuffer == null) {
+    return { valid: false, error: 'Buffer RAW vacío o nulo' };
+  }
+  if (!Buffer.isBuffer(rawBuffer) && !(rawBuffer instanceof Uint8Array)) {
+    return { valid: false, error: 'El payload RAW debe ser un Buffer o Uint8Array' };
+  }
+  const buffer = Buffer.isBuffer(rawBuffer)
+    ? rawBuffer
+    : Buffer.from(rawBuffer.buffer, rawBuffer.byteOffset, rawBuffer.byteLength);
+  if (buffer.length === 0) {
+    return { valid: false, error: 'Buffer RAW vacío (0 bytes)' };
+  }
+  return { valid: true, buffer, bytes: buffer.length };
+}
+
+/**
+ * Envía un Buffer binario crudo (ej. trama TSPL) a TitanioPOSRawPrintHelper.exe
+ * escribiendo primero al archivo temporal y SIN anteponer ESC @ ni añadir
+ * saltos/corte GS V \x00.
+ */
+async function printRawBufferDirect(app, printerName, rawBuffer, deps = {}) {
+  const targetPrinter = String(printerName || '').trim();
+  if (!targetPrinter) {
+    throw new Error('Nombre de impresora requerido para impresión RAW');
+  }
+  const check = validateRawBuffer(rawBuffer);
+  if (!check.valid) {
+    throw new Error(check.error);
+  }
+  const buf = check.buffer;
+
+  const ensureFn = deps.ensureHelper || ensureHelper;
+  const execFileFn = deps.execFile || execFile;
+  const fsImpl = deps.fs || fs;
+
+  const exe = await ensureFn(app);
+  if (!exe) {
+    throw new Error('Direct helper not available (no prebuilt EXE and csc.exe not found)');
+  }
+
+  const tempDir =
+    deps.tempDir ||
+    (app && typeof app.getPath === 'function' ? app.getPath('temp') : os.tmpdir());
+  if (!fsImpl.existsSync(tempDir)) {
+    fsImpl.mkdirSync(tempDir, { recursive: true });
+  }
+  const tempFile = path.join(
+    tempDir,
+    `titaniopos-raw-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.bin`
+  );
+  fsImpl.writeFileSync(tempFile, buf);
+
+  const cleanupTemp = () => {
+    try {
+      if (fsImpl.existsSync(tempFile)) fsImpl.unlinkSync(tempFile);
+    } catch (_) { /* limpieza best-effort */ }
+  };
+
+  const base64 = buf.toString('base64');
+
+  // Limite de CreateProcess en Windows (~32,767 chars): un sticker TSPL 58x44mm
+  // (~20.5 KB -> ~27.4k chars base64) cabe directo en TitanioPOSRawPrintHelper.exe.
+  if (base64.length <= 31000) {
+    return new Promise((resolve, reject) => {
+      execFileFn(exe, [targetPrinter, base64], { timeout: 15000, windowsHide: true }, (error, stdout, stderr) => {
+        cleanupTemp();
+        const out = (stdout || '').trim();
+        const success = !error && out.includes('SUCCESS');
+        if (success) {
+          console.log('✅ [DIRECT-RAW] Print successful:', buf.length, 'bytes');
+          resolve({ success: true, method: 'Direct .EXE RAW (winspool)', bytes: buf.length });
+        } else if (error && error.killed) {
+          const err = new Error('La impresora no responde (apagada, sin papel o desconectada)');
+          err.timedOut = true;
+          reject(err);
+        } else {
+          console.log('❌ [DIRECT-RAW] Print failed:', out, stderr);
+          reject(new Error(out || stderr || 'Direct RAW print failed'));
+        }
+      });
+    });
+  }
+
+  // Fallback seguro si el buffer supera el tope de CLI de Windows (>~23 KB):
+  // lee directamente el archivo temporal desde winspool sin añadir ESC/POS.
+  const escapedFile = tempFile.replace(/'/g, "''");
+  const escapedPrinter = targetPrinter.replace(/'/g, "''");
+  const psScript = `
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class RawBufferPrinter {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+    public class DOCINFOA {
+        [MarshalAs(UnmanagedType.LPStr)] public string pDocName;
+        [MarshalAs(UnmanagedType.LPStr)] public string pOutputFile;
+        [MarshalAs(UnmanagedType.LPStr)] public string pDataType;
+    }
+    [DllImport("winspool.Drv", EntryPoint="OpenPrinterA", SetLastError=true, CharSet=CharSet.Ansi)]
+    public static extern bool OpenPrinter(string szPrinter, out IntPtr hPrinter, IntPtr pd);
+    [DllImport("winspool.Drv", EntryPoint="ClosePrinter", SetLastError=true)]
+    public static extern bool ClosePrinter(IntPtr hPrinter);
+    [DllImport("winspool.Drv", EntryPoint="StartDocPrinterA", SetLastError=true, CharSet=CharSet.Ansi)]
+    public static extern bool StartDocPrinter(IntPtr hPrinter, int level, [In, MarshalAs(UnmanagedType.LPStruct)] DOCINFOA di);
+    [DllImport("winspool.Drv", EntryPoint="EndDocPrinter", SetLastError=true)]
+    public static extern bool EndDocPrinter(IntPtr hPrinter);
+    [DllImport("winspool.Drv", EntryPoint="StartPagePrinter", SetLastError=true)]
+    public static extern bool StartPagePrinter(IntPtr hPrinter);
+    [DllImport("winspool.Drv", EntryPoint="EndPagePrinter", SetLastError=true)]
+    public static extern bool EndPagePrinter(IntPtr hPrinter);
+    [DllImport("winspool.Drv", EntryPoint="WritePrinter", SetLastError=true)]
+    public static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, int dwCount, out int dwWritten);
+    public static bool Send(string printer, byte[] bytes) {
+        IntPtr h = IntPtr.Zero;
+        DOCINFOA di = new DOCINFOA { pDocName = "TitanioPOS TSPL", pDataType = "RAW" };
+        bool ok = false;
+        if (OpenPrinter(printer, out h, IntPtr.Zero)) {
+            if (StartDocPrinter(h, 1, di) && StartPagePrinter(h)) {
+                IntPtr p = Marshal.AllocCoTaskMem(bytes.Length);
+                Marshal.Copy(bytes, 0, p, bytes.Length);
+                int w;
+                ok = WritePrinter(h, p, bytes.Length, out w);
+                Marshal.FreeCoTaskMem(p);
+                EndPagePrinter(h);
+            }
+            EndDocPrinter(h);
+            ClosePrinter(h);
+        }
+        return ok;
+    }
+}
+"@
+$bytes = [System.IO.File]::ReadAllBytes('${escapedFile}')
+if ([RawBufferPrinter]::Send('${escapedPrinter}', $bytes)) { Write-Host 'SUCCESS' } else { Write-Host 'FAILED'; exit 1 }
+`;
+  const encodedCmd = Buffer.from(psScript, 'utf16le').toString('base64');
+  return new Promise((resolve, reject) => {
+    execFileFn(
+      'powershell',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedCmd],
+      { timeout: 15000, windowsHide: true },
+      (error, stdout, stderr) => {
+        cleanupTemp();
+        const out = (stdout || '').trim();
+        if (!error && out.includes('SUCCESS')) {
+          resolve({ success: true, method: 'PowerShell RAW (winspool)', bytes: buf.length });
+        } else if (error && error.killed) {
+          const err = new Error('La impresora no responde (apagada, sin papel o desconectada)');
+          err.timedOut = true;
+          reject(err);
+        } else {
+          reject(new Error(out || stderr || 'RAW buffer print failed'));
+        }
+      }
+    );
+  });
+}
+
+module.exports = {
+  printWithDirect,
+  printRawBufferDirect,
+  validateRawBuffer,
+  ensureHelper,
+};
