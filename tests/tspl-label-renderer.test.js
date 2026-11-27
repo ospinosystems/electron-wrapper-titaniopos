@@ -10,6 +10,7 @@ const {
   buildLabelHtml,
   rgbaToTsplBitmap,
   wrapTsplCommand,
+  normalizeDispatchPayload,
   expandPackagePayloads,
   encodeQrMatrixPure,
   generateQrSvg,
@@ -167,4 +168,71 @@ test('encodeQrMatrixPure y generateQrSvg producen matriz y SVG QR válidos', () 
   const svg = generateQrSvg(url);
   assert.match(svg, /^<svg class="qr-svg"/);
   assert.match(svg, /shape-rendering="crispEdges"/);
+});
+
+test('normalizeDispatchPayload y expandPackagePayloads aceptan snake_case (backend) y camelCase (POS)', () => {
+  const snake = normalizeDispatchPayload({
+    order_uuid: '5cdc72c6-b481-4d80-a934-06e7ed947db8',
+    order_code: '#ED947DB8',
+    verify_url: 'https://ecommerce.titanio-pos.com/v/5cdc72c6-b481-4d80-a934-06e7ed947db8',
+    shipping_mode: 'DELIVERY',
+    date: '27/11/2026',
+    customer_name: 'Alvaro Ospino',
+    customer_phone: '0414-555-0192',
+    address_line: 'Urb. Loma Linda, Calle 4',
+    store_name: 'Guacara',
+    items_count: 3,
+    paid_label: 'PAGADO · Delivery',
+    package_total: 2,
+    package_index: 2,
+  });
+
+  const camel = normalizeDispatchPayload({
+    orderUuid: '5cdc72c6-b481-4d80-a934-06e7ed947db8',
+    orderNumber: '#ED947DB8',
+    verifyUrl: 'https://ecommerce.titanio-pos.com/v/5cdc72c6-b481-4d80-a934-06e7ed947db8',
+    shippingType: 'delivery',
+    shippingLabel: 'DELIVERY',
+    dateText: '27/11/2026',
+    receiverName: 'Alvaro Ospino',
+    receiverPhone: '0414-555-0192',
+    addressText: 'Urb. Loma Linda, Calle 4',
+    storeName: 'Guacara',
+    itemsCount: 3,
+    paidLabel: 'PAGADO · Delivery',
+    packageTotal: 2,
+    packageIndex: 2,
+  });
+
+  assert.deepEqual(camel, snake);
+
+  const pickup = normalizeDispatchPayload({
+    orderUuid: '5cdc72c6-b481-4d80-a934-06e7ed947db8',
+    order_number: '#ED947DB8',
+    shippingType: 'pickup',
+    customerName: 'María Pérez',
+    customerPhone: '0412-000-0001',
+    packageTotal: 2,
+  });
+  assert.equal(pickup.shipping_mode, 'RETIRO');
+  assert.equal(pickup.order_code, '#ED947DB8');
+  assert.equal(pickup.customer_name, 'María Pérez');
+  assert.equal(pickup.customer_phone, '0412-000-0001');
+
+  const expandedCamel = expandPackagePayloads({
+    orderUuid: '5cdc72c6-b481-4d80-a934-06e7ed947db8',
+    orderNumber: '#ED947DB8',
+    packageTotal: 2,
+    packageIndex: null,
+  });
+  assert.deepEqual(
+    expandedCamel.map((x) => `${x.package_index}/${x.package_total}`),
+    ['1/2', '2/2']
+  );
+
+  const html = buildLabelHtml(camel, { variant: 'n1' });
+  assert.match(html, /#ED947DB8/);
+  assert.match(html, /PAQUETE 2\/2 · 27\/11\/2026/);
+  assert.match(html, /Alvaro Ospino/);
+  assert.match(html, /Guacara · 3 uds\./);
 });

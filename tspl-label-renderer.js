@@ -463,27 +463,45 @@ function truncateAddressTwoLines(addr, maxChars = 60) {
 
 function normalizeDispatchPayload(raw = {}, packageOverride = null) {
   const src = raw && typeof raw === 'object' ? raw : {};
-  const orderUuid = String(src.order_uuid || '').trim();
+  const orderUuid = String(src.order_uuid ?? src.orderUuid ?? '').trim();
   const fallbackShort = orderUuid
     ? `#${orderUuid.replace(/[^a-zA-Z0-9]/g, '').slice(-8).toUpperCase()}`
     : '#00000000';
-  const orderCode = String(src.order_code || fallbackShort).trim();
+  const rawOrderCode = src.order_code ?? src.orderNumber ?? src.order_number;
+  const orderCode = String(rawOrderCode || fallbackShort).trim();
+  const rawVerifyUrl = src.verify_url ?? src.verifyUrl;
   const verifyUrl = String(
-    src.verify_url ||
+    rawVerifyUrl ||
       (orderUuid
         ? `https://ecommerce.titanio-pos.com/v/${encodeURIComponent(orderUuid)}`
         : 'https://ecommerce.titanio-pos.com')
   ).trim();
-  const rawMode = String(src.shipping_mode || 'DELIVERY').trim().toUpperCase();
+  const rawShippingMode =
+    src.shipping_mode ??
+    (String(src.shippingType || '').toLowerCase() === 'pickup'
+      ? 'RETIRO'
+      : src.shippingLabel ?? src.shippingType);
+  const rawMode = String(rawShippingMode || 'DELIVERY').trim().toUpperCase();
   const shippingMode = rawMode === 'PICKUP' ? 'RETIRO' : rawMode || 'DELIVERY';
-  const packageTotal = Math.min(MAX_PACKAGES, Math.max(1, Math.trunc(Number(src.package_total) || 1)));
 
+  const rawPackageTotal = src.package_total ?? src.packageTotal;
+  const packageTotal = Math.min(MAX_PACKAGES, Math.max(1, Math.trunc(Number(rawPackageTotal) || 1)));
+
+  const rawPackageIndex = src.package_index ?? src.packageIndex;
   let packageIndex = null;
   if (packageOverride != null && Number.isFinite(Number(packageOverride))) {
     packageIndex = Math.min(packageTotal, Math.max(1, Math.trunc(Number(packageOverride))));
-  } else if (src.package_index != null && src.package_index !== '' && Number.isFinite(Number(src.package_index))) {
-    packageIndex = Math.min(packageTotal, Math.max(1, Math.trunc(Number(src.package_index))));
+  } else if (rawPackageIndex != null && rawPackageIndex !== '' && Number.isFinite(Number(rawPackageIndex))) {
+    packageIndex = Math.min(packageTotal, Math.max(1, Math.trunc(Number(rawPackageIndex))));
   }
+
+  const rawDate = src.date ?? src.dateText;
+  const rawCustomerName = src.customer_name ?? src.customerName ?? src.receiverName;
+  const rawCustomerPhone = src.customer_phone ?? src.customerPhone ?? src.receiverPhone;
+  const rawAddressLine = src.address_line ?? src.addressText;
+  const rawStoreName = src.store_name ?? src.storeName;
+  const rawItemsCount = src.items_count ?? src.itemsCount;
+  const rawPaidLabel = src.paid_label ?? src.paidLabel;
 
   return {
     kind: 'dispatch_order_label',
@@ -491,13 +509,13 @@ function normalizeDispatchPayload(raw = {}, packageOverride = null) {
     order_code: orderCode,
     verify_url: verifyUrl,
     shipping_mode: shippingMode,
-    date: String(src.date || formatTodayDdMmYyyy()).trim(),
-    customer_name: String(src.customer_name || 'Cliente').trim(),
-    customer_phone: String(src.customer_phone || '').trim(),
-    address_line: truncateAddressTwoLines(src.address_line || ''),
-    store_name: String(src.store_name || 'Titanio').trim(),
-    items_count: Math.max(0, Math.trunc(Number(src.items_count) || 0)),
-    paid_label: String(src.paid_label || 'PAGADO').trim(),
+    date: String(rawDate || formatTodayDdMmYyyy()).trim(),
+    customer_name: String(rawCustomerName || 'Cliente').trim(),
+    customer_phone: String(rawCustomerPhone || '').trim(),
+    address_line: truncateAddressTwoLines(rawAddressLine || ''),
+    store_name: String(rawStoreName || 'Titanio').trim(),
+    items_count: Math.max(0, Math.trunc(Number(rawItemsCount) || 0)),
+    paid_label: String(rawPaidLabel || 'PAGADO').trim(),
     package_total: packageTotal,
     package_index: packageIndex ?? 1,
   };
@@ -505,10 +523,12 @@ function normalizeDispatchPayload(raw = {}, packageOverride = null) {
 
 function expandPackagePayloads(raw = {}) {
   const src = raw && typeof raw === 'object' ? raw : {};
-  if (src.package_index != null && src.package_index !== '' && Number.isFinite(Number(src.package_index))) {
+  const rawPackageIndex = src.package_index ?? src.packageIndex;
+  if (rawPackageIndex != null && rawPackageIndex !== '' && Number.isFinite(Number(rawPackageIndex))) {
     return [normalizeDispatchPayload(src)];
   }
-  const total = Math.min(MAX_PACKAGES, Math.max(1, Math.trunc(Number(src.package_total) || 1)));
+  const rawPackageTotal = src.package_total ?? src.packageTotal;
+  const total = Math.min(MAX_PACKAGES, Math.max(1, Math.trunc(Number(rawPackageTotal) || 1)));
   const out = [];
   for (let i = 1; i <= total; i++) {
     out.push(normalizeDispatchPayload(src, i));
