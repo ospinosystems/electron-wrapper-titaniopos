@@ -25,6 +25,8 @@ const DEFAULT_CAJA = {
   storeCode: null,
   pinpadIp: null,
   operationMode: 'POS',
+  // Tipo de estación: 'register' (caja tradicional) | 'dispatch' (estación de despacho).
+  stationType: 'register',
 };
 
 const DEFAULT_THERMAL = {
@@ -58,6 +60,8 @@ const DEFAULT_FISCAL = {
   // texto 0=sin número 1=con número). {code} = número de orden.
   // Default: barra al pie con el número debajo.
   barcodeRaw: 'j211{code}',
+  // Diferenciador de canal ecommerce en máquina fiscal HKA80 (i06Canal).
+  ecommerceChannelLine: false,
 };
 
 const DEFAULT_UI = {
@@ -79,6 +83,7 @@ const DEFAULT_LABEL_PRINTER = {
   printerName: '',
   usbPort: 'USB003',
   method: 'native',
+  variant: 'oficial',
   widthMm: 57,
   heightMm: 44,
   layout: 'classic',
@@ -203,6 +208,7 @@ function normalizeCaja(raw) {
     storeCode: base.storeCode ?? null,
     pinpadIp: base.pinpadIp ?? null,
     operationMode: base.operationMode === 'SELF_SERVICE' ? 'SELF_SERVICE' : 'POS',
+    stationType: base.stationType === 'dispatch' ? 'dispatch' : 'register',
   };
   // Toggles de habilitación (megaPos/pinpad): se incluyen SOLO si el JSON ya los
   // trae. Así una caja que viene de una versión anterior (sin estos campos) NO
@@ -224,10 +230,14 @@ function normalizeLabelPrinter(raw) {
     const n = Number(v);
     return Number.isFinite(n) && n > 0 ? n : def;
   };
+  const method = String(base.method || '').toLowerCase() === 'tspl' ? 'tspl' : 'native';
+  const rawVariant = String(base.variant || '').toLowerCase();
+  const variant = rawVariant === 'n1' || rawVariant === 'v1' ? rawVariant : 'oficial';
   return {
     printerName: String(base.printerName ?? ''),
     usbPort: String(base.usbPort || DEFAULT_LABEL_PRINTER.usbPort),
-    method: String(base.method || DEFAULT_LABEL_PRINTER.method),
+    method,
+    variant,
     widthMm: toMm(base.widthMm, DEFAULT_LABEL_PRINTER.widthMm),
     heightMm: toMm(base.heightMm, DEFAULT_LABEL_PRINTER.heightMm),
     layout: String(base.layout || DEFAULT_LABEL_PRINTER.layout),
@@ -236,7 +246,11 @@ function normalizeLabelPrinter(raw) {
 }
 
 function normalizeFiscal(raw) {
-  return { ...DEFAULT_FISCAL, ...raw };
+  const base = { ...DEFAULT_FISCAL, ...(raw || {}) };
+  return {
+    ...base,
+    ecommerceChannelLine: Boolean(base.ecommerceChannelLine),
+  };
 }
 
 function normalizeUi(raw) {
@@ -640,6 +654,8 @@ module.exports = {
   PRINT_SHARE_KINDS,
   DEFAULT_SETTINGS,
   DEFAULT_CAJA,
+  DEFAULT_LABEL_PRINTER,
+  DEFAULT_FISCAL,
   DEFAULT_UI,
   DEFAULT_MEGA_POS,
   DEFAULT_PRINT_SHARE,

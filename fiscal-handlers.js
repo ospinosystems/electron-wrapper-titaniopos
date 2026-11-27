@@ -189,7 +189,7 @@ const checkFiscalConnection = async (serverUrl) => {
 // Enviar factura o nota de crédito al servidor fiscal
 // barcodeOpts: { enabled, type, format } — código de barras en la factura (autopago).
 // formatOpts: { itemDescLen, nativeDiscount } — formato del ticket (ver el handler).
-const sendFiscalInvoice = async (serverUrl, invoiceData, fiscalMode = true, barcodeOpts = null, formatOpts = null) => {
+const sendFiscalInvoice = async (serverUrl, invoiceData, fiscalMode = true, barcodeOpts = null, formatOpts = null, deps = {}) => {
   try {
     const docType = invoiceData.type || 'factura';
 
@@ -217,9 +217,10 @@ const sendFiscalInvoice = async (serverUrl, invoiceData, fiscalMode = true, barc
       fiscalLines = generateFiscalContent(invoiceData, barcodeOpts, formatOpts);
     }
     
-    // Si NO es modo fiscal, agregar indicador "NO FISCAL" al inicio
+    // Si NO es modo fiscal, agregar indicador "NO FISCAL" al inicio usando i04
+    // para no colisionar con la línea i05Caja:... usada para deduplicación.
     if (!fiscalMode) {
-      fiscalLines.unshift('i05*** NO FISCAL - PRUEBA ***');
+      fiscalLines.unshift('i04*** NO FISCAL - PRUEBA ***');
     }
     
     const requestData = {
@@ -231,7 +232,8 @@ const sendFiscalInvoice = async (serverUrl, invoiceData, fiscalMode = true, barc
     console.log('[FISCAL] Sending document:', docType);
     console.log('[FISCAL] Lines:', fiscalLines);
     
-    const result = await makeFiscalRequest(`${serverUrl}/fiscal`, 'POST', requestData);
+    const reqFn = (deps && deps.makeFiscalRequest) || makeFiscalRequest;
+    const result = await reqFn(`${serverUrl}/fiscal`, 'POST', requestData);
     
     return {
       success: result.statusCode === 200 || result.statusCode === 201,
@@ -283,16 +285,58 @@ const buildBarcodeLine = (code, opts) => {
   return String(opts.raw);
 };
 
+const buildEcommerceCommentLines = (invoiceData, formatOpts = null) => {
+  const rawOrder = String(invoiceData.orderNumber || invoiceData.orderCode || '').trim();
+  const uuidClean = String(invoiceData.orderUuid || '')
+    .replace(/[^0-9A-Za-z]/g, '')
+    .toUpperCase();
+  const orderNoHash = sanitizeText(rawOrder.replace(/^#/, ''), 26);
+  const shortId = uuidClean
+    ? uuidClean.slice(-8)
+    : orderNoHash
+      ? orderNoHash.slice(-8)
+      : '00000000';
+
+  if (formatOpts && formatOpts.ecommerceChannelLine === true) {
+    const orderDisplay = sanitizeText(rawOrder || `#${shortId}`, 26) || `#${shortId}`;
+    const line5 = sanitizeText(`Caja: DESP - ${orderDisplay}`, 40);
+    const line6 = sanitizeText(`Canal: TITANIO STORE #${shortId}`, 40);
+    return [`i05${line5}`, `i06${line6}`];
+  }
+
+  const line5 = sanitizeText(`Caja: DESP | TITANIO STORE #${shortId}`, 40);
+  return [`i05${line5}`];
+};
+
 const generateFiscalContent = (invoiceData, barcodeOpts = null, formatOpts = null) => {
+  let resolvedBarcodeOpts = barcodeOpts;
+  let resolvedFormatOpts = formatOpts;
+  if (
+    resolvedFormatOpts == null &&
+    resolvedBarcodeOpts &&
+    typeof resolvedBarcodeOpts === 'object' &&
+    !('enabled' in resolvedBarcodeOpts) &&
+    !('raw' in resolvedBarcodeOpts) &&
+    ('ecommerceChannelLine' in resolvedBarcodeOpts ||
+      'itemDescLen' in resolvedBarcodeOpts ||
+      'discountMode' in resolvedBarcodeOpts ||
+      'nativeDiscount' in resolvedBarcodeOpts ||
+      'descLeaders' in resolvedBarcodeOpts ||
+      'percibidoChar' in resolvedBarcodeOpts)
+  ) {
+    resolvedFormatOpts = resolvedBarcodeOpts;
+    resolvedBarcodeOpts = null;
+  }
+
   const lines = [];
-  const descLen = normalizeItemDescLen(formatOpts && formatOpts.itemDescLen);
+  const descLen = normalizeItemDescLen(resolvedFormatOpts && resolvedFormatOpts.itemDescLen);
   // 'amount' (q-, default) | 'percent' (p-) | 'none'. Compat: nativeDiscount=false
   // (flag previa) equivale a 'none'.
-  const discountMode = formatOpts && formatOpts.nativeDiscount === false
+  const discountMode = resolvedFormatOpts && resolvedFormatOpts.nativeDiscount === false
     ? 'none'
-    : (formatOpts && formatOpts.discountMode) || 'amount';
-  const descLeaders = !formatOpts || formatOpts.descLeaders !== false;
-  const percibidoChar = normalizePercibidoChar(formatOpts && formatOpts.percibidoChar);
+    : (resolvedFormatOpts && resolvedFormatOpts.discountMode) || 'amount';
+  const descLeaders = !resolvedFormatOpts || resolvedFormatOpts.descLeaders !== false;
+  const percibidoChar = normalizePercibidoChar(resolvedFormatOpts && resolvedFormatOpts.percibidoChar);
   
   // Datos del cliente (opcional)
   // Soporta tanto customerName/customerRif como client.name/client.rif
@@ -323,8 +367,14 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null, formatOpts = nul
   }
   
   // Línea de comentario con caja y número de orden (i05 = línea adicional)
-  const comment = `Caja: ${invoiceData.cashRegisterNumber || 'N/A'} - ${invoiceData.orderNumber || 'N/A'}`;
-  lines.push(`i05${comment}`);
+  if (invoiceData.channel === 'ecommerce') {
+    for (const cLine of buildEcommerceCommentLines(invoiceData, resolvedFormatOpts)) {
+      lines.push(cLine);
+    }
+  } else {
+    const comment = `Caja: ${invoiceData.cashRegisterNumber || 'N/A'} - ${invoiceData.orderNumber || 'N/A'}`;
+    lines.push(`i05${comment}`);
+  }
 
   // Productos
   let docTotalCents = 0; // neto + IVA (modelo de la máquina) para el clamp del cierre
@@ -398,7 +448,7 @@ const generateFiscalContent = (invoiceData, barcodeOpts = null, formatOpts = nul
   const barcodeCode = invoiceData.orderUuid
     ? String(invoiceData.orderUuid).split('-').pop()
     : invoiceData.orderNumber;
-  const barcodeLine = buildBarcodeLine(barcodeCode, barcodeOpts);
+  const barcodeLine = buildBarcodeLine(barcodeCode, resolvedBarcodeOpts);
   if (barcodeLine) {
     console.log('[FISCAL] Barcode line:', barcodeLine);
     lines.push(barcodeLine);
@@ -962,6 +1012,7 @@ const registerFiscalHandlers = (app) => {
         discountMode: config.discountMode,
         descLeaders: config.descLeaders !== false,
         percibidoChar: config.percibidoChar,
+        ecommerceChannelLine: config.ecommerceChannelLine === true,
       };
 
       // Enviar factura (pasando fiscalMode para agregar indicador si es prueba).
@@ -1590,6 +1641,8 @@ module.exports = {
   registerFiscalHandlers,
   // Builders puros expuestos para pruebas (no tocan IPC ni disco).
   buildCloseLines,
+  buildEcommerceCommentLines,
   generateFiscalContent,
   generateCreditNoteContent,
+  sendFiscalInvoice,
 };

@@ -215,10 +215,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * Imprime una ETIQUETA (HTML) con ruteo automático: local con la impresora
    * de etiquetas del settings, o a la caja anfitriona si esta caja usa la de
    * otra (impresión en red).
-   * @param {string} content - HTML del sticker
+   * @param {string|object} content - HTML del sticker o payload TSPL
    * @returns {Promise<{success: boolean, remote?: boolean, error?: string}>}
    */
   printerPrintLabel: (content) => ipcRenderer.invoke('printer-print-label', content),
+
+  /**
+   * Imprime una etiqueta de despacho 58×44 mm por TSPL RAW (Q86-I-Printer)
+   * usando la impresora y variante configuradas en labelPrinter.
+   * @param {object} payload - DispatchLabelPayload
+   * @returns {Promise<{success: boolean, remote?: boolean, printed?: number, variant?: string, method?: string, error?: string}>}
+   */
+  printerPrintTsplLabel: (payload) => ipcRenderer.invoke('printer-print-tspl-label', payload),
 
   /**
    * Espeja la config de la impresora de etiquetas del front al settings
