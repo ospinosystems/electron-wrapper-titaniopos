@@ -39,7 +39,7 @@ async function printTsplDispatchLabel(app, payload, overrides = {}, deps = {}) {
   if (!printerName) {
     return { success: false, error: 'Impresora de etiquetas no configurada.' };
   }
-  const variant = overrides.variant || labelCfg.variant || 'n1';
+  const variant = overrides.variant || labelCfg.variant || 'oficial';
   const renderer = deps.renderer || require('./tspl-label-renderer');
   const sendRaw = deps.printRawBufferDirect || printRawBufferDirect;
   const buffers = await renderer.renderDispatchTsplBuffers(payload, { variant });
@@ -385,7 +385,7 @@ function registerPrinterHandlers(app, mainWindow) {
             : content && typeof content === 'object'
               ? (content.format === 'tspl' && content.payload ? content.payload : content)
               : buildSampleDispatchLabelPayload();
-        const variant = (options && options.variant) || labelCfg.variant || 'n1';
+        const variant = (options && options.variant) || labelCfg.variant || 'oficial';
         result = await printTsplDispatchLabel(app, payload, { printerName: targetPrinter, variant });
       } else {
         return {

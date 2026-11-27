@@ -18,17 +18,25 @@ const { wrapTsplCommand, BITMAP_BYTES } = require('../tspl-label-renderer');
 test('titaniopos-settings-file: defaults y normalización de despacho/tspl/ecommerceChannelLine', () => {
   assert.equal(DEFAULT_SETTINGS.caja.stationType, 'register');
   assert.equal(DEFAULT_SETTINGS.labelPrinter.method, 'native');
-  assert.equal(DEFAULT_SETTINGS.labelPrinter.variant, 'n1');
+  assert.equal(DEFAULT_SETTINGS.labelPrinter.variant, 'oficial');
   assert.equal(DEFAULT_SETTINGS.fiscal.ecommerceChannelLine, false);
 
   assert.equal(normalizeCaja({ stationType: 'dispatch' }).stationType, 'dispatch');
   assert.equal(normalizeCaja({ stationType: 'otro' }).stationType, 'register');
 
-  const lbl = normalizeLabelPrinter({ printerName: 'Q86-I', method: 'tspl', variant: 'v1' });
-  assert.equal(lbl.method, 'tspl');
-  assert.equal(lbl.variant, 'v1');
+  const lblOficial = normalizeLabelPrinter({ printerName: 'Q86-I', method: 'tspl' });
+  assert.equal(lblOficial.method, 'tspl');
+  assert.equal(lblOficial.variant, 'oficial');
+
+  const lblN1 = normalizeLabelPrinter({ printerName: 'Q86-I', method: 'tspl', variant: 'n1' });
+  assert.equal(lblN1.variant, 'n1');
+
+  const lblV1 = normalizeLabelPrinter({ printerName: 'Q86-I', method: 'tspl', variant: 'v1' });
+  assert.equal(lblV1.method, 'tspl');
+  assert.equal(lblV1.variant, 'v1');
+
   assert.equal(normalizeLabelPrinter({ method: 'raro', variant: 'otro' }).method, 'native');
-  assert.equal(normalizeLabelPrinter({ method: 'raro', variant: 'otro' }).variant, 'n1');
+  assert.equal(normalizeLabelPrinter({ method: 'raro', variant: 'otro' }).variant, 'oficial');
 
   assert.equal(normalizeFiscal({ ecommerceChannelLine: true }).ecommerceChannelLine, true);
   assert.equal(normalizeFiscal({}).ecommerceChannelLine, false);

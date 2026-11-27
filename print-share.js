@@ -257,7 +257,7 @@ function pickHostLabelParams(label) {
   return {
     configured: label.configured === true,
     method: label.method || 'native',
-    variant: label.variant || 'n1',
+    variant: label.variant || 'oficial',
     tsplReady: label.tsplReady === true,
     widthMm: label.widthMm,
     heightMm: label.heightMm,

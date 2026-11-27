@@ -567,6 +567,203 @@ function buildSharedCss() {
     display: block;
   }
 
+  /* ==================== OFICIAL: LIMPIA CON QR A LA DERECHA ==================== */
+  .label-sheet.oficial {
+    width: 58mm;
+    height: 44mm;
+    padding: 1.8mm 2.0mm;
+    background: #FFFFFF;
+    color: #000000;
+    font-family: "Plus Jakarta Sans", "Segoe UI", Arial, sans-serif;
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: none;
+    text-rendering: geometricPrecision;
+    overflow: hidden;
+  }
+  .oficial-safe {
+    width: 54mm;
+    height: 40.4mm;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    background: #FFFFFF;
+    color: #000000;
+    overflow: hidden;
+  }
+  .band-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.5mm;
+  }
+  .brand-lockup {
+    display: flex;
+    align-items: center;
+    gap: 1.2mm;
+    min-width: 0;
+  }
+  .pila-mark {
+    width: 5.0mm;
+    height: 5.0mm;
+    display: block;
+    flex-shrink: 0;
+  }
+  .brand-name {
+    font-size: 8.5pt;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: 0.02em;
+    color: #000000;
+    white-space: nowrap;
+  }
+  .mode-pill {
+    background: #000000;
+    color: #FFFFFF;
+    padding: 0.9mm 2.2mm;
+    border-radius: 0.9mm;
+    font-size: 8.0pt;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .band-order {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.5mm;
+    padding: 0.85mm 0 0.35mm 0;
+  }
+  .order-number {
+    font-size: 15.5pt;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.025em;
+    color: #000000;
+    white-space: nowrap;
+  }
+  .order-meta {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.55mm;
+    flex-shrink: 0;
+  }
+  .order-date {
+    font-size: 7.0pt;
+    font-weight: 700;
+    line-height: 1;
+    color: #000000;
+    white-space: nowrap;
+  }
+  .pkg-box {
+    border: 2px solid #000000;
+    border-radius: 0.7mm;
+    padding: 0.45mm 1.15mm;
+    font-size: 7.2pt;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: 0.015em;
+    color: #000000;
+    background: #FFFFFF;
+    white-space: nowrap;
+  }
+  .divider-main {
+    width: 100%;
+    height: 2px;
+    background: #000000;
+    flex-shrink: 0;
+  }
+  .band-body {
+    flex: 1;
+    min-height: 0;
+    padding: 0.65mm 0 0.55mm 0;
+    display: flex;
+    align-items: stretch;
+    justify-content: space-between;
+    gap: 1.5mm;
+    overflow: hidden;
+  }
+  .col-left {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1.05mm;
+    overflow: hidden;
+  }
+  .recipient-block {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35mm;
+    min-width: 0;
+  }
+  .recipient-name {
+    font-size: 8.5pt;
+    font-weight: 800;
+    line-height: 1.12;
+    color: #000000;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .recipient-phone {
+    font-size: 7.2pt;
+    font-weight: 600;
+    line-height: 1.15;
+    color: #000000;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .destination-text {
+    font-size: 7.2pt;
+    font-weight: 600;
+    line-height: 1.22;
+    color: #000000;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+  }
+  .col-right {
+    width: 15.4mm;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45mm;
+    flex-shrink: 0;
+  }
+  .qr-caption {
+    font-size: 7.0pt;
+    font-weight: 600;
+    line-height: 1;
+    color: #000000;
+    white-space: nowrap;
+    text-align: center;
+  }
+  .band-footer {
+    border-top: 2px solid #000000;
+    padding-top: 0.75mm;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.5mm;
+    flex-shrink: 0;
+  }
+  .footer-text {
+    font-size: 7.0pt;
+    font-weight: 800;
+    line-height: 1;
+    color: #000000;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   /* ==================== N1: QR A LA IZQUIERDA (SCAN-FIRST) ==================== */
   .label-sheet.n1 {
     width: 58mm;
@@ -925,8 +1122,10 @@ function buildSharedCss() {
 }
 
 function buildLabelHtml(payload = {}, options = {}) {
-  const norm = normalizeDispatchPayload(payload);
-  const variant = String(options.variant || 'n1').toLowerCase() === 'v1' ? 'v1' : 'n1';
+  const src = payload && typeof payload === 'object' ? payload : {};
+  const norm = normalizeDispatchPayload(src);
+  const rawVariant = String(options.variant || 'oficial').toLowerCase();
+  const variant = rawVariant === 'n1' || rawVariant === 'v1' ? rawVariant : 'oficial';
   const qrSvg = generateQrSvg(norm.verify_url);
 
   const orderCode = escapeHtml(norm.order_code);
@@ -937,6 +1136,9 @@ function buildLabelHtml(payload = {}, options = {}) {
   const customerName = escapeHtml(norm.customer_name);
   const customerPhone = escapeHtml(norm.customer_phone);
   const addressLine = escapeHtml(norm.address_line);
+  const addressLine3 = escapeHtml(
+    truncateAddressTwoLines(src.address_line ?? src.addressText ?? '', 90)
+  );
   const paidLabel = escapeHtml(norm.paid_label);
   const unitsText = `${norm.items_count} ${norm.items_count === 1 ? 'ud.' : 'uds.'}`;
   const footRight = escapeHtml(`${norm.store_name} · ${unitsText}`);
@@ -983,7 +1185,7 @@ function buildLabelHtml(payload = {}, options = {}) {
         </footer>
       </section>
     `;
-  } else {
+  } else if (variant === 'n1') {
     const telHtml = customerPhone ? `<div class="n1-tel">${customerPhone}</div>` : '';
     const addrHtml = addressLine ? `<div class="n1-addr">${addressLine}</div>` : '';
     bodyHtml = `
@@ -1016,6 +1218,49 @@ function buildLabelHtml(payload = {}, options = {}) {
           <footer class="n1-foot">
             <span class="box-2px n1-status">${paidLabel}</span>
             <span class="n1-foot-r">${footRight}</span>
+          </footer>
+        </div>
+      </section>
+    `;
+  } else {
+    const telHtml = customerPhone ? `<div class="recipient-phone">${customerPhone}</div>` : '';
+    const addrHtml = addressLine3 ? `<div class="destination-text">${addressLine3}</div>` : '';
+    const originText = escapeHtml(`Origen: ${norm.store_name}`);
+    const unitsEscaped = escapeHtml(unitsText);
+    bodyHtml = `
+      <section class="label-sheet oficial" data-variant="oficial">
+        <div class="label-safe oficial-safe">
+          <header class="band-top">
+            <div class="brand-lockup">
+              ${pilaMonoSvg('pila-mark')}
+              <span class="brand-name">TITANIO STORE</span>
+            </div>
+            <span class="mode-pill">${shippingMode}</span>
+          </header>
+          <div class="band-order">
+            <div class="order-number">${orderCode}</div>
+            <div class="order-meta">
+              <span class="order-date">${dateOnly}</span>
+              <span class="pkg-box">${pkgOnly}</span>
+            </div>
+          </div>
+          <div class="divider-main" role="separator"></div>
+          <div class="band-body">
+            <div class="col-left">
+              <div class="recipient-block">
+                <div class="recipient-name">${customerName}</div>
+                ${telHtml}
+              </div>
+              ${addrHtml}
+            </div>
+            <div class="col-right">
+              <div class="qr-frame">${qrSvg}</div>
+              <div class="qr-caption">Validar envío</div>
+            </div>
+          </div>
+          <footer class="band-footer">
+            <span class="footer-text">${originText}</span>
+            <span class="footer-text">${unitsEscaped}</span>
           </footer>
         </div>
       </section>
@@ -1166,7 +1411,7 @@ async function renderDispatchTsplBuffers(payload, options = {}) {
   const items = expandPackagePayloads(payload);
   const buffers = [];
   for (const item of items) {
-    const html = buildLabelHtml(item, { variant: options.variant || 'n1' });
+    const html = buildLabelHtml(item, { variant: options.variant || 'oficial' });
     buffers.push(await renderHtmlToTsplBuffer(html, options));
   }
   return buffers;

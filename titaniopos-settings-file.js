@@ -83,7 +83,7 @@ const DEFAULT_LABEL_PRINTER = {
   printerName: '',
   usbPort: 'USB003',
   method: 'native',
-  variant: 'n1',
+  variant: 'oficial',
   widthMm: 57,
   heightMm: 44,
   layout: 'classic',
@@ -231,7 +231,8 @@ function normalizeLabelPrinter(raw) {
     return Number.isFinite(n) && n > 0 ? n : def;
   };
   const method = String(base.method || '').toLowerCase() === 'tspl' ? 'tspl' : 'native';
-  const variant = String(base.variant || '').toLowerCase() === 'v1' ? 'v1' : 'n1';
+  const rawVariant = String(base.variant || '').toLowerCase();
+  const variant = rawVariant === 'n1' || rawVariant === 'v1' ? rawVariant : 'oficial';
   return {
     printerName: String(base.printerName ?? ''),
     usbPort: String(base.usbPort || DEFAULT_LABEL_PRINTER.usbPort),

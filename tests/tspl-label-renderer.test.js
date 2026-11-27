@@ -95,7 +95,7 @@ test('wrapTsplCommand envuelve cabecera y cierre TSPL exactos', () => {
   assert.throws(() => wrapTsplCommand(Buffer.alloc(100)), /20416/);
 });
 
-test('buildLabelHtml genera N1 y V1 válidos y escapa cualquier XSS', () => {
+test('buildLabelHtml usa variante oficial por defecto (QR a la derecha, sin PAGADO/Yummy) y soporta N1/V1 sin XSS', () => {
   const payload = {
     kind: 'dispatch_order_label',
     order_uuid: '5cdc72c6-b481-4d80-a934-06e7ed947db8',
@@ -105,27 +105,50 @@ test('buildLabelHtml genera N1 y V1 válidos y escapa cualquier XSS', () => {
     date: '27/11/2026',
     customer_name: '<img src=x onerror=alert(1)> & "Alvaro"',
     customer_phone: '0414-555-0192',
-    address_line: 'Av. Bolívar Norte, Residencias Las Acacias, Torre B, Piso 8, Apartamento 8-C, Valencia',
-    store_name: 'Guacara',
+    address_line: 'Av. Bolívar Norte, Residencias Las Acacias, Torre B, Piso 8, Apartamento 8-C, Valencia, Carabobo, Venezuela',
+    store_name: 'Titanio Guacara',
     items_count: 3,
-    paid_label: 'PAGADO · Delivery',
+    paid_label: 'PAGADO · Yummy',
     package_total: 2,
     package_index: 1,
   };
 
+  // Default debe ser 'oficial'
+  const oficial = buildLabelHtml(payload);
+  assert.match(oficial, /data-variant="oficial"/);
+  assert.match(oficial, /class="band-top"/);
+  assert.match(oficial, /TITANIO STORE/);
+  assert.match(oficial, /class="order-date">27\/11\/2026</);
+  assert.match(oficial, /class="pkg-box">PAQUETE 1\/2</);
+  assert.match(oficial, /class="divider-main"/);
+  assert.match(oficial, /class="col-left"/);
+  assert.match(oficial, /class="col-right"/);
+  // QR va a la derecha (col-right aparece después de col-left)
+  assert.ok(oficial.indexOf('class="col-left"') < oficial.indexOf('class="col-right"'));
+  assert.match(oficial, /class="qr-caption">Validar envío</);
+  assert.match(oficial, /Origen: Titanio Guacara/);
+  assert.match(oficial, /3 uds\./);
+  assert.match(oficial, /-webkit-line-clamp: 3/);
+  assert.match(oficial, /… \(ver QR\)/);
+  assert.match(oficial, /-webkit-font-smoothing: none/);
+  assert.match(oficial, /<svg class="qr-svg"/);
+  // Sin status-box ni PAGADO / Yummy en el diseño oficial
+  assert.equal(oficial.includes('class="status-box"'), false);
+  assert.equal(oficial.includes('PAGADO'), false);
+  assert.equal(oficial.includes('Yummy'), false);
+  // Escape XSS
+  assert.equal(oficial.includes('<script>'), false);
+  assert.equal(oficial.includes('<img '), false);
+  assert.match(oficial, /&lt;script&gt;/);
+  assert.match(oficial, /&lt;img src=x onerror=alert\(1\)&gt; &amp; &quot;Alvaro&quot;/);
+
   const n1 = buildLabelHtml(payload, { variant: 'n1' });
   assert.match(n1, /data-variant="n1"/);
   assert.match(n1, /Validar envío/);
-  assert.match(n1, /TITANIO STORE/);
   assert.match(n1, /PAQUETE 1\/2 · 27\/11\/2026/);
-  assert.match(n1, /-webkit-font-smoothing: none/);
-  assert.match(n1, /… \(ver QR\)/);
-  assert.match(n1, /Guacara · 3 uds\./);
-  assert.match(n1, /<svg class="qr-svg"/);
+  assert.match(n1, /Titanio Guacara · 3 uds\./);
   assert.equal(n1.includes('<script>'), false);
   assert.equal(n1.includes('<img '), false);
-  assert.match(n1, /&lt;script&gt;/);
-  assert.match(n1, /&lt;img src=x onerror=alert\(1\)&gt; &amp; &quot;Alvaro&quot;/);
 
   const v1 = buildLabelHtml(payload, { variant: 'v1' });
   assert.match(v1, /data-variant="v1"/);
@@ -230,9 +253,13 @@ test('normalizeDispatchPayload y expandPackagePayloads aceptan snake_case (backe
     ['1/2', '2/2']
   );
 
-  const html = buildLabelHtml(camel, { variant: 'n1' });
+  const html = buildLabelHtml(camel);
+  assert.match(html, /data-variant="oficial"/);
   assert.match(html, /#ED947DB8/);
-  assert.match(html, /PAQUETE 2\/2 · 27\/11\/2026/);
+  assert.match(html, /PAQUETE 2\/2/);
+  assert.match(html, /27\/11\/2026/);
   assert.match(html, /Alvaro Ospino/);
-  assert.match(html, /Guacara · 3 uds\./);
+  assert.match(html, /Origen: Guacara/);
+  assert.match(html, /3 uds\./);
+  assert.equal(html.includes('PAGADO'), false);
 });
